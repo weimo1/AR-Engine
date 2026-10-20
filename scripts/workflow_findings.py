@@ -23,17 +23,35 @@ resolve disagreements by majority vote or by following the implementer's claims.
 """
 
 
-def cite(packet: Path, item: dict) -> None:
+CITATION_SLOP = 8
+
+
+def cite(packet: Path, item: dict, tolerant: bool = False) -> None:
     manifest = core.load(packet / "manifest.json")
     name = item.get("path")
     if not isinstance(name, str) or name not in manifest["state"]["files"]:
         raise ValueError("Finding evidence references an unknown frozen file")
     path = core.within(packet / "snapshot", packet / "snapshot" / name)
     lines = path.read_text(encoding="utf-8").splitlines()
-    start, end = item.get("start_line"), item.get("end_line")
-    if (type(start) is not int or type(end) is not int or not 1 <= start <= end <= len(lines)
-            or not item.get("quote") or item["quote"] != "\n".join(lines[start - 1:end])):
+    start, end, quote = item.get("start_line"), item.get("end_line"), item.get("quote")
+    if (type(start) is not int or type(end) is not int or not isinstance(quote, str) or not quote):
         raise ValueError("Finding evidence quote/line range differs from frozen source")
+    if 1 <= start <= end <= len(lines) and quote == "\n".join(lines[start - 1:end]):
+        return
+    if tolerant:
+        # The adjudicator's own citations are checked by content: reviewers quote
+        # real lines but drift the range (observed 2026-10-21: verbatim quote from
+        # 389-395 cited as 384-389). A quote that does not occur in the frozen file
+        # never passes, and a range that misses the quote by more than
+        # CITATION_SLOP lines still fails, so fabricated evidence stays rejected.
+        quoted = quote.split("\n")
+        for index in range(len(lines) - len(quoted) + 1):
+            if lines[index:index + len(quoted)] == quoted and (
+                    index + 1 <= end + CITATION_SLOP and index + len(quoted) >= start - CITATION_SLOP):
+                # Repeated lines are common in frozen sources; keep scanning so a
+                # later occurrence inside the tolerance window still matches.
+                return
+    raise ValueError("Finding evidence quote/line range differs from frozen source")
 
 
 def build(packet: Path, output: Path, rebuttals: dict) -> tuple[dict, list[dict], dict]:
@@ -124,7 +142,7 @@ def parse(raw: dict, findings: list[dict], model: str, packet: Path) -> tuple[di
         if item["verdict"] == "not_defect" and not item["evidence"]:
             raise ValueError("Dismissing a finding requires independently cited source evidence")
         for evidence in item["evidence"]:
-            cite(packet, evidence)
+            cite(packet, evidence, tolerant=True)
     usage = raw.get("usage", {})
     values = [usage.get(key) for key in ("total_tokens", "prompt_tokens", "completion_tokens")]
     if any(type(x) is not int or x < 0 for x in values) or values[0] <= 0 or values[0] != sum(values[1:]):

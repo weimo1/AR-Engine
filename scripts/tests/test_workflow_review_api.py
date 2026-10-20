@@ -46,7 +46,8 @@ class ApiReviewTests(unittest.TestCase):
         self.record = {"mode": "direct-api-v1", "status": "finished", "token_budget": 100000,
                        "fingerprint": self.manifest["fingerprint"], "batches": [{
                            "request_sha256": core.digest(core.canonical(request)),
-                           "response_sha256": core.digest((self.output / "response-0.json").read_bytes())}]}
+                           "response_sha256": core.digest((self.output / "response-0.json").read_bytes()),
+                           "actual_tokens": 12}]}
         core.save(self.output / "run.json", self.record)
 
     def test_valid_complete_evidence_and_open_defect(self):
@@ -214,6 +215,54 @@ class ApiReviewTests(unittest.TestCase):
             self.assertIsNone(api.cached_response(code))
 
 
+    def test_budget_precheck_counts_rejected_resample_tokens(self):
+        notes = b"# notes\n"
+        (self.packet / "snapshot/notes.md").write_bytes(notes)
+        self.manifest["state"]["files"]["notes.md"] = core.digest(notes)
+        self.manifest["reviewable_files"].append("notes.md")
+        preview = {"reviewable_files": [{"path": name} for name in self.manifest["reviewable_files"]],
+                   "excluded_files": [], "excluded_count": 0, "total_files": 2,
+                   "reviewable_count": 2}
+        core.save(self.packet / "ocr-preview.json", preview)
+        self.manifest["preview_sha256"] = core.digest((self.packet / "ocr-preview.json").read_bytes())
+        self.manifest["fingerprint"] = core.digest(core.canonical(core.review_identity(self.manifest)))
+        core.save(self.packet / "manifest.json", self.manifest)
+        requests = api.requests_for(self.packet)
+        self.assertEqual(len(requests), 2)
+        assigned = [json.loads(request["messages"][1]["content"])["assigned_files"] for request in requests]
+
+        def raw_for(files, findings=None):
+            body = {"reviewed_files": files, "findings": findings or []}
+            return core.canonical({"model": "deepseek-flash", "choices": [{"finish_reason": "stop",
+                "message": {"content": json.dumps(body)}}],
+                "usage": {"total_tokens": 12, "prompt_tokens": 10, "completion_tokens": 2}})
+
+        class Reply:
+            def __init__(self, data):
+                self.data = data
+
+            def read(self, _limit):
+                return self.data
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_error):
+                return False
+
+        malformed = raw_for(assigned[0], [
+            {"path": assigned[0][0], "line": 1, "content": "missing level"}])
+        replies = iter([Reply(malformed), Reply(raw_for(assigned[0])), Reply(raw_for(assigned[1]))])
+        with patch.dict(os.environ, {"AR_WORKFLOW_TOOLS_ROOT": str(self.packet)}), \
+                patch.object(core, "input_state", return_value=self.manifest["state"]), \
+                patch.object(api, "credential", return_value="owned"), \
+                patch.object(api, "estimate_tokens", return_value=10), \
+                patch.object(api.urllib.request, "urlopen",
+                             side_effect=lambda *_a, **_k: next(replies)) as http:
+            with self.assertRaisesRegex(ValueError, "Remaining budget insufficient"):
+                api.run(self.packet, self.packet, 30, 10)
+        self.assertEqual(http.call_count, 2)
+
     def test_malformed_sample_is_resampled_once_and_counts_one_batch(self):
         malformed = copy.deepcopy(self.raw)
         body = json.loads(malformed["choices"][0]["message"]["content"])
@@ -241,8 +290,72 @@ class ApiReviewTests(unittest.TestCase):
             output = api.run(self.packet, self.packet, 100000, 10)
         record = core.load(output.parent / "run.json")
         self.assertEqual(len(record["batches"]), 1)
-        self.assertEqual(record["batches"][0]["actual_tokens"], 12)
-        self.assertEqual(core.load(output)["decision"], "pass")
+        batch = record["batches"][0]
+        self.assertEqual([item["accepted"] for item in batch["attempts"]], [False, True])
+        self.assertIn("malformed", batch["attempts"][0]["rejection"])
+        self.assertTrue((output.parent / batch["attempts"][0]["path"]).is_file())
+        self.assertEqual(batch["actual_tokens"], 24)
+        result = core.load(output)
+        self.assertEqual(result["decision"], "pass")
+        self.assertEqual(result["actual_tokens"], 24)
+
+    def test_attempt_evidence_and_usage_must_stay_consistent(self):
+        raw = (self.output / "response-0.json").read_bytes()
+        attempt = self.output / "attempt-0-0.json"
+        attempt.write_bytes(raw)
+        record = copy.deepcopy(self.record)
+        record["batches"][0]["attempts"] = [{"path": "attempt-0-0.json",
+                                             "response_sha256": core.digest(raw),
+                                             "actual_tokens": 12, "accepted": True}]
+        core.save(self.output / "run.json", record)
+        self.assertEqual(api.report(self.packet, self.output)["actual_tokens"], 12)
+
+        record["batches"][0]["actual_tokens"] = 999
+        core.save(self.output / "run.json", record)
+        with self.assertRaisesRegex(ValueError, "recorded usage differs from attempt evidence"):
+            api.report(self.packet, self.output)
+
+        record["batches"][0]["actual_tokens"] = 12
+        core.save(self.output / "run.json", record)
+        attempt.write_bytes(b"{}")
+        with self.assertRaisesRegex(ValueError, "attempt evidence changed"):
+            api.report(self.packet, self.output)
+
+        attempt.write_bytes(raw)
+        record["batches"][0]["attempts"][0]["actual_tokens"] = -1
+        core.save(self.output / "run.json", record)
+        with self.assertRaisesRegex(ValueError, "differs from accepted response"):
+            api.report(self.packet, self.output)
+
+    def test_resample_also_needs_remaining_budget(self):
+        malformed = copy.deepcopy(self.raw)
+        body = json.loads(malformed["choices"][0]["message"]["content"])
+        body["findings"] = [{"path": "main.py", "line": 1, "content": "missing level"}]
+        malformed["choices"][0]["message"]["content"] = json.dumps(body)
+
+        class Reply:
+            def __init__(self, data):
+                self.data = data
+
+            def read(self, _limit):
+                return self.data
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_error):
+                return False
+
+        replies = iter([Reply(core.canonical(malformed))])
+        with patch.dict(os.environ, {"AR_WORKFLOW_TOOLS_ROOT": str(self.packet)}), \
+                patch.object(core, "input_state", return_value=self.manifest["state"]), \
+                patch.object(api, "credential", return_value="owned"), \
+                patch.object(api, "estimate_tokens", return_value=10), \
+                patch.object(api.urllib.request, "urlopen",
+                             side_effect=lambda *_a, **_k: next(replies)) as http:
+            with self.assertRaisesRegex(ValueError, "Remaining budget insufficient"):
+                api.run(self.packet, self.packet, 15, 10)
+        self.assertEqual(http.call_count, 1)
 
 
 if __name__ == "__main__":

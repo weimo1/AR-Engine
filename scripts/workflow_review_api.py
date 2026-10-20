@@ -281,6 +281,30 @@ def parse_response(raw: dict, assigned: list[str], model: str,
     return findings, tokens
 
 
+def batch_tokens(output: Path, batch: dict, accepted_tokens: int) -> int:
+    # A rejected re-sample is still billed by the provider. Keep every attempt on
+    # disk and count all of them, so a failed first sample cannot disappear from
+    # the report or from the budget check.
+    rejected = 0
+    for attempt in batch.get("attempts", []):
+        path = core.within(output, output / attempt["path"])
+        if not path.is_file() or core.digest(path.read_bytes()) != attempt.get("response_sha256"):
+            raise ValueError("Independent API attempt evidence changed")
+        if attempt.get("accepted"):
+            tokens = attempt.get("actual_tokens")
+            if type(tokens) is not int or tokens <= 0 or tokens != accepted_tokens:
+                raise ValueError("Independent API attempt usage differs from accepted response")
+            continue
+        tokens = attempt.get("actual_tokens")
+        if type(tokens) is not int or tokens < 0:
+            raise ValueError("Independent API attempt usage missing")
+        rejected += tokens
+    expected = rejected if batch.get("reused") else accepted_tokens + rejected
+    if type(batch.get("actual_tokens")) is not int or batch["actual_tokens"] != expected:
+        raise ValueError("Independent API recorded usage differs from attempt evidence")
+    return expected
+
+
 def report(packet: Path, output: Path) -> dict:
     manifest = core.load(packet / "manifest.json")
     record = core.load(output / "run.json")
@@ -303,8 +327,7 @@ def report(packet: Path, output: Path) -> dict:
         if batch.get("reused"):
             if cached_response(request) != raw_path.read_bytes():
                 raise ValueError("Missing/changed cache evidence for reused review")
-        else:
-            total += tokens
+        total += batch_tokens(output, batch, tokens)
     if total > record["token_budget"]:
         raise ValueError("Independent API exceeded total budget; no approval")
     return {"schema_version": 1, "mode": "direct-api-v1", "fingerprint": manifest["fingerprint"],
@@ -337,14 +360,16 @@ def run(root: Path, packet: Path, budget: int, seconds: int) -> Path:
     record = {"mode": "direct-api-v1", "status": "running", "fingerprint": manifest["fingerprint"],
               "token_budget": budget, "estimated_tokens": sum(estimates), "batches": []}
     core.save(output / "run.json", record)
-    total = 0
+    # One accumulator for every billed sample (accepted or rejected). The provider
+    # charges a rejected re-sample too, so a second counter for "accepted" tokens
+    # would let the pre-check understate the remaining budget.
     spent = 0
     # A provider sample may omit a required finding key (observed 2026-10-21: every
     # finding in one batch lacked "level"). Re-sample that batch once instead of
     # discarding the whole paid run; a second malformed sample still fails closed.
     try:
         for number, request in enumerate(requests):
-            if total + estimates[number] > budget:
+            if spent + estimates[number] > budget:
                 raise ValueError("Remaining budget insufficient; no automatic increase")
             if manifest["state"] != core.input_state(root, manifest["scope"]):
                 raise ValueError("Input changed during independent API review")
@@ -352,6 +377,7 @@ def run(root: Path, packet: Path, budget: int, seconds: int) -> Path:
             reused = raw is not None
             assigned = json.loads(request["messages"][1]["content"])["assigned_files"]
             attempts = 0
+            evidence = []
             while True:
                 if not reused:
                     http = urllib.request.Request("https://api.deepseek.com/chat/completions",
@@ -361,31 +387,46 @@ def run(root: Path, packet: Path, budget: int, seconds: int) -> Path:
                         raw = response.read(4 * 1024 * 1024 + 1)
                 if len(raw) > 4 * 1024 * 1024:
                     raise ValueError("Independent API response too large")
-                (output / f"response-{number}.json").write_bytes(raw)
+                attempt_path = output / f"attempt-{number}-{len(evidence)}.json"
+                attempt_path.write_bytes(raw)
                 parsed = json.loads(raw)
                 tokens = parsed.get("usage", {}).get("total_tokens")
+                billed = tokens if type(tokens) is int and tokens > 0 else 0
                 if not reused:
-                    spent += tokens
+                    spent += billed
                     if spent > budget:
                         raise ValueError("Independent API exceeded the review token budget")
                 try:
                     findings, tokens = parse_response(parsed, assigned, request["model"], allowed_paths(request))
+                    evidence.append({"path": attempt_path.name, "response_sha256": core.digest(raw),
+                                     "actual_tokens": tokens, "accepted": True})
                     break
                 except ValueError as error:
+                    evidence.append({"path": attempt_path.name, "response_sha256": core.digest(raw),
+                                     "actual_tokens": 0 if reused else billed,
+                                     "accepted": False, "rejection": str(error)[:200]})
                     if reused or "malformed" not in str(error) or attempts >= 1:
                         raise
+                    # A re-sample is a second billed request; it passes the same
+                    # remaining-budget gate as a first sample. Without this check a
+                    # rejected first sample could push the run past its cap while the
+                    # next unit's pre-check never runs.
+                    if spent + estimates[number] > budget:
+                        raise ValueError("Remaining budget insufficient; no automatic increase") from error
                     attempts += 1
                     print(f"Independent API batch {number + 1}/{len(requests)} malformed; re-sampling once",
                           flush=True)
+            (output / f"response-{number}.json").write_bytes(raw)
             record["batches"].append({"request_sha256": core.digest(core.canonical(request)),
-                "response_sha256": core.digest(raw), "actual_tokens": 0 if reused else tokens, "reused": reused})
+                "response_sha256": core.digest(raw),
+                "actual_tokens": 0 if reused else sum(item["actual_tokens"] for item in evidence),
+                "reused": reused, "attempts": evidence})
             core.save(output / "run.json", record)
             if not reused:
-                total += tokens
                 if not any(item["level"] != "suggestion" for item in findings):
                     core.save(cache_path(request), {"request_sha256": core.digest(core.canonical(request)),
                         "response_sha256": core.digest(raw), "raw": raw.decode("utf-8")})
-            print(f"Independent API batch {number + 1}/{len(requests)}; actual tokens {total}", flush=True)
+            print(f"Independent API batch {number + 1}/{len(requests)}; actual tokens {spent}", flush=True)
         record["status"] = "finished"
         core.save(output / "run.json", record)
         result = report(packet, output)

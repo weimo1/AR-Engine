@@ -59,3 +59,13 @@
 发布与 Actions：首次提交 f68da07（384 文件）经 pre-commit commit-check 通过并推送 origin/main。服务器实跑 workflow-checks（run 39456293164）在 python scripts/workflow.py ci 步骤失败，两个裁决门禁测试抛 Gate blocked: packet does not belong to current task input；根因是 CI 运行器把临时目录暴露为 8.3 短名，task_gate 用 str() 比较 packet 路径。改为两侧 resolve() 比较后，0568387 的实跑为 success（run 16:22:08Z）。该缺陷只在 Windows CI 路径表示下出现，本地 62 项测试不能替代这次 Server 实跑。
 
 未执行且不宣称完成：required checks、分支保护、PR 失败阻断。用户 2026-10-21 明确个人开发暂不需要 PR 流程，故不做 PR 实测，3.6 保持未勾。
+
+## 2026-10-21 补做 0568387 复审与重采样证据修正
+
+复核意见指出两处缺口：已提交的 0568387 没有独立复审证据，重采样时被拒样本的响应与费用会被覆盖。本节记录两者的实际处置。
+
+补做 0568387 复审的方法：该修复已在 6c60e99 之前提交，工作区没有对应差异，`verify --scope workspace` 只能得到 Empty/unknown OCR review set。于是在 f68da07（0568387 的父提交）上重建该提交的暂存差异——`git checkout --detach f68da07`、`git checkout 0568387 -- scripts/workflow_runtime.py`、`git add`——此时 `git diff --cached` 与 0568387 的提交内容一致（1 file changed, 5 insertions, 1 deletion）。该状态对应的 packet staged-33d0d7983ee3d22daf0bb22b 在 2026-10-21 00:21 已生成但从未复审，本次直接复用。复审后执行 `git checkout -f main` 恢复。
+
+结果：1/1 单元完成，实耗 40,097 tokens，报告 request_changes，1 条 must_fix（scripts/workflow_runtime.py:445，称 `data.get("packet")` 可能为 None 导致 TypeError，并怀疑 packet 可由 report 路径越出仓库）。裁决 finding-77ed88d30b414d18b7de155f 实耗 41,254 tokens，结论 not_defect：`verify` 在第 402 行把 review 与 packet 同时置空，`task_gate` 第 442-443 行在 review 缺失时先阻断，不存在 review 有效而 packet 为 None 的输入；`.get("packet", "")` 在字段缺失时返回空串，`Path("")` 与真实 packet 不等，仍走同一 fail-closed 分支；`report_path` 第 445 行已由 `core.within(root, ...)` 约束在仓库根内。finding-apply 输出 Finding disposition: pass，gate 输出 LOCAL DELIVERY GATE PASSED。
+
+重采样证据修正（scripts/workflow_review_api.py）：每次采样尝试写入 `attempt-<批次>-<序号>.json`，`batches[].attempts` 记录每次尝试的响应摘要、实际用量、是否被接受与拒绝原因；`actual_tokens` 为全部尝试之和，`report()` 新增 `batch_tokens()` 逐条核对尝试文件摘要并要求记录合计与证据一致。首次复审指出 run() 仍用只累计成功响应的 `total` 做批次预检，与计入被拒样本的 `spent` 分叉，可能低估已消耗额度，因此删去 `total`，预算预检、实际用量检查与输出统一使用 `spent`。回归 `test_malformed_sample_is_resampled_once_and_counts_one_batch` 改为断言两次尝试、24 tokens，新增 `test_attempt_evidence_and_usage_must_stay_consistent`（篡改尝试文件或合计不符即拒绝）与 `test_budget_precheck_counts_rejected_resample_tokens`（被拒样本计入后，下一批次预检即以 Remaining budget insufficient 停止且不再发请求）。本地 64 项测试通过。该修正自身仍待独立复审，本节写入时正在同一链路内复审。

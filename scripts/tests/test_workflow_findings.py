@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -98,6 +99,36 @@ class FindingTests(unittest.TestCase):
             self.save_response(raw)
             with self.assertRaises(ValueError):
                 adjudication.report(self.directory)
+
+    def test_drifted_citation_is_accepted_only_while_it_overlaps(self):
+        with tempfile.TemporaryDirectory() as name:
+            packet = Path(name)
+            (packet / "snapshot").mkdir()
+            text = "\n".join(f"line {number}" for number in range(1, 21))
+            (packet / "snapshot" / "f.py").write_text(text, encoding="utf-8")
+            core.save(packet / "manifest.json", {"state": {"files": {"f.py": core.digest(text.encode())}}})
+            quote = "line 10\nline 11"
+            citation = {"path": "f.py", "start_line": 10, "end_line": 11, "quote": quote}
+            adjudication.cite(packet, citation)
+            adjudication.cite(packet, citation | {"start_line": 8, "end_line": 9}, tolerant=True)
+            with self.assertRaisesRegex(ValueError, "differs from frozen source"):
+                adjudication.cite(packet, citation | {"start_line": 8, "end_line": 9})
+            with self.assertRaisesRegex(ValueError, "differs from frozen source"):
+                adjudication.cite(packet, citation | {"start_line": 1, "end_line": 1}, tolerant=True)
+            with self.assertRaisesRegex(ValueError, "differs from frozen source"):
+                adjudication.cite(packet, citation | {"quote": "invented text"}, tolerant=True)
+
+    def test_repeated_line_citation_matches_a_later_occurrence(self):
+        with tempfile.TemporaryDirectory() as name:
+            packet = Path(name)
+            (packet / "snapshot").mkdir()
+            text = "\n".join(["pass", "pass"] + [f"line {number}" for number in range(3, 16)] + ["pass"])
+            (packet / "snapshot" / "f.py").write_text(text, encoding="utf-8")
+            core.save(packet / "manifest.json", {"state": {"files": {"f.py": core.digest(text.encode())}}})
+            citation = {"path": "f.py", "start_line": 15, "end_line": 15, "quote": "pass"}
+            adjudication.cite(packet, citation, tolerant=True)
+            with self.assertRaisesRegex(ValueError, "differs from frozen source"):
+                adjudication.cite(packet, citation, tolerant=False)
 
     def test_partial_original_cannot_be_rescued_by_disposition(self):
         self.record["status"] = "failed"
