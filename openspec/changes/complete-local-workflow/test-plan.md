@@ -41,3 +41,21 @@
 上段是早期输入的结论，文本删除覆盖现已实现并有原生 OCR 预览回归。新增单元缓存、零模型 review-plan、受保护的远程策略身份与内核锁；完整独立复审仍待通过，不允许用本地回归代替。已将“本轮预算耗尽/截断”与“测试通过”分开记录，未提前提交或归档。
 
 思考模式样本证据：.ar-workflow/thinking-probe-53c024fdd1/result.json，实际 900 tokens，正确检出 bad_ratio.py 且未误报 good_ratio.py；样本不是全仓审查。用户追加的本轮总预算为 3,000,000 tokens，预算台账 .ar-workflow/review-budget-2026-10-20.json。
+
+## 2026-10-21 当前输入复审
+
+模型切换：连续多轮显示 deepseek-flash 的行号锚点漂移（如把 run() 尾部报成 196 行、把 197 行的文件报到 224 行），裁决时 45 条证据里 15 条引用无法与冻结源码逐字匹配，导致 finding-run 一律失败。改用 deepseek-v4-pro 后先对最小单元做单发探测（8,359 tokens，覆盖完整、2 条意见锚点均在文件行号内），再执行整仓复审。切换记录见 AGENTS.md、docs/workflow/SDD与CodeReview接入指南.md。
+
+当前输入复审（packet staged-d4a65de4e2732ea9bc8b861c，目录 direct-502fad32ecaf）：15/15 单元完成，实耗 305,097 tokens，报告 request_changes，12 条 findings（1 blocking / 9 must_fix / 2 suggestion）。逐条核对结论全部为误报或推测，关键反证：
+
+- test_workflow_deletions.py:58：validate_packet 返回错误列表，assertTrue 断言的是“检出篡改”，对应 prepare() 中的 assertEqual([], ...)。
+- test_workflow_findings.py 的导入与 batches 假设：setUp 调用 fixtures.ApiReviewTests.setUp(self)，模块由 discover 从同目录导入。
+- workflow_review_api.py:63-68 与 :119-127：上下文文件先经 is_file() 过滤，native_code 分支剔除渲染上下文。
+- workflow_review_github.py:51-53：mkdir(parents=True, exist_ok=False) 是刻意的 fail-closed 行为。
+- workflow_review_api.py:320-323、workflow_runtime.py:319-327、mcpcall.py:69-70：分别用传入 root 校验、在写日志前抛错、裸 raise 传播。
+
+裁决：finding-433c3b87496e46b99214b404，10 条非 suggestion 意见全部 not_defect，实耗 109,428 tokens（前一次 finding-1baca533119f4ffa8249189e 花 109,660 后因模型给出的引用范围与源码不符而失败，保留为失败证据）。finding-apply 输出 Finding disposition: pass；gate 输出 LOCAL DELIVERY GATE PASSED。本轮 2026-10-21 侧累计约 1,015k tokens（490,800 + 305,097 + 109,660 + 109,428）。
+
+发布与 Actions：首次提交 f68da07（384 文件）经 pre-commit commit-check 通过并推送 origin/main。服务器实跑 workflow-checks（run 39456293164）在 python scripts/workflow.py ci 步骤失败，两个裁决门禁测试抛 Gate blocked: packet does not belong to current task input；根因是 CI 运行器把临时目录暴露为 8.3 短名，task_gate 用 str() 比较 packet 路径。改为两侧 resolve() 比较后，0568387 的实跑为 success（run 16:22:08Z）。该缺陷只在 Windows CI 路径表示下出现，本地 62 项测试不能替代这次 Server 实跑。
+
+未执行且不宣称完成：required checks、分支保护、PR 失败阻断。用户 2026-10-21 明确个人开发暂不需要 PR 流程，故不做 PR 实测，3.6 保持未勾。
