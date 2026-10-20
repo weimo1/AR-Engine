@@ -1,0 +1,32 @@
+schema: ar-engine
+
+context: |
+  AR Engine 是 C++23 / Vulkan 1.4 的个人渲染引擎，渲染优先，编辑器逐步补齐。
+  先读 AGENTS.md、docs/README.md 和有效 ADR；模块和线程架构仍有讨论稿，不由工具初始化批准。
+  中文编写方案。proposal.md 是行为与验收唯一编辑源，specs 仅由契约块派生。
+  检查通过、独立审查与用户方案确认是不同事实；OpenSpec 文件状态不能代替实际证据。
+  单工作区串行写入；未验收的引擎功能不放入当前 specs。操作见 docs/workflow/SDD与CodeReview接入指南.md。
+  中文编写文档；保留 OpenSpec 结构标题和 SHALL/MUST 关键字。
+  生成技能中的 openspec 命令必须从项目根经 npm.cmd run sdd -- 调用，使用本地锁定版本，不使用全局版本。
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always state what is out of scope
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing

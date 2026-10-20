@@ -1,0 +1,6 @@
+interface:
+  display_name: "AR Architecture Review"
+  short_description: "Reassess existing modules within approved boundaries."
+  default_prompt: "Use $ar-fresh-arch to compare design options and prepare an architecture proposal for review."
+policy:
+  allow_implicit_invocation: true

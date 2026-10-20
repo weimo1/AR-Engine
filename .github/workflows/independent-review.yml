@@ -1,0 +1,64 @@
+name: Independent review
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: independent-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == github.repository_owner && github.event.pull_request.base.ref == github.event.repository.default_branch
+    runs-on: windows-latest
+    timeout-minutes: 10
+    environment: ai-review
+    # Cache access is not declared here on purpose. pull_request_target already
+    # gets the read-only default, so declaring `cache-mode: read` only risks a
+    # duplicate statement drifting from the trigger default.
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: write
+    steps:
+      # Always trusted default-branch code. Never checkout or execute the PR here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      # Restore default-branch caches only; this privileged job never saves PR evidence.
+      - name: Reuse trusted complete review units
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ar-workflow/review-cache
+          key: review-v1-${{ runner.os }}-${{ hashFiles('scripts/workflow_review_api.py') }}-${{ github.event.pull_request.base.sha }}-${{ github.event.pull_request.head.sha }}
+          restore-keys: |
+            review-v1-${{ runner.os }}-${{ hashFiles('scripts/workflow_review_api.py') }}-${{ github.event.pull_request.base.sha }}-
+      - name: Restore trusted OCR binary
+        shell: pwsh
+        run: |
+          $lock = Get-Content workflow/tool-lock.json -Raw | ConvertFrom-Json
+          $toolRoot = [IO.Path]::GetFullPath('.tools/ocr')
+          $dir = [IO.Path]::GetFullPath((Join-Path $toolRoot $lock.ocr.version))
+          if (-not $dir.StartsWith($toolRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'OCR path escapes tool root' }
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          $pending = Join-Path $dir ('ocr-' + [guid]::NewGuid().ToString('N') + '.tmp')
+          Invoke-WebRequest -Uri $lock.ocr.url -OutFile $pending
+          if ((Get-FileHash -LiteralPath $pending -Algorithm SHA256).Hash.ToLowerInvariant() -ne $lock.ocr.sha256) { throw 'OCR checksum mismatch; unpublished download retained for diagnostics' }
+          Move-Item -LiteralPath $pending -Destination (Join-Path $dir 'ocr.exe') -Force
+      - name: Review frozen PR data in independent model context
+        shell: pwsh
+        # The paid key comes from the protected environment and is consumed by
+        # workflow_review_api.credential(). PR contents stay data: this step runs
+        # only default-branch scripts, never a PR-provided entry point.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: python scripts/workflow_review_github.py

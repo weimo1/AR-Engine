@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "openspec": {
+    "version": "1.14.3",
+    "package": "@fission-ai/openspec",
+    "source": "https://github.com/Fission-AI/OpenSpec/releases/tag/v1.14.3"
+  },
+  "ocr": {
+    "version": "1.13.1",
+    "commit": "8eb83340a487b1150af00701b94f01af97e4b4d6",
+    "platform": "windows-amd64",
+    "url": "https://github.com/alibaba/open-code-review/releases/download/v1.13.1/opencodereview-windows-amd64.exe",
+    "sha256": "a9a2b2148bd983be42b8f8fc1cd433e9100b620014408481495bf86cd64ea3ec",
+    "mode": "delegate-and-api-pilot",
+    "api_provider": "deepseek",
+    "api_model": "deepseek-v4-pro",
+    "api_url": "https://api.deepseek.com",
+    "credential_storage": "Windows user-level DPAPI via api_key_cmd; no key in repository",
+    "excluded_review_context": {
+      ".agents/skills/**/references/**": "已复制的第三方参考，不作为本轮工作流自有实现；文件仍纳入内容指纹",
+      ".agents/skills/**/LICENSE": "上游许可文本保留，不作为本轮语义审查代码；发布许可合规未由此完成",
+      "docs/archive/2026-10-19/references/GameEngineDoc.md": "他人原始参考，不是执行指令；仅位置迁移，未扩大排除范围",
+      "package-lock.json": "npm生成锁文件，检查固定顶层版本与安装完整性；不声称逐行审计传递依赖"
+    },
+    "rule_identity": {
+      "project_json_sha256": "96c52c757538ffc87fabcae544f49be768fcb6300ae0776d0c08edf92c72175b",
+      "native_sha256": "35f6c314f011bcf443e1c2915f25605520439b32a5dc00758d07a395d80c2b15",
+      "basis": "Pinned OCR 1.13.1 canonical rule layers plus filters, observed in controlled native run 2026-10-20; rule changes require reviewed lock refresh; not raw file-byte SHA"
+    }
+  }
+}

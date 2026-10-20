@@ -1,0 +1,133 @@
+{
+  "date": "2026-10-19",
+  "note": "Hashes identify pre-migration content. Relative links and archive notices were adjusted; original evidence snapshots remain under ignored .ar-workflow/reviews.",
+  "files": [
+    {
+      "from": "AI开发工作流讨论稿.md",
+      "to": "docs/archive/2026-10-19/discussions/AI开发工作流讨论稿.md",
+      "original_sha256": "d66f866f15e3fb8ca0383c4431ac5b5f0226513319d3f24768d98c45808cb99a"
+    },
+    {
+      "from": "引擎.txt",
+      "to": "docs/archive/2026-10-19/discussions/引擎.txt",
+      "original_sha256": "519974fa03dce099562c39a3730abaec9895ef9db7aebde179413b97a63ab888"
+    },
+    {
+      "from": "渲染引擎依赖与资源绑定方案.txt",
+      "to": "docs/archive/2026-10-19/discussions/渲染引擎依赖与资源绑定方案.txt",
+      "original_sha256": "32373b24ab1465eecc8d92bbdab98e4e89dceff62bbff7b7fa1c7aa8900af064"
+    },
+    {
+      "from": "GameEngineDoc.md",
+      "to": "docs/archive/2026-10-19/references/GameEngineDoc.md",
+      "original_sha256": "3ac8944416d66857cb227a6760a2a994e8e151bcd197be854020a009f5d2fbf4"
+    },
+    {
+      "from": "docs/workflow/Harness任务执行与恢复方案.md",
+      "to": "docs/archive/2026-10-19/discussions/Harness任务执行与恢复方案.md",
+      "original_sha256": "187d7d81f3c7773e52ee013629505059635b18a8c727222eacba40e54951837b"
+    },
+    {
+      "from": "docs/workflow/提交与合并门槛落地方案.md",
+      "to": "docs/archive/2026-10-19/discussions/提交与合并门槛落地方案.md",
+      "original_sha256": "43acc46bccbbf06b20e24ada64bbe3f44c2d22e63e88f577a29c00b396d3f7a8"
+    },
+    {
+      "from": "docs/workflow/架构与设计图规范.md",
+      "to": "docs/standards/架构与设计图规范.md",
+      "original_sha256": "d3a5b42531be000f6bc800cb8d1f3517f438b4478cf18edd420bcf2549382722"
+    },
+    {
+      "from": "docs/workflow/Flower-Shader编译与宏机制调研.md",
+      "to": "docs/research/Flower-Shader编译与宏机制调研.md",
+      "original_sha256": "584d53323a81a99f6163253ad48213b9bca04c137ca4b5b354bc9198d10acdd3"
+    },
+    {
+      "from": "docs/workflow/Shader编译与变体公开方案对照.md",
+      "to": "docs/research/Shader编译与变体公开方案对照.md",
+      "original_sha256": "c782155da3b372f64ad94e71479fecb5efe2c2c086d37a595a174ca2edcac28f"
+    },
+    {
+      "from": "docs/workflow/公开工程实践对照与缺口.md",
+      "to": "docs/research/公开工程实践对照与缺口.md",
+      "original_sha256": "d769dd20faf3f06c1a37075dee989a61c2d3bf202ed6a670f4a2400e0a72a1c6"
+    },
+    {
+      "from": "docs/workflow/本地agent-skills评估.md",
+      "to": "docs/research/本地agent-skills评估.md",
+      "original_sha256": "15ebc5445b76f3fdac44131765fbec716d3fca020d61e529f898e1e2bc3c5be6"
+    },
+    {
+      "from": "docs/workflow/OpenCodeReview适用性评估.md",
+      "to": "docs/research/OpenCodeReview适用性评估.md",
+      "original_sha256": "9074a1f832670ba3a3550b2fdf947a1773b8c5b500d932fb521b7cf80da80f3b"
+    },
+    {
+      "from": "docs/workflow/templates/01-产品需求与范围.md",
+      "to": "docs/archive/2026-10-19/templates/01-产品需求与范围.md",
+      "original_sha256": "80636b4d939d768b40d5852b01c1640478cf51b9f35d8e5a266da60b7ead91cf"
+    },
+    {
+      "from": "docs/workflow/templates/02-总体架构.md",
+      "to": "docs/archive/2026-10-19/templates/02-总体架构.md",
+      "original_sha256": "9db4431b4d4cbd015dc9f5ad0b3d83ae231b667149535ac2c409fd41a800aff6"
+    },
+    {
+      "from": "docs/workflow/templates/03-功能规格.md",
+      "to": "docs/archive/2026-10-19/templates/03-功能规格.md",
+      "original_sha256": "5ea4a15ffc82b1b8384fe5957f2758d786a2f95998b24e5855f0f502f74d9fd4"
+    },
+    {
+      "from": "docs/workflow/templates/04-技术方案.md",
+      "to": "docs/archive/2026-10-19/templates/04-技术方案.md",
+      "original_sha256": "101d9134ff9d3572ff0ba23eabbbbedc3e1a37ebc60ec12b8064453fd861e3f1"
+    },
+    {
+      "from": "docs/workflow/templates/05-工程规范.md",
+      "to": "docs/archive/2026-10-19/templates/05-工程规范.md",
+      "original_sha256": "bdca0949079e9b38d9e01335a0f382887affbb5f6f55a0d24448f928031b25cc"
+    },
+    {
+      "from": "docs/workflow/templates/06-架构决策ADR.md",
+      "to": "docs/archive/2026-10-19/templates/06-架构决策ADR.md",
+      "original_sha256": "292abe1314158a2cd1bbe0ff84bbf4f827e7118870aab1486ae57ce29562167a"
+    },
+    {
+      "from": "docs/workflow/templates/07-验证计划.md",
+      "to": "docs/archive/2026-10-19/templates/07-验证计划.md",
+      "original_sha256": "84f2bc8d48afdc99b3c7e34ff57dcb6be4e6d356356bbcead567e10b3abfcea1"
+    },
+    {
+      "from": "docs/workflow/templates/08-审查记录.md",
+      "to": "docs/archive/2026-10-19/templates/08-审查记录.md",
+      "original_sha256": "0e6508fbcd802c59bf955070fd6fcb97947bd23c2f2d0b52049f387ea15aa127"
+    },
+    {
+      "from": "docs/workflow/templates/09-验证记录.md",
+      "to": "docs/archive/2026-10-19/templates/09-验证记录.md",
+      "original_sha256": "7d6ea80c539881b2787713dffda2840a1a39d1325a6e16409e4eabb2750af677"
+    },
+    {
+      "from": "docs/workflow/templates/10-AI任务规则.md",
+      "to": "docs/archive/2026-10-19/templates/10-AI任务规则.md",
+      "original_sha256": "86d4747f190f024c19ce088dc325877509d152e26bf8d85883fe8e02eed4a735"
+    },
+    {
+      "from": "docs/workflow/templates/11-MR说明.md",
+      "to": "docs/archive/2026-10-19/templates/11-MR说明.md",
+      "original_sha256": "d5d53fca8ff68843af4e7c55d4f81ae57172027d17865fbf55dbdd26b961d301"
+    },
+    {
+      "from": "docs/workflow/文档体系与确认机制.md",
+      "to": "docs/archive/2026-10-19/discussions/文档体系与确认机制-旧稿.md",
+      "action": "preserved-before-consolidation",
+      "original_sha256": "d5a6b17b33c1d2f62f087639dad7186b8146b6471ac21ff282acea11bfea500f"
+    },
+    {
+      "from": "docs/workflow/当前决策与待办清单.md",
+      "to": "docs/archive/2026-10-19/discussions/当前决策与待办清单-历史快照.md",
+      "action": "extracted-history",
+      "original_sha256": "e0ee0c28238f7defd92c701eeea4ca5e91e8d7496ddf7146d4bdd0ed6f9e101f"
+    }
+  ]
+}

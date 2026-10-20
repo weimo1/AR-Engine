@@ -1,0 +1,6 @@
+interface:
+  display_name: "AR Context7"
+  short_description: "Find version-matched public library documentation."
+  default_prompt: "Use $ar-context7 to verify this public library API against the project version."
+policy:
+  allow_implicit_invocation: true

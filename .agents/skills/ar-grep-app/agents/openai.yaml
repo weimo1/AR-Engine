@@ -1,0 +1,6 @@
+interface:
+  display_name: "AR Public Code Search"
+  short_description: "Find public C++ and Vulkan examples with grep.app."
+  default_prompt: "Use $ar-grep-app to research public API examples for the project without uploading private code."
+policy:
+  allow_implicit_invocation: true

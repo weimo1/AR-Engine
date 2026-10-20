@@ -1,0 +1,16 @@
+{
+  "name": "ar-engine-workflow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AR Engine project-local SDD tooling; engine builds use CMake/MSBuild.",
+  "engines": { "node": ">=20.19.0" },
+  "scripts": {
+    "sdd": "openspec",
+    "sdd:status": "openspec list",
+    "workflow:check": "python scripts/workflow.py check",
+    "workflow:test": "python -m unittest discover -s scripts/tests -v"
+  },
+  "devDependencies": {
+    "@fission-ai/openspec": "1.14.3"
+  }
+}

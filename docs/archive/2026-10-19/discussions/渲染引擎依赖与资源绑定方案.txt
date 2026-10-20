@@ -1,0 +1,317 @@
+渲染引擎依赖与资源绑定方案
+
+历史讨论稿标识（2026-10-19整理）：本文件保留2026-10-17的学习目标、双路径范围与候选依赖，不作为当前依赖或构建入口的权威清单。现行选型见 docs/adr/0007-基础构建与第三方依赖选型.md；其中 CMake/VS generator/MSBuild 已取代下文 Ninja 默认建议，工具与库的集成状态以当前接入指南和实际验证为准。
+
+日期：2026-10-17
+状态：开发前的依赖建议与功能范围，尚未安装、构建或完成双路径运行验证。
+技术基线：C++23、Vulkan 1.4、Windows x64。
+本文件补充“渲染引擎需求.txt”，记录使用哪些依赖，以及两种资源绑定方案要做到什么程度。具体类设计、内存布局和同步方案在实现前另行细化。
+
+一、确定要做的两种方案
+
+Bindless 是资源访问和组织方式，不是与 Descriptor Heap 对立的另一项扩展。我们实现两种 Bindless 绑定路径：
+
+A. Descriptor Set Bindless
+使用 Descriptor Set 与 Descriptor Indexing，把纹理等资源组织成数组，由材质或对象数据提供索引。
+目标是掌握描述符布局、分配、写入、数组访问与资源生命周期，形成稳定、容易对照的基础实现。
+
+B. Descriptor Heap Bindless
+使用 VK_EXT_descriptor_heap，直接管理描述符内存、Resource Heap、Sampler Heap 与 Push Data。
+目标是掌握新的资源绑定模型，并与 A 路径比较工程复杂度、调试体验和运行成本。
+
+两条都计划实现并保留。A 是稳定参考与学习路径，B 是现代资源绑定的重点研究路径。
+Descriptor Buffer 暂不作为第三条完整实现路径。
+双路径属于同一个 Vulkan 后端，不等于同时实现两套完整渲染引擎。
+
+二、依赖清单
+
+以下为默认建议选型。具体 tag、commit、工具版本在干净环境构建和原型通过后锁定；不能把本清单视作已经验证过的依赖组合。
+
+1. 构建和开发工具
+
+C++ 编译器与标准库
+首选 Windows 的 MSVC 工具链，要求实际通过项目所用 C++23 功能探针。首轮验证 std::expected、std::to_underlying、std::move_only_function 等实际使用功能。
+固定编译器、标准库、Windows SDK 与运行库配置。引擎动态库和编辑器统一构建配置。
+暂不依赖 C++26、import std 或 Modules。clang-cl 可作为后续兼容验证，不立即承担双编译器维护成本。
+
+CMake、Ninja 与 CTest
+CMake 组织目标、依赖和构建配置，Ninja 作为建议的构建执行器，CTest 统一调度测试。
+明确要求 C++23，禁止静默降级；不使用随工具链更新变化的 latest 标准模式。
+
+vcpkg
+作为默认第三方依赖管理方式，使用 manifest 和固定 baseline。
+如果新 Vulkan 扩展所需的头文件或 loader 版本尚未进入选定 baseline，使用固定版本覆盖或固定源码依赖，并记录唯一来源。
+不同时维护多个互相独立的依赖管理方案。
+
+Vulkan SDK
+使用包含 VK_EXT_descriptor_heap 定义及配套工具的较新 SDK，统一使用其 glslc、spirv-val、spirv-dis 和验证层。
+版本号是 1.4 并不足以证明包含该扩展。LunarG 1.4.341 系列已出现相关支持与修复；实际选用版本还需通过头文件、Shader 编译及验证工具检查。
+优先固定通过测试的较新 SDK，不把最早出现扩展的版本作为性能或稳定性保证。
+
+显卡驱动
+选择能实际暴露 Vulkan 1.4 与 VK_EXT_descriptor_heap 的驱动，记录版本。
+SDK 决定编译工具是否认识 API，驱动决定设备能否执行，两者分别核验。
+开发驱动和正式驱动的版本分支不同，不只比较版本号大小判断能力。
+
+2. 引擎运行库
+
+GLFW
+用途：窗口、输入、Vulkan surface 接入。
+边界：不承担场景系统或编辑器逻辑。
+来源：https://github.com/glfw/glfw
+
+volk
+用途：加载 Vulkan 实例、设备及扩展函数。
+要求：固定版本需包含 Descriptor Heap 入口；统一 Vulkan 头文件和函数加载方式，避免重复 loader 与版本冲突。
+来源：https://github.com/zeux/volk
+
+Vulkan Memory Allocator（VMA）
+用途：Buffer、Image 的 GPU 内存分配与资源统计基础。
+边界：描述符槽位分配、在途资源保护与退役仍由引擎设计；VMA 不自动解决这些问题。
+来源：https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+
+GLM
+用途：向量、矩阵及常用几何运算。
+要求：统一坐标系、矩阵布局、深度约定与配置宏；CPU 和 Shader 的数据布局需要独立核验。
+来源：https://github.com/g-truc/glm
+
+spdlog
+用途：模块化日志和错误上下文。
+要求：只使用一种一致的格式化依赖配置；日志避免在性能测试时引入逐帧噪声。
+来源：https://github.com/gabime/spdlog
+
+EnTT
+用途：场景实体与组件存储，服务 Transform、Camera、MeshRenderer 和 Light。
+边界：不因引入 ECS 而增加游戏行为系统；场景层级和渲染快照另行设计。
+来源：https://github.com/skypjack/entt
+
+fastgltf
+用途：解析 glTF/GLB 静态模型及材质数据。
+边界：解析模型不等于完成纹理解码、GPU 上传或支持全部 glTF 扩展。第一版明确支持的子集。
+使用固定发布版本，记录其传递依赖，避免重复引入冲突版本。
+来源：https://github.com/spnda/fastgltf
+
+stb_image 与 stb_image_write
+用途：第一版常见图像和 HDR 环境图解码，以及 PNG 截图输出。
+边界：不承担 KTX2、完整压缩纹理流送和通用图像处理。需要保存线性 HDR 调试结果时再引入合适输出方案。
+来源：https://github.com/nothings/stb
+
+nlohmann/json
+用途：第一版配置、场景参数、实验设置与结果元数据。
+要求：场景包含格式版本与资产引用，不把整个运行时内存对象直接序列化。
+来源：https://github.com/nlohmann/json
+
+3. 编辑器依赖
+
+Dear ImGui
+用途：渲染视口、场景树、属性、日志、资源绑定调试和性能面板。
+若使用 docking 功能，固定对应提交。
+注意：选用的 Vulkan UI backend 可能仍使用 Descriptor Set；不能假定它自动适配 Heap 路径。
+来源：https://github.com/ocornut/imgui
+
+ImGuizmo
+用途：对象平移、旋转和缩放操作。
+不作为最小资源绑定原型的前置依赖。
+来源：https://github.com/CedricGuillemet/ImGuizmo
+
+4. Shader 工具
+
+glslc
+作为第一版 GLSL 到 SPIR-V 的编译入口，优先复用 SDK 可执行工具，不立即把 Shader 编译器库嵌入引擎。
+记录目标环境、宏、入口和绑定模式。缓存键必须包含绑定路径及编译器版本。
+
+SPIRV-Tools
+使用 spirv-val 验证模块，使用 spirv-dis 检查能力声明、资源访问与映射。
+编译器和验证工具必须理解选定 Shader 路径所用扩展，编译成功不等于设备支持。
+来源：https://github.com/KhronosGroup/SPIRV-Tools
+
+SPIRV-Reflect
+候选用途：提取资源绑定与接口信息，减少手工元数据重复。
+先验证 Descriptor Set 路径，再核查所选版本对 Heap 与 untyped pointers 的反射范围。新模型中不能假设总能反射出传统 set/binding。
+最小原型允许显式维护小规模映射，完整反射工具不阻塞启动。
+来源：https://github.com/KhronosGroup/SPIRV-Reflect
+
+5. 分析和测试工具
+
+Tracy
+用途：CPU 帧与任务分析；GPU 的基础 pass 时间使用 Vulkan 时间戳，可按实际接入情况关联展示。
+客户端与查看器版本匹配。正式对照实验记录分析开销。
+来源：https://github.com/wolfpld/tracy
+
+Vulkan Validation Layers
+用途：API 使用、同步与可支持的 GPU 辅助检查。
+不能把“无验证错误”视作资源访问一定正确，特别是合法地址范围内的错误索引和槽位步长。
+
+RenderDoc
+用途：学习抓帧、查看 pass、资源和 Shader，优先用于 A 路径。
+B 路径的捕获、重放和 Shader 调试支持要按实际版本逐项验证，不能用支持 Descriptor Buffer 推断支持 Descriptor Heap。
+来源：https://renderdoc.org/
+
+NVIDIA Nsight Graphics
+用途：补充 NVIDIA GPU 分析与 Shader 调试。使用前同样验证具体版本对 Heap 的支持。
+当外部抓帧工具无法处理某路径时，使用离屏输出、GPU 回读、SPIR-V 检查和自建绑定可视化协助定位，不把工具限制解释为程序已经正确。
+来源：https://developer.nvidia.com/nsight-graphics
+
+Catch2
+用途：CPU 侧句柄、槽位分配、场景序列化和算法边界等有意义的单元测试。
+GPU 集成测试使用可独立运行的验证程序，通过 CTest 调度；普通 CI 不假定具有支持 Heap 的 GPU。
+来源：https://github.com/catchorg/Catch2
+
+暂不引入：完整第三方 RHI、游戏脚本、物理、音频、通用反射大框架、其他图形后端及独立大型任务框架。
+先实现薄 RHI 与明确任务接口；Jobs 的具体实现随实际并行需求选择，避免让非渲染基础设施拖延首个可运行版本。
+
+三、本机环境记录
+
+记录自本轮检查，不代表之后仍保持相同状态：
+GPU：NVIDIA GeForce RTX 4060 Laptop GPU，约 8GB 显存。
+CPU：AMD Ryzen 9 7945HX。
+内存：约 16GB。
+驱动：566.26。
+设备 API：Vulkan 1.3.289。
+VULKAN_SDK：D:\VulkanSDK\1.4.304.1。
+当前 SDK 头文件未发现 VK_EXT_descriptor_heap 定义，当前设备扩展检查也未发现该扩展。
+已有 Descriptor Indexing 的主要所需特性、Buffer Device Address、Indirect Count、Mesh Shader 与光追相关支持。
+
+因此，已确认的 C++23 + Vulkan 1.4 是项目目标，当前机器尚未完成环境升级与双路径验证。
+环境就绪后记录实际编译器、标准库、SDK、loader、驱动、设备能力及调试工具版本。
+本文件不触发软件安装或驱动更新。
+
+四、两条路径共用什么
+
+共用：场景、资产加载、模型与纹理、材质含义、对象与灯光数据、相机、可见性算法、渲染 pass、效果参数与测试场景。
+分别实现：资源注册到绑定表的方式、描述符分配与更新、Shader 资源访问适配、绑定命令及对应诊断信息。
+
+上层使用逻辑资源句柄和材质引用。不能直接把 Heap 字节偏移作为公共资产 ID，也不能把 A 路径的数组下标固化为永久场景格式。
+由各路径把逻辑引用转换成实际 GPU 索引或偏移。Shader 业务算法尽量共用，允许编译路径专用访问适配与元数据。
+第一版通过启动参数或配置选择路径，例如 binding_mode = set_bindless 或 descriptor_heap。切换时重建必要状态，不要求帧内无缝热切换。
+显式选择不支持的模式时给出错误；若以后提供 auto，必须打印实际选择，性能实验必须指定模式，避免无声回退。
+
+五、A 路径要实现什么
+
+1. 纹理和独立采样器的资源数组，以及对象和材质数据访问。
+2. 材质索引驱动的纹理选择，支持同一次绘制中不同实例访问不同纹理。
+3. 描述符槽位分配、容量检查、默认资源、资源删除和安全复用。
+4. 第一轮先在安全时点写入资源，后续单独学习在途更新规则。
+5. 接入相同的 PBR、阴影和 GPU 间接绘制流程。
+
+按实际用法查询并启用 runtimeDescriptorArray、shaderSampledImageArrayNonUniformIndexing 等特性。非一致访问按 Shader 语言要求声明。
+只在确实使用时启用 descriptorBindingPartiallyBound、descriptorBindingSampledImageUpdateAfterBind、descriptorBindingVariableDescriptorCount 等能力及对应 layout、pool、binding 标志。
+固定容量数组不强制要求 variable descriptor count。
+Partially Bound 不代表可以读取未初始化槽位；Update After Bind 不代表可以在 GPU 正使用同一槽位时无条件改写。
+需要自行保证资源有效期、更新时序和描述符数量不超设备限制。
+
+六、B 路径要实现什么
+
+1. Resource Heap 与 Sampler Heap 创建、容量管理及命令绑定。
+2. Buffer、Image 与 Sampler 描述符写入，Push Data 传递索引或参数。
+3. 相同场景与材质在 Heap 路径正确渲染。
+4. 描述符写入大小、槽位步长、对齐、驱动保留区和在途回收规则。
+5. 与 A 相同的资源更新、Mip 采样、实例材质和间接绘制测试。
+
+查询扩展、descriptorHeap、所需 untyped pointer 支持、设备限制及函数入口。
+初期优先验证传统 set/binding Shader 到 Heap 的映射，复用相同着色逻辑；原生 GL_EXT_descriptor_heap 访问作为后续独立学习项。
+两种 Shader 访问方式属于 B 的内部实现选择，不增加第三套完整渲染器。
+
+重点检查：
+写入大小不能直接作为 Shader 堆数组的槽位步长，实际布局遵循对应属性与映射方式。
+独立 sampler 的映射使用 heapOffset、pushOffset、heapIndexStride 等字段；samplerHeapOffset 等字段是组合图像采样器的补充字段，不能仅凭字段名字选择。
+资源、采样器堆的保留区不能被引擎槽位分配覆盖；对齐要求同时考虑 GPU 地址、槽位和实际写入要求。
+不能通过仅移动 CPU 映射指针来修复 GPU 地址布局问题。
+Host Visible 内存不等于可以任意覆盖在途描述符；需要时 flush，且必须处理 CPU/GPU 可见性及同步。
+Shader、管线和 Push Data 必须与当前绑定模式匹配。
+
+七、编辑器和调试的兼容边界
+
+两条路径使用相同的编辑器与视口。
+现成 ImGui Vulkan backend 可能继续采用 Descriptor Set。Heap 命令与传统绑定状态存在失效规则，因此 UI 应在清晰的阶段或独立命令缓冲中执行，按规范重新绑定所需状态。
+第一版允许场景使用 Heap、UI 使用传统绑定；必须记录此混合范围，不能声称全部绘制都已经迁移到 Heap。
+性能实验区分场景渲染、UI 和总帧开销，避免 UI 掩盖绑定方案差异。
+
+自建调试信息至少显示：
+当前路径、设备功能、逻辑资源句柄、资源名称、实际槽位或偏移、容量、在用数量、待回收数量、更新时间及回收完成条件。
+必要时输出单个像素或 Shader 读取结果到 Buffer，辅助定位抓帧工具无法覆盖的问题。
+
+八、学习与验证顺序
+
+L0 环境与最小能力检查
+确认工具链，分别验证 A、B 所需 feature。完成 GLSL 编译、SPIR-V 验证与最小 Buffer 读回。
+
+L1 Descriptor Set Bindless
+先画一个带纹理物体，再实现多个纹理、多个材质和不同实例索引。
+学习 layout、pool、set、binding、非一致索引和描述符生命周期。
+用 RenderDoc 检查实际访问的资源，形成可复现示例。
+
+L2 Descriptor Heap
+重复 L1 场景，并增加非零槽位、写入大小与步长、独立 sampler 映射、Push Data 的数值检查。
+比较两条路径的输出，学习传统映射和原生堆访问的差别。
+
+L3 更新与生命周期
+增加纹理替换、资源删除、槽位复用、容量耗尽处理，以及多帧在途运行。
+理解“CPU 删除对象”和“GPU 不再引用资源”之间的区别。
+
+L4 接入渲染引擎
+在相同静态场景、PBR 材质、阴影和编辑器视口中使用两条路径。
+这个阶段优先保证基础渲染完整，不同时引入所有高级效果。
+
+L5 GPU 驱动与比较
+先建立 CPU 绘制基线，再接 Compute 剔除、绘制参数生成和间接绘制。
+Hi-Z、Mesh Shader、光追等继续作为后续增强，不作为双绑定路径的前置条件。
+
+每个阶段保留短说明：解决了什么问题、关键数据如何流动、如何验证、遇到了什么错误及其原因。
+AI 辅助实现时需要解释关键资源访问与同步机制，维护者能通过示例修改参数和定位错误后，再进入下一阶段。
+
+九、必须覆盖的验证场景
+
+T1 Buffer：UBO、SSBO 的零槽位和非零槽位，检查 Shader 数值结果。
+T2 纹理：不同颜色纹理、独立 sampler、不同实例的非一致资源选择。
+T3 Mip：每层写入不同值，分别检查 textureLod 与 texelFetch；过滤预期与测试数据一致。
+T4 更新：替换资源、多帧在途、删除后安全复用，检测陈旧句柄与过早回收。
+T5 边界：容量耗尽、无效句柄、缺失资产，避免依赖未定义的越界读取结果。
+T6 图形与计算：分别覆盖 compute 输出和 fragment 输出，不能用其中一个通过代替另一个。
+T7 完整画面：相同相机与设置下对比 PBR、IBL、阴影与编辑器输出，使用合理容差并分析差异。
+T8 工具：分别记录每条路径能否捕获、重放、查看资源及调试 Shader，不合并成简单的“工具支持”。
+
+十、性能实验怎么比较
+
+至少建立以下四种配置：
+A + CPU 可见性处理与相同批处理策略。
+B + CPU 可见性处理与相同批处理策略。
+A + GPU 可见性处理与间接绘制。
+B + GPU 可见性处理与间接绘制。
+
+比较 A/B 时保持场景、材质、可见对象、绘制分组、Shader 算法和质量一致。
+比较 CPU/GPU 路径时分别说明参数上传、剔除、命令生成和提交开销，不把它们合并解释为某个绑定 API 的单独收益。
+按对象数、材质纹理数、可见比例和资源更新频率改变场景，包含小规模及高开销场景。
+记录 CPU 绑定与录制时间、GPU pass 与总时间、描述符更新成本、绑定存储占用及帧时间分布。
+预热后重复采样，正确性验证与关闭 Validation 的正式性能测量分开；打印精确配置、提交和依赖版本。
+两条都是 Bindless，不能仅凭“减少 Descriptor Set 绑定”预设 B 明显更快。收益、持平和退化都保留。
+可以用一个小型逐材质绑定示例帮助学习，但不把它扩展为第三套长期后端。
+
+十一、第一版与毕设的关系
+
+个人项目确定实现并保留两条绑定路径，持续学习、调试和优化。
+先完成 A 的稳定渲染，再验证 B 并接入相同场景，避免同时排查基础渲染和两套新绑定实现。
+毕设可以使用稳定版本展示；如果正式题目承诺两种绑定方式比较，就必须完成两者与对应实验。
+在两条路径没有通过正确性验证前，不承诺性能提升百分比，也不宣称形成原创算法。
+
+十二、参考依据
+
+Descriptor Indexing：https://docs.vulkan.org/guide/latest/extensions/VK_EXT_descriptor_indexing.html
+Descriptor Heap 规范：https://docs.vulkan.org/refpages/latest/refpages/source/VK_EXT_descriptor_heap.html
+Heap 映射规则：https://docs.vulkan.org/refpages/latest/refpages/source/VkDescriptorMappingSourcePushIndexEXT.html
+Heap 状态与同步：https://docs.vulkan.org/spec/latest/chapters/descriptorheaps.html
+官方示例：https://docs.vulkan.org/samples/latest/samples/extensions/descriptor_heap/README.html
+NVIDIA 驱动记录：https://developer.nvidia.com/vulkan-driver
+SDK 发布说明：https://www.lunarg.com/lunarg-releases-vulkan-sdk-1-4-341-0/
+
+学习案例：
+https://github.com/WanderingAura/nvidia_linux_driver_repro
+该仓库已修正为应用侧槽位步长错误。测试报告不能替代我们的本机验证。
+https://github.com/foijord/vk-textureLod-repro
+README 中故障的后续原因见官方论坛：
+https://forums.developer.nvidia.com/t/texturelod-opimagesampleexplicitlod-ignores-explicit-lod-with-vk-ext-descriptor-heap/369168
+作者确认修正 sampler 映射后正常，不能只复制原始故障代码。
+https://github.com/mspx64/LightVK
+用于参考 Heap 接入与工程组织，不把开发中代码作为规范或成熟性保证。
+
+本文件是规划，后续以锁定版本的官方规范、实际编译和运行结果为准。

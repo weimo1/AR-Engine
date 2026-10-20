@@ -1,0 +1,6 @@
+interface:
+  display_name: "AR C++ Engineering"
+  short_description: "Apply project C++23 ownership and interface guidance."
+  default_prompt: "Use $ar-cpp-oop-style to implement or review C++ code under the confirmed AR Engine design."
+policy:
+  allow_implicit_invocation: true

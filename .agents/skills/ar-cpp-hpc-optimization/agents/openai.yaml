@@ -1,0 +1,6 @@
+interface:
+  display_name: "AR C++ Performance"
+  short_description: "Profile and optimize measured engine data paths."
+  default_prompt: "Use $ar-cpp-hpc-optimization to investigate this engine bottleneck with correctness and performance evidence."
+policy:
+  allow_implicit_invocation: true

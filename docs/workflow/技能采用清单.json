@@ -1,0 +1,164 @@
+{
+  "date": "2026-10-18",
+  "timezone": "Asia/Shanghai",
+  "source_repository": "https://github.com/archibate/agent-skills",
+  "source_checkout": "F:\\cpp project\\agent-skills",
+  "source_commit": "eaf33972b59966f7b141297880e0949d08356b86",
+  "source_worktree_clean": true,
+  "skills": [
+    {
+      "upstream_name": "context7",
+      "project_name": "ar-context7",
+      "project_path": ".agents/skills/ar-context7",
+      "upstream_entry_sha256": "0b95cfb7adc2d7b305ba044bef1b4784a62dbd8ae0b9cf31d5f7fb2cb286680a",
+      "source_tree_sha256": "eaf9027ca1558c43143e0813bbf01721d116c1986c731daaee5232bdf5b6a840",
+      "installed_tree_sha256": "bd3f5d61a0883a1b125c369ece2d5148af5af53507e29e0ef379345efc195d63",
+      "files": 5,
+      "modified_source_files": [
+        "SKILL.md",
+        "agents/openai.yaml"
+      ],
+      "license": "CC-BY-NC-SA-4.0; bundled third-party notices retained",
+      "implicit_invocation": true,
+      "quick_validate": "passed",
+      "python_syntax_checked": [
+        "scripts/mcpcall.py"
+      ]
+    },
+    {
+      "upstream_name": "cpp-hpc-optimization",
+      "project_name": "ar-cpp-hpc-optimization",
+      "project_path": ".agents/skills/ar-cpp-hpc-optimization",
+      "upstream_entry_sha256": "ee6dad69ba49035b183a694cb6bd05e3293073b8c656070b5b9a867e649a6f6f",
+      "source_tree_sha256": "554cca690de88568d3f1150bf1daf88e5f94624675fb88be55e587a7b69656ba",
+      "installed_tree_sha256": "d52f8560c1f5b593648d3d0c704be3972196728e7ceb26efe4298bc1a7cb0f13",
+      "files": 226,
+      "modified_source_files": [
+        "SKILL.md",
+        "agents/openai.yaml",
+        "references/data-layout-and-memory.md",
+        "references/hotpath-polymorphism.md"
+      ],
+      "license": "CC-BY-NC-SA-4.0; bundled third-party notices retained",
+      "implicit_invocation": true,
+      "quick_validate": "passed",
+      "python_syntax_checked": [
+        "scripts/sync_parallel101_corpus.py"
+      ]
+    },
+    {
+      "upstream_name": "cpp-oop-style",
+      "project_name": "ar-cpp-oop-style",
+      "project_path": ".agents/skills/ar-cpp-oop-style",
+      "upstream_entry_sha256": "ec7d49eb38121a21321b789811818077174faaf60cd64a48aa746ccb10270b15",
+      "source_tree_sha256": "965a3bface92eb18ae4f77b3fd0810471222b738126ce99537811d2731aa6c8a",
+      "installed_tree_sha256": "a8d8025f19140bf173535287c4d818f4fe2df69caa5fa9fa61b2a93a38d2b896",
+      "files": 26,
+      "modified_source_files": [
+        "SKILL.md",
+        "agents/openai.yaml",
+        "references/debug-instrumentation.md"
+      ],
+      "license": "CC-BY-NC-SA-4.0; bundled third-party notices retained",
+      "implicit_invocation": true,
+      "quick_validate": "passed",
+      "python_syntax_checked": []
+    },
+    {
+      "upstream_name": "e2e-side-effect-safety",
+      "project_name": "ar-e2e-side-effect-safety",
+      "project_path": ".agents/skills/ar-e2e-side-effect-safety",
+      "upstream_entry_sha256": "f2629085681021898b0dd5bab7079ce494e9ae8e1c9974b230bbc0620b3a2078",
+      "source_tree_sha256": "92c402044cbee387a3e921f4c5f159f92d5b479603fd58489eddec2e4762057a",
+      "installed_tree_sha256": "81a3f2d041050897882042698ec2acb1cc79344f8ebfd89b23eff33b65a953a0",
+      "files": 4,
+      "modified_source_files": [
+        "SKILL.md"
+      ],
+      "license": "CC-BY-NC-SA-4.0; bundled third-party notices retained",
+      "implicit_invocation": true,
+      "quick_validate": "passed",
+      "python_syntax_checked": []
+    },
+    {
+      "upstream_name": "employee-chat",
+      "project_name": "ar-employee-chat",
+      "project_path": ".agents/skills/ar-employee-chat",
+      "upstream_entry_sha256": "8f96be8850fcd1db57cf0963a28d0c503adc0312b36a92c2599eb515d9b39077",
+      "source_tree_sha256": "e901fb2966f153fcd4b34afc93d6e3f0c8233345280d1d0e21830c5cc6b5f76c",
+      "installed_tree_sha256": "bd7856f19724382b4d3dd2e57aac255b27d0e934596d9ef03dda8dcdc254dce9",
+      "files": 4,
+      "modified_source_files": [
+        "SKILL.md"
+      ],
+      "license": "CC-BY-NC-SA-4.0; bundled third-party notices retained",
+      "implicit_invocation": true,
+      "quick_validate": "passed",
+      "python_syntax_checked": []
+    },
+    {
+      "upstream_name": "fresh-arch",
+      "project_name": "ar-fresh-arch",
+      "project_path": ".agents/skills/ar-fresh-arch",
+      "upstream_entry_sha256": "4318201267baffba2c1e3b42fb83f1e4583876b97ecf85b8e8ece7e110c53cb5",
+      "source_tree_sha256": "8d5783878a4cbb357e72e5aae88a952386d268bb23f5e5bb643766ec494b5c91",
+      "installed_tree_sha256": "4cfdbc94b9634c6a041094bef34cce1d8c40e978dfb3a7a0c4d19e56e18daaeb",
+      "files": 4,
+      "modified_source_files": [
+        "SKILL.md",
+        "agents/openai.yaml"
+      ],
+      "license": "CC-BY-NC-SA-4.0; bundled third-party notices retained",
+      "implicit_invocation": true,
+      "quick_validate": "passed",
+      "python_syntax_checked": []
+    },
+    {
+      "upstream_name": "grep-app",
+      "project_name": "ar-grep-app",
+      "project_path": ".agents/skills/ar-grep-app",
+      "upstream_entry_sha256": "f86bb101f99973e1f090e69037bf09637a0f3b7818a0558d3abc54a3d4c7bdf5",
+      "source_tree_sha256": "a8a6cea127ad39e3e5f13dd9f7670c98c4c3d0848fd57bb27780b83881ee595d",
+      "installed_tree_sha256": "4c8a5a3112a2b4b74d39ee098984e1a454491d2318dc685245b3f38bec497b4e",
+      "files": 5,
+      "modified_source_files": [
+        "SKILL.md",
+        "agents/openai.yaml"
+      ],
+      "license": "CC-BY-NC-SA-4.0; bundled third-party notices retained",
+      "implicit_invocation": true,
+      "quick_validate": "passed",
+      "python_syntax_checked": [
+        "scripts/mcpcall.py"
+      ]
+    }
+  ],
+  "offline_parser_checks": [
+    {
+      "skill": "ar-context7",
+      "status": "passed",
+      "network_used": false
+    },
+    {
+      "skill": "ar-grep-app",
+      "status": "passed",
+      "network_used": false
+    }
+  ],
+  "checks": {
+    "quick_validate": "passed",
+    "local_entry_links_and_routes": "passed",
+    "source_snapshots_and_licenses": "passed",
+    "copied_python_ast": "passed",
+    "client_discovery": "not_verified",
+    "live_mcp_calls": "not_run",
+    "cpp_gpu_behavior": "not_run"
+  },
+  "runtime": {
+    "python": "3.13.2",
+    "uv_available": false,
+    "context7_key_present": false,
+    "global_dependencies_installed": false
+  },
+  "issues": []
+}

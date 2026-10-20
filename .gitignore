@@ -1,0 +1,26 @@
+# Project-local tooling and generated evidence
+node_modules/
+.tools/
+.ar-workflow/
+.ocr-workspace/
+.ocr_sessions/
+__pycache__/
+*.pyc
+
+# Local configuration / credentials
+.env
+.env.*
+!.env.example
+CMakeUserPresets.json
+*.local.json
+*.local.toml
+
+# Build and IDE output
+build/
+out/
+.vs/
+*.user
+*.suo
+
+# Owned test output
+scripts/tests/.tmp/

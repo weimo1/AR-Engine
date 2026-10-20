@@ -1,0 +1,9 @@
+#!/bin/sh
+# Checks the staged tree, including when unstaged files look correct.
+set -eu
+# The controller must match the index before it can verify that index.
+if ! git diff --quiet -- scripts .githooks; then
+    echo 'Commit blocked: stage or restore workflow scripts/hooks before checking the staged tree.' >&2
+    exit 1
+fi
+python scripts/workflow.py commit-check

@@ -1,0 +1,57 @@
+name: ar-engine
+version: 1
+description: 中文需求与验收单源、受控派生规格、技术方案、验证计划和任务
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: 本次需求、边界与验收的唯一编辑源
+    template: proposal.md
+    instruction: |
+      先读项目 AGENTS.md 和 docs/README.md，引用适用已确认需求与 ADR。
+      写清问题、范围、非目标、确认来源及可观察行为。
+      每个 capability 的标准 OpenSpec delta 只写在 proposal 的 AR:CONTRACT 契约块内。
+      不将未确认架构当基线，不另建需要用户重复审批的功能规格。
+    requires: []
+  - id: specs
+    generates: specs/**/*.md
+    description: 由 proposal 契约块生成的工具映射，不独立编辑或审批
+    template: spec.md
+    instruction: |
+      不手写此产物。执行 python scripts/workflow.py derive <change-id>。
+      proposal 中每个契约块对应 specs/<capability>/spec.md，生成内容必须一致。
+      契约包含标准 Purpose、ADDED/MODIFIED/REMOVED Requirements 与 Scenario。
+      原有场景的语义必须保留；派生后运行项目 check 与 OpenSpec validate。
+    requires: [proposal]
+  - id: design
+    generates: design.md
+    description: 完整能力的技术方案、取舍和实施授权范围
+    template: design.md
+    instruction: |
+      解释如何实现，引用 proposal，不复制需求。说明模块、接口、所有权、错误、验证和回退。
+      涉及异步或跨模块关系时附必要图示。已有方案覆盖的普通实现不重新申请权限。
+      本次工作流接入授权不批准引擎总体架构草案。
+    requires: [proposal, specs]
+  - id: test-plan
+    generates: test-plan.md
+    description: 验收到实际检查的映射及失败路径
+    template: test-plan.md
+    instruction: |
+      逐条映射验收到命令、输入、观察结果与未覆盖限制。
+      工具接入验证缺文件、过期输入与不完整审查会被识别。
+      不为纯流程工具声称 C++、GPU 或图像验证已经通过。
+    requires: [proposal, specs, design]
+  - id: tasks
+    generates: tasks.md
+    description: 按依赖实施并携带检查办法的任务清单
+    template: tasks.md
+    instruction: |
+      使用 - [ ] 1.1 格式，每项包含可观察完成条件。
+      只有实际完成才能勾选；分别记录实现、验证与审查。
+      归档、远程接入等后续事项使用普通列表，不靠勾选任务伪造验收。
+    requires: [design, test-plan]
+apply:
+  requires: [tasks]
+  tracks: tasks.md
+  instruction: |
+    读取 AGENTS.md 与适用文档，在已授权边界内执行任务并更新真实状态。
+    完成后运行项目检查、适用测试与独立审查。归档前核对实际证据，不只看文件存在。
