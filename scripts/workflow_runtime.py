@@ -445,7 +445,11 @@ def task_gate(root: Path, data: dict) -> None:
     report_path = core.within(root, Path(data["review"]))
     packet = report_path.parent.parent
     manifest = core.load(packet / "manifest.json")
-    if (manifest["state"] != data["input"] or str(packet) != data.get("packet")
+    # Compare resolved paths: on Windows CI the runner temp directory is exposed
+    # through an 8.3 short name (RUNNER~1), so str() equality of the same packet
+    # fails even though both sides name one directory.
+    if (manifest["state"] != data["input"]
+            or Path(data.get("packet", "")).resolve() != packet.resolve()
             or manifest.get("scope") != data["scope"]):
         raise ValueError("Gate blocked: packet does not belong to current task input")
     verify = core.load(verify_path)
