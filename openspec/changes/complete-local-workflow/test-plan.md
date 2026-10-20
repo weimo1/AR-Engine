@@ -68,4 +68,17 @@
 
 结果：1/1 单元完成，实耗 40,097 tokens，报告 request_changes，1 条 must_fix（scripts/workflow_runtime.py:445，称 `data.get("packet")` 可能为 None 导致 TypeError，并怀疑 packet 可由 report 路径越出仓库）。裁决 finding-77ed88d30b414d18b7de155f 实耗 41,254 tokens，结论 not_defect：`verify` 在第 402 行把 review 与 packet 同时置空，`task_gate` 第 442-443 行在 review 缺失时先阻断，不存在 review 有效而 packet 为 None 的输入；`.get("packet", "")` 在字段缺失时返回空串，`Path("")` 与真实 packet 不等，仍走同一 fail-closed 分支；`report_path` 第 445 行已由 `core.within(root, ...)` 约束在仓库根内。finding-apply 输出 Finding disposition: pass，gate 输出 LOCAL DELIVERY GATE PASSED。
 
-重采样证据修正（scripts/workflow_review_api.py）：每次采样尝试写入 `attempt-<批次>-<序号>.json`，`batches[].attempts` 记录每次尝试的响应摘要、实际用量、是否被接受与拒绝原因；`actual_tokens` 为全部尝试之和，`report()` 新增 `batch_tokens()` 逐条核对尝试文件摘要并要求记录合计与证据一致。首次复审指出 run() 仍用只累计成功响应的 `total` 做批次预检，与计入被拒样本的 `spent` 分叉，可能低估已消耗额度，因此删去 `total`，预算预检、实际用量检查与输出统一使用 `spent`。回归 `test_malformed_sample_is_resampled_once_and_counts_one_batch` 改为断言两次尝试、24 tokens，新增 `test_attempt_evidence_and_usage_must_stay_consistent`（篡改尝试文件或合计不符即拒绝）与 `test_budget_precheck_counts_rejected_resample_tokens`（被拒样本计入后，下一批次预检即以 Remaining budget insufficient 停止且不再发请求）。本地 64 项测试通过。该修正自身仍待独立复审，本节写入时正在同一链路内复审。
+重采样证据修正（scripts/workflow_review_api.py）：每次采样尝试写入 `attempt-<批次>-<序号>.json`，`batches[].attempts` 记录每次尝试的响应摘要、实际用量、是否被接受与拒绝原因；`actual_tokens` 为全部尝试之和，`report()` 新增 `batch_tokens()` 逐条核对尝试文件摘要并要求记录合计与证据一致。首次复审指出 run() 仍用只累计成功响应的 `total` 做批次预检，与计入被拒样本的 `spent` 分叉，可能低估已消耗额度，因此删去 `total`，预算预检、实际用量检查与输出统一使用 `spent`。回归 `test_malformed_sample_is_resampled_once_and_counts_one_batch` 改为断言两次尝试、24 tokens，新增 `test_attempt_evidence_and_usage_must_stay_consistent`（篡改尝试文件或合计不符即拒绝）与 `test_budget_precheck_counts_rejected_resample_tokens`（被拒样本计入后，下一批次预检即以 Remaining budget insufficient 停止且不再发请求）。本地 64 项测试通过。
+
+## 2026-10-21 重采样证据复审与裁决引用容差
+
+上一节的修正又经过两轮独立复审。
+
+第一轮（packet staged-188713f1ec88e12155355c22，目录 direct-a7487988c6be，实耗 55,332 tokens，2 单元中 1 个复用缓存）返回 request_changes，4 条意见：两条 blocking 认为逐批预检用估计值、而重采样本身没有再做预算检查，单批次可能越过上限；一条 must_fix 指出 `batch_tokens()` 对标记 accepted 的尝试不校验 `actual_tokens`；一条 must_fix 指出 `cite(..., tolerant=True)` 遇到重复行时会在第一个不匹配位置 break，误拒合法引用。
+
+对应修正：重采样前执行与首发相同的 `spent + estimates[number] > budget` 检查，超出即抛 Remaining budget insufficient 且不再发请求；`batch_tokens()` 要求 accepted 尝试的 `actual_tokens` 为正整数且等于该批次解析出的用量；容差匹配改为继续扫描后续出现位置。回归新增 `test_resample_also_needs_remaining_budget`（budget 15、估计 10、首个样本实际 12 tokens 后不再发第二次请求，urlopen 只调用 1 次）与 `test_repeated_line_citation_matches_a_later_occurrence`，并扩展 `test_attempt_evidence_and_usage_must_stay_consistent`；本地 67 项测试通过。
+
+第二轮（packet staged-dc222683e859f5e6b2b8a5d8，目录 direct-a392602beabe）2 单元中 1 个复用缓存，实耗 56,263 tokens，decision=pass，0 条 findings；gate 输出 LOCAL DELIVERY GATE PASSED，提交 3cdbf6b。
+
+裁决引用容差（scripts/workflow_findings.py）：v4-pro 的裁决证据文本逐字来自冻结源码，但标注区间常有几行偏移（例如实际位于 389-395 的引用被标成 384-389），严格按区间比较会让每次裁决都失败——4 次尝试（51,775 / 51,672 / 51,885 / 51,253 tokens）都因这类错位被拒，正文本身逐字正确。现在 `cite()` 的容差模式（只用于裁决者返回的证据）要求引用文本能在冻结文件中逐字找到，且出现位置与标注区间相距不超过 `CITATION_SLOP = 8` 行；找不到原文或偏移过大仍然拒绝。实现者自己的 rebuttals 证据继续走严格模式，不享受容差。
+
