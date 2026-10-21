@@ -222,6 +222,9 @@ def native_report(packet: Path, raw_path: Path, returncode: int) -> dict:
 
 
 def review_run(root: Path, packet: Path, budget: int = 100000, seconds: int = 300) -> Path:
+    policy = core.load(root / 'workflow/tool-lock.json')['ocr']
+    if policy.get('api_reasoning_effort'):
+        raise ValueError('Pinned OCR native runner has no verified High-mode mapping; use --mode direct-api; no request issued')
     if not 1 <= budget <= 1000000 or not 1 <= seconds <= 1800:
         raise ValueError("Review requires a bounded token budget (1..1000000) and timeout (1..1800 seconds)")
     manifest = core.load(packet / "manifest.json")
@@ -312,7 +315,8 @@ def check_output(number: int, stdout: bytes, stderr: bytes, root: Path) -> dict:
 def checks(root: Path, tools_root: Path, output: Path) -> dict:
     tools_root = Path(os.environ.get("AR_WORKFLOW_TOOLS_ROOT", str(tools_root))).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, AR_WORKFLOW_TOOLS_ROOT=str(tools_root), PYTHONDONTWRITEBYTECODE="1",
+    env = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+    env.update(AR_WORKFLOW_TOOLS_ROOT=str(tools_root), PYTHONDONTWRITEBYTECODE="1",
                OPENSPEC_TELEMETRY="0", OPEN_SPEC_INTERACTIVE="0", OCR_ENABLE_TELEMETRY="0", OCR_NO_UPDATE="1")
     commands = check_commands(tools_root)
     results = []
@@ -452,6 +456,9 @@ def task_gate(root: Path, data: dict) -> None:
             or Path(data.get("packet", "")).resolve() != packet.resolve()
             or manifest.get("scope") != data["scope"]):
         raise ValueError("Gate blocked: packet does not belong to current task input")
+    if (root / "workflow/agent-policy.json").is_file():
+        if manifest.get("task_context", {}).get("change") != data.get("change"):
+            raise ValueError("Gate blocked: current task context is missing or belongs to another change")
     verify = core.load(verify_path)
     if verify.get("status") != "passed" or verify.get("fingerprint") != manifest["fingerprint"]:
         raise ValueError("Gate blocked: mismatched verification")
@@ -469,7 +476,12 @@ def task_gate(root: Path, data: dict) -> None:
     record = core.load(report_path.parent / "run.json")
     if record.get("status") != "finished" or record.get("fingerprint") != manifest["fingerprint"]:
         raise ValueError("Gate blocked: run record mismatch")
-    if record.get("mode") == "direct-api-v1":
+    if record.get("mode") == "independent-context-v1":
+        import workflow_review_context
+        recomputed = workflow_review_context.report(packet, report_path.parent)
+        if report != recomputed:
+            raise ValueError("Gate blocked: independent-context report was changed")
+    elif record.get("mode") == "direct-api-v1":
         import workflow_review_api
         if report_path.name == "adjudicated-report.json":
             import workflow_findings
@@ -495,6 +507,38 @@ def task_gate(root: Path, data: dict) -> None:
 def commit_check(root: Path) -> Path:
     if not core.index_entries(root):
         raise ValueError("Commit gate: index contains no files")
+    baseline = core.input_state(root, 'staged')
+    entries = core.index_entries(root)
+    blobs = core.index_blobs(root, entries)
+    if {name: core.digest(body) for name, body in blobs.items()} != baseline['files']:
+        raise ValueError('Index changed before quick check export')
+    policy = json.loads(blobs['workflow/tool-lock.json'])['ocr'] if 'workflow/tool-lock.json' in blobs else {}
+    if policy.get('review_policy_version') == 2:
+        import ast
+        import tempfile
+        base = core.within(root, root / '.ar-workflow/commit-quick')
+        base.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='staged-', dir=base) as temporary:
+            source = core.within(base, Path(temporary))
+            for name, body in blobs.items():
+                destination = core.within(source, source / name)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(body)
+                if name.endswith('.py'):
+                    try:
+                        ast.parse(body, filename=name)
+                    except SyntaxError as error:
+                        raise ValueError(f'Staged Python syntax error: {name}') from error
+                elif name.endswith('.json'):
+                    json.loads(body)
+            core.check(source)
+        if baseline != core.input_state(root, 'staged'):
+            raise ValueError('Staged input changed during quick check')
+        path = base / ('result-' + uuid.uuid4().hex[:12] + '.json')
+        core.save(path, {'kind': 'staged-quick', 'input': baseline, 'status': 'passed',
+                         'full_tests_run': False, 'grants_delivery_qualification': False})
+        print(f'QUICK STAGED CHECKS PASSED (not full verification or review): {path}')
+        return path
     packet = core.prepare_review(root, "staged")
     result = verification(root, packet)
     print(f"COMMIT CHECKS PASSED for staged input: {result}")
@@ -511,10 +555,55 @@ def install_hooks(root: Path) -> None:
 
 
 def dispatch(args, root: Path) -> None:
-    if args.command == "ci":
-        checks(root, root, root / ".ar-workflow/ci")
+    import workflow_agents as agents
+    import workflow_context as context
+    if args.command == "dsh-status":
+        import workflow_dsh
+        if not re.fullmatch(r'[0-9a-f]{24}', args.job):
+            raise ValueError('Invalid DSH job ID')
+        print(json.dumps(core.load(core.within(root, root / workflow_dsh.BASE / 'jobs' / args.job / 'run.json')),
+                         ensure_ascii=False, indent=2))
         return
-    with operation_lock(root, recover=args.command == "resume"):
+    if args.command == "ci":
+        with operation_lock(root):
+            agents.assert_idle(root)
+            checks(root, root, root / ".ar-workflow/ci")
+        return
+    with operation_lock(root, recover=args.command in ("resume", "dsh-stop")):
+        if args.command in ("dsh-doctor", "dsh-run", "dsh-usage", "dsh-stop"):
+            import workflow_dsh
+            if args.command == "dsh-doctor":
+                store = (workflow_dsh.desktop_store(args.desktop_home, args.desktop_compression)
+                         if args.visibility == "desktop" else None)
+                print(workflow_dsh.doctor(root, args.install, store))
+            elif args.command == "dsh-run":
+                store = (workflow_dsh.desktop_store(args.desktop_home, args.desktop_compression)
+                         if args.visibility == "desktop" else None)
+                print(workflow_dsh.run(root, args.assignment, args.install, args.model,
+                                       args.budget, args.seconds, args.max_output, store))
+            elif args.command == "dsh-stop":
+                print(workflow_dsh.recover(root, args.job))
+            else:
+                print(workflow_dsh.usage_report(root))
+            return
+        if args.command == "context":
+            print(json.dumps(context.build(root, args.change, context.changed_names(root)), ensure_ascii=False, indent=2))
+            return
+        if args.command == "agent-pack":
+            print(agents.prepare(root, args.change, args.role, args.agent, args.access, args.paths, args.goal))
+            return
+        if args.command == "agent-status":
+            print(json.dumps(agents.state(root), ensure_ascii=False, indent=2))
+            return
+        if args.command == "agent-handoff":
+            print(agents.handoff(root, args.assignment, core.load(core.within(root, args.result.resolve()))))
+            return
+        if args.command == "agent-release":
+            print(agents.handoff(root, args.assignment,
+                {"status": "blocked", "summary": args.reason, "next_action": "Coordinator must inspect source and resume explicitly", "evidence": []}, args.reason))
+            return
+        if args.command not in ("status", "resume"):
+            agents.assert_idle(root)
         if args.command == "install-hooks":
             install_hooks(root)
             return
@@ -540,6 +629,20 @@ def dispatch(args, root: Path) -> None:
             print(f"Independent finding run retained: {result}; apply explicitly, no automatic approval")
             return
         data = task_state(root, args.change, create=args.command == "start", scope=args.scope)
+        if args.command == "review-context":
+            import workflow_review_context
+            if not data.get('packet') or not data.get('verification'):
+                raise ValueError('Verify current input before importing independent-context review')
+            data['review'] = None
+            save_task(root, data, 'reviewing', 'independent_context_import_started')
+            result_path = workflow_review_context.ingest(root, core.within(root, Path(data['packet'])),
+                                                       args.evidence, args.coordinator, Path(data['verification']))
+            data['review'] = str(result_path)
+            result = core.load(result_path)
+            save_task(root, data, 'reviewed' if result['decision'] == 'pass' else 'needs_changes',
+                      'independent_context_evidence_imported')
+            print(f"Independent-context result: {result['decision']}; delivery still requires gate")
+            return
         if args.command == "finding-apply":
             import workflow_findings
             directory = core.within(root, args.directory.resolve())
@@ -565,7 +668,8 @@ def dispatch(args, root: Path) -> None:
             save_task(root, data, "local_ready", "gate_passed_not_remote_approval")
             print("LOCAL DELIVERY GATE PASSED; remote merge protection is not established by this result")
             return
-        packet = core.prepare_review(root, data["scope"])
+        packet = (core.prepare_review(root, data["scope"], data["change"])
+                  if (root / context.POLICY).is_file() else core.prepare_review(root, data["scope"]))
         data["packet"] = str(packet)
         try:
             if args.command == "verify":

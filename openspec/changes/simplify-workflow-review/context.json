@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "objective": "精简重复检查和付费审查成本，保留证据与独立交付门槛",
+  "non_goals": [
+    "不删除原有测试",
+    "不降低模型等级",
+    "不批准引擎架构",
+    "不恢复百万级审查"
+  ],
+  "tags": [
+    "integration"
+  ],
+  "documents": [
+    {
+      "path": "openspec/changes/connect-agent-task-context/proposal.md",
+      "purpose": "requirement",
+      "status": "confirmed",
+      "basis": "用户授权将既有角色上下文与 DSH 接入一并收尾；不批准引擎架构"
+    },
+    {
+      "path": "openspec/changes/connect-dsh-runtime/proposal.md",
+      "purpose": "requirement",
+      "status": "confirmed",
+      "basis": "用户授权将既有角色上下文与 DSH 接入一并收尾；不批准引擎架构"
+    }
+  ],
+  "skills": [],
+  "write_paths": [
+    "scripts/*",
+    "scripts/tests/*",
+    "workflow/*",
+    "docs/workflow/*",
+    "AGENTS.md",
+    "openspec/changes/simplify-workflow-review/*"
+  ]
+}

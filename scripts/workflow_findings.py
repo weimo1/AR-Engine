@@ -29,7 +29,7 @@ CITATION_SLOP = 8
 def cite(packet: Path, item: dict, tolerant: bool = False) -> None:
     manifest = core.load(packet / "manifest.json")
     name = item.get("path")
-    if not isinstance(name, str) or name not in manifest["state"]["files"]:
+    if not isinstance(name, str) or name not in (set(manifest["state"]["files"]) | set(manifest.get("review_artifacts", {}))):
         raise ValueError("Finding evidence references an unknown frozen file")
     path = core.within(packet / "snapshot", packet / "snapshot" / name)
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -77,14 +77,23 @@ def build(packet: Path, output: Path, rebuttals: dict) -> tuple[dict, list[dict]
         for evidence in item["evidence"]:
             cite(packet, evidence)
     requests = api.requests_for(packet)
-    paths = {item["path"] for item in findings}
-    contexts = [json.loads(r["messages"][1]["content"]) for r in requests
-                if paths.intersection(json.loads(r["messages"][1]["content"])["assigned_files"])]
-    request = {"model": requests[0]["model"], "thinking": {"type": "disabled"}, "max_tokens": 8192,
+    payloads = [json.loads(r["messages"][1]["content"]) for r in requests]
+    chosen = set()
+    for item in findings:
+        assigned = [n for n, body in enumerate(payloads) if item["path"] in body["assigned_files"]]
+        available = assigned or [n for n, request in enumerate(requests) if item["path"] in api.allowed_paths(request)]
+        if not available:
+            raise ValueError("Original finding has no supplied frozen context")
+        chosen.add(available[0])
+    contexts = [payloads[n] for n in sorted(chosen)]
+    request = {"model": requests[0]["model"], "thinking": requests[0]["thinking"],
+               "max_tokens": core.load(packet / "snapshot/workflow/tool-lock.json")["ocr"].get("api_max_output", 8192),
                "response_format": {"type": "json_object"},
                "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content":
                json.dumps({"fingerprint": manifest["fingerprint"], "original_report_sha256": original_sha,
                            "findings": findings, "counter_evidence": entries, "frozen_contexts": contexts}, ensure_ascii=False)}]}
+    if "reasoning_effort" in requests[0]:
+        request["reasoning_effort"] = requests[0]["reasoning_effort"]
     return original, findings, request
 
 
@@ -181,7 +190,12 @@ def report(directory: Path) -> dict:
 
 def run(root: Path, directory: Path, budget: int, seconds: int) -> Path:
     packet, _, _, findings, request = inspect(directory)
+    api.require_model_selection(root, request)
     manifest = core.load(packet / "manifest.json")
+    import workflow_review_budget as round_budget
+    compact = round_budget.limits(root, budget, seconds)
+    if compact:
+        round_budget.preflight(packet, budget, seconds, api.estimate_tokens(request))
     if not 1 <= budget <= 3000000 or not 1 <= seconds <= 1800 or api.estimate_tokens(request) > budget:
         raise ValueError("Finding review requires sufficient bounded tokens and timeout; no request sent")
     if manifest["state"] != core.input_state(root, manifest["scope"]):
@@ -194,8 +208,11 @@ def run(root: Path, directory: Path, budget: int, seconds: int) -> Path:
     try:
         http = urllib.request.Request("https://api.deepseek.com/chat/completions", data=core.canonical(request),
             headers={"Authorization": "Bearer " + api.credential(), "Content-Type": "application/json"})
-        with urllib.request.urlopen(http, timeout=seconds) as response:
-            raw = response.read(4 * 1024 * 1024 + 1)
+        if compact:
+            raw = round_budget.send(packet, http, budget, seconds, api.estimate_tokens(request), directory / 'response.json')
+        else:
+            with urllib.request.urlopen(http, timeout=seconds) as response:
+                raw = response.read(4 * 1024 * 1024 + 1)
         (directory / "response.json").write_bytes(raw)
         parsed = json.loads(raw)
         record.update(response_sha256=core.digest(raw), actual_tokens=parsed.get("usage", {}).get("total_tokens"))

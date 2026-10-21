@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "objective": "连接当前任务依据、适用技能、独立审查与单工作区多 Agent 交接",
+  "non_goals": ["不批准引擎架构草案", "不创建 worktree 或常驻调度器", "不自动调用付费模型"],
+  "tags": ["integration"],
+  "documents": [
+    {"path": "docs/workflow/文档体系与确认机制.md", "purpose": "standard", "status": "confirmed", "basis": "已有文档单源与确认边界；本次用户授权落实任务依据连接"}
+  ],
+  "skills": [],
+  "write_paths": ["scripts/*", "scripts/tests/*", "workflow/*", "AGENTS.md", "docs/README.md", "docs/workflow/*", "openspec/schemas/ar-engine/*", "openspec/schemas/ar-engine/templates/*", "openspec/changes/connect-agent-task-context/*"]
+}

@@ -319,9 +319,14 @@ def snapshot_env(packet: Path) -> dict:
 
 
 def review_identity(manifest: dict) -> dict:
-    return {key: manifest.get(key) for key in
+    value = {key: manifest.get(key) for key in
             ("state", "reviewable_files", "ocr_version", "preview_sha256", "diff_sha256", "scope",
              "deletions", "review_artifacts")}
+    if "task_context" in manifest:
+        value["task_context"] = manifest["task_context"]
+    if "deterministic_files" in manifest:
+        value["deterministic_files"] = manifest["deterministic_files"]
+    return value
 
 
 def deletion_materials(packet: Path, root: Path, state: dict) -> tuple[dict, dict]:
@@ -388,6 +393,10 @@ def validate_packet(packet: Path, manifest: dict) -> list[str]:
             or preview.get("total_files") != len(selected) + len(excluded)):
         errors.append("inconsistent OCR preview counts or sets")
     snapshot = packet / "snapshot"
+    if 'deterministic_files' in manifest:
+        import workflow_review_scope
+        if manifest['deterministic_files'] != workflow_review_scope.documents(snapshot, selected):
+            errors.append('Deterministic document coverage differs from frozen policy')
     expected_hashes = {name: value for name, value in manifest["state"]["files"].items() if value is not None}
     artifacts = manifest.get("review_artifacts", {})
     if set(artifacts).intersection(expected_hashes):
@@ -405,6 +414,9 @@ def validate_packet(packet: Path, manifest: dict) -> list[str]:
         if ((snapshot / name).is_symlink() or not path.is_file()
                 or digest(path.read_bytes()) != expected_hashes[name]):
             errors.append(f"snapshot content changed: {name}")
+    if "task_context" in manifest:
+        import workflow_context
+        errors.extend(workflow_context.validate(packet, manifest))
     return errors
 
 
@@ -418,11 +430,15 @@ def validate_review(manifest: dict, report: dict, state: dict) -> list[str]:
         errors.append("review input fingerprint mismatch")
     if report.get("status") != "complete" or report.get("decision") != "pass":
         errors.append("review is incomplete or requests changes")
-    if report.get("independent_context") is not True or not report.get("reviewer"):
+    deterministic = manifest.get('deterministic_files', [])
+    if report.get('checked_without_model', []) != deterministic:
+        errors.append('Deterministic coverage changed')
+    expected_model = set(manifest.get('reviewable_files', [])) - set(deterministic)
+    if (expected_model and report.get("independent_context") is not True) or not report.get("reviewer"):
         errors.append("missing independent reviewer declaration (identity still requires external trust)")
     expected = set(manifest.get("reviewable_files", []))
     reviewed = report.get("reviewed_files", [])
-    if not expected or not isinstance(reviewed, list) or set(reviewed) != expected:
+    if not expected or not isinstance(reviewed, list) or set(reviewed) != expected_model or len(reviewed) != len(expected_model):
         errors.append("missing/unexpected review coverage")
     findings = report.get("findings")
     if not isinstance(findings, list):
@@ -437,9 +453,15 @@ def validate_review(manifest: dict, report: dict, state: dict) -> list[str]:
     return errors
 
 
-def prepare_review(root: Path = ROOT, scope: str = "workspace") -> Path:
+def prepare_review(root: Path = ROOT, scope: str = "workspace", change: str | None = None) -> Path:
+    import workflow_agents
+    workflow_agents.assert_idle(root)
     state = input_state(root, scope)
-    input_id = digest(canonical({"scope": scope, "state": state}))
+    identity = {"scope": scope, "state": state}
+    if change is not None:
+        change_dir(change, root)
+        identity["change"] = change
+    input_id = digest(canonical(identity))
     output = within(root, root / ".ar-workflow/reviews" / f"{scope}-{input_id[:24]}")
     if (output / "manifest.json").exists():
         manifest = load(output / "manifest.json")
@@ -500,6 +522,12 @@ def prepare_review(root: Path = ROOT, scope: str = "workspace") -> Path:
                 "reviewable_files": selected, "preview_sha256": digest(preview_data),
                 "diff_sha256": digest(patch.encode("utf-8")),
                 "ocr_version": load(output / "snapshot/workflow/tool-lock.json")["ocr"]["version"]}
+    import workflow_review_scope
+    if workflow_review_scope.enabled(output / 'snapshot'):
+        manifest['deterministic_files'] = workflow_review_scope.documents(output / 'snapshot', selected)
+    if change is not None:
+        import workflow_context
+        manifest["task_context"] = workflow_context.build(output / "snapshot", change, selected + list(deletions))
     fingerprint = digest(canonical(review_identity(manifest)))
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     (output / "diff.patch").write_text(patch, encoding="utf-8", newline="\n")
@@ -536,13 +564,51 @@ def main() -> int:
         sub.add_parser(name)
     prepare = sub.add_parser("review-prepare")
     prepare.add_argument("--staged", action="store_true")
+    prepare.add_argument("--change")
+    context_parser = sub.add_parser("context")
+    context_parser.add_argument("change")
+    agent_pack = sub.add_parser("agent-pack")
+    agent_pack.add_argument("change")
+    agent_pack.add_argument("--role", required=True)
+    agent_pack.add_argument("--agent", required=True)
+    agent_pack.add_argument("--goal")
+    agent_pack.add_argument("--access", choices=("read", "write"), default="read")
+    agent_pack.add_argument("--paths", nargs="*", default=[])
+    sub.add_parser("agent-status")
+    dsh_doctor = sub.add_parser("dsh-doctor")
+    dsh_doctor.add_argument("--install", type=Path, required=True)
+    dsh_doctor.add_argument("--visibility", choices=("desktop", "isolated"), default="isolated")
+    dsh_doctor.add_argument("--desktop-home", type=Path)
+    dsh_doctor.add_argument("--desktop-compression", choices=("zstd", "none"), default="zstd")
+    dsh_run = sub.add_parser("dsh-run")
+    dsh_run.add_argument("assignment")
+    dsh_run.add_argument("--install", type=Path, required=True)
+    dsh_run.add_argument("--model", choices=("deepseek-flash",), default="deepseek-flash")
+    dsh_run.add_argument("--budget", type=int, required=True)
+    dsh_run.add_argument("--seconds", type=int, required=True)
+    dsh_run.add_argument("--max-output", type=int, required=True)
+    dsh_run.add_argument("--visibility", choices=("desktop", "isolated"), default="desktop")
+    dsh_run.add_argument("--desktop-home", type=Path)
+    dsh_run.add_argument("--desktop-compression", choices=("zstd", "none"), default="zstd")
+    dsh_status = sub.add_parser("dsh-status")
+    dsh_status.add_argument("job")
+    dsh_stop = sub.add_parser("dsh-stop")
+    dsh_stop.add_argument("job")
+    sub.add_parser("dsh-usage")
+    for name in ("agent-handoff", "agent-release"):
+        agent_command = sub.add_parser(name)
+        agent_command.add_argument("assignment")
+        if name == "agent-handoff":
+            agent_command.add_argument("--result", type=Path, required=True)
+        else:
+            agent_command.add_argument("--reason", required=True)
     for name in ("start", "resume", "status", "verify", "review", "gate"):
         task = sub.add_parser(name)
         task.add_argument("change")
         task.add_argument("--scope", choices=("workspace", "staged"), default="workspace")
         if name == "review":
-            task.add_argument("--mode", choices=("ocr", "direct-api"), default="ocr")
-            task.add_argument("--budget", type=int, default=100000)
+            task.add_argument("--mode", choices=("ocr", "direct-api"), default="direct-api")
+            task.add_argument("--budget", type=int, required=True)
             task.add_argument("--seconds", type=int, default=300)
     native = sub.add_parser("review-run")
     native.add_argument("packet", type=Path)
@@ -566,6 +632,11 @@ def main() -> int:
     review = sub.add_parser("review-check")
     review.add_argument("packet", type=Path)
     review.add_argument("report", type=Path)
+    context_review = sub.add_parser("review-context")
+    context_review.add_argument("change")
+    context_review.add_argument("--scope", choices=("workspace", "staged"), default="workspace")
+    context_review.add_argument("--coordinator", required=True)
+    context_review.add_argument("--evidence", type=Path, nargs="+", required=True)
     args = parser.parse_args()
     try:
         if args.command == "check":
@@ -576,7 +647,9 @@ def main() -> int:
             derive(change_dir(args.change))
             print(f"Derived specs: {args.change}")
         elif args.command == "review-prepare":
-            prepare_review(scope="staged" if args.staged else "workspace")
+            import workflow_runtime
+            with workflow_runtime.operation_lock(ROOT):
+                prepare_review(scope="staged" if args.staged else "workspace", change=args.change)
         elif args.command == "review-check":
             review_check(args.packet.resolve(), args.report.resolve())
         else:

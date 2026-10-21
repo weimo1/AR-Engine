@@ -1,6 +1,8 @@
 # SDD 与 Code Review 接入指南
 
-更新：2026-10-20。状态：本地执行链试运行；任务恢复、原生 OCR 适配与暂存检查已实现。Actions 配置已编写，远程运行与合并保护尚未启用。
+多 Agent 的任务依据、角色包和串行交接见 [协作与上下文](多Agent协作与上下文.md)。任务级审查绑定当前 change 的冻结规划与适用 Skills；无任务通用检查不冒充需求符合性验收。agent-pack 不自动启动模型；显式 dsh-run 下发执行见 [DSH 接入](DSH直接执行接入指南.md)。新提交遵循 [提交信息规范](../standards/Git提交信息规范.md)，commit-msg 与暂存检查均不调用模型。
+
+更新：2026-10-21。状态：本地执行链仍为试运行；既有提交的 Actions 已实跑成功，本批多 Agent/DSH/提交信息变更不继承旧批准，须核对对应输入的任务记录及提交/Actions。远程保护未启用；当前任务是否通过以当前输入验证、独立审查和 gate 为准。
 
 ## 各工具负责什么
 
@@ -98,26 +100,25 @@ python scripts/workflow.py review-check '<packet-directory>' '<actual-review-rep
 
 ## DeepSeek API 与 SSH
 
-用户已授权配置 DeepSeek API。按 [官方接口说明](https://api-docs.deepseek.com/quick_start/agent_integrations/)，端点为 `https://api.deepseek.com`，采用 OpenAI Chat Completions 兼容协议。独立复审与问题裁决使用 `deepseek-v4-pro`：2026-10-21 实测 `deepseek-flash` 的 findings 行号锚点与问题正文经常不一致，且其裁决引用的源码行有约三分之一无法与冻结快照逐字匹配，导致门禁无法完成；同日单单元对照显示 `deepseek-v4-pro` 返回合法 JSON、覆盖完整且锚点落在文件行号范围内，故锁定该模型。模型名变更会改变请求身份，使旧单元缓存失效。
+用户已授权配置 DeepSeek API。按 [官方接口说明](https://api-docs.deepseek.com/quick_start/agent_integrations/)，端点为 `https://api.deepseek.com`，采用 OpenAI Chat Completions 兼容协议。独立复审、裁决、执行与探测的新请求统一使用用户指定的 DeepSeek-V4.1-Flash（界面徽标 1017）、High；本机 SDK/API 模型 ID 为 `deepseek-flash`。Chat Completions 显式使用 `thinking={"type":"enabled"}`、`reasoning_effort="high"`。不回退 Pro 或降低等级。旧 Pro 证据仅保留当时事实；模型与推理参数变化使旧单元缓存失效。原生 OCR runner 没有已核实的 High 映射，付费运行被阻断；仍可无模型准备输入，正式审查使用 direct-api。
 
 OCR 的用户级配置保存在 `%USERPROFILE%/.opencodereview/config.json`，只保存 provider、model 与凭据命令。密钥通过 Windows DPAPI 加密，密文与读取助手均在该用户目录下；文件权限限制为当前用户和 SYSTEM。项目不包含密钥、密文或私钥，换机器时需重新配置凭据。
 
 ```powershell
-# 实际模型连接和工具调用测试
-.\.tools\ocr\1.13.1\ocr.exe llm test
+# 不运行原生 OCR 付费连接测试；该入口尚不能确保指定 High 配置
 
 # 无模型的选择预览
 .\.tools\ocr\1.13.1\ocr.exe review --preview --rule .opencodereview/rule.json --format json
 
 # 有限预算的 API 审查；先使用下节的任务 verify，再执行 review
-python scripts/workflow.py review <change-id> --budget 100000 --seconds 300
+python scripts/workflow.py review <change-id> --mode direct-api --budget 100000 --seconds 600
 ```
 
-上述预算是单次运行的调度上限，不是账户费用封顶；正在运行的一组请求可能超出估计。大变更可能得到 partial；退出 0 不证明覆盖完整。现在通过执行器自动核对原生 manifest、覆盖、版本、实际输入和问题，保留 native.json 与派生 report.json，不自动增加预算重试。
+示例预算不是每个任务的固定额度；先用 review-plan 核对当前输入估算后显式指定，CLI 不提供隐式默认预算。上述预算是单次运行的调度上限，不是账户费用封顶；正在运行的一组请求可能超出估计。大变更可能得到 partial；退出 0 不证明覆盖完整。当前 direct-api 自动核对覆盖、版本、冻结输入和问题，保留 direct-* 目录中的原始响应、run.json 与派生 report.json，不自动增加预算重试。native.json 仅属于历史 OCR 原生路径，不是当前 direct-api 的产物。
 
 SSH 复用已有用户密钥；`ssh -T git@github.com` 已认证为 `weimo1`。GitHub 主机公钥与 [官方指纹](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints) 对照，保持严格主机校验。仅在本仓库配置 `core.sshCommand` 使用 Windows 系统 OpenSSH，解决 Git 默认 SSH 未正确使用现有配置的问题，不改全局 Git 或关闭校验。
 
-`git ls-remote origin` 已通过 SSH 成功执行，仓库当前没有分支引用。此次没有创建提交或推送内容。模型连接与工具调用测试同样不代表 OCR 的缺陷检出效果已经评估通过。
+早期接入时（首次发布前），`git ls-remote origin` 已通过 SSH 认证，当时尚无分支引用。此段保留初次连接事实；当前已有 main 与正式发布，实际提交和 Actions 见当前状态，不能用此历史记录判断现在的远程状态。模型连接与工具调用测试同样不代表 OCR 的缺陷检出效果已经评估通过。
 
 ## 归档与后续接入
 
@@ -126,12 +127,12 @@ SSH 复用已有用户密钥；`ssh -T git@github.com` 已认证为 `weimo1`。G
 后续顺序：
 
 1. 收敛总体模块、RHI、生命周期方案，创建首个引擎基础工程变更，接入真实 CMake/CTest/Shader 命令。
-2. 用户仓库 `git@github.com:weimo1/AR-Engine.git` 已通过 SSH 认证与读取验证；完成对应提交的检查、审查和发布范围核对后再首次推送。
+2. 用户仓库 `git@github.com:weimo1/AR-Engine.git` 已通过 SSH 认证与读取验证；既有基线已发布；本次新增内容仍须完成对应检查、独立审查和 gate 后再提交推送。
 3. 先接共享确定性检查与 CI，再配置受信结果来源、主分支保护和独立审查发布身份；本地脚本不能替代它们。
 4. 用受控样本评估 OCR 的缺陷检出、误报、漏报和成本后，再决定它能否承担必需审查执行器；当前仅试运行。
 5. 渲染程序建好后接真实 GPU 检查；没有引擎源码、支持设备或工具时记录未就绪。
 
-本地 hook 和任务执行器已实现；Actions 文件见仓库 `.github/workflows/workflow-checks.yml`。服务器检查、保护分支、自动合并、长期驻留调度器与真实引擎验收仍未启用。
+本地 hook 和任务执行器已实现；`.github/workflows/workflow-checks.yml` 已为历史提交实跑成功，新增输入需另核对其提交 SHA 的结果。分支保护、自动合并、长期驻留调度器与真实引擎验收仍未启用。
 
 ## 任务执行、恢复与提交
 
@@ -139,12 +140,12 @@ SSH 复用已有用户密钥；`ssh -T git@github.com` 已认证为 `weimo1`。G
 python scripts/workflow.py install-hooks
 python scripts/workflow.py start <change-id>
 python scripts/workflow.py verify <change-id>
-python scripts/workflow.py review <change-id> --budget 100000 --seconds 300
+python scripts/workflow.py review <change-id> --mode direct-api --budget 100000 --seconds 600
 python scripts/workflow.py gate <change-id>
 python scripts/workflow.py resume <change-id>
 ```
 
-start 要求 proposal、design、test-plan、tasks 与派生契约已准备。verify 在冻结副本执行文档/契约检查、Python 测试及 OpenSpec 严格校验；review 调用固定 OCR 与 DeepSeek。gate 重新核对原始模型结果、日志、完整覆盖和当前输入，只表示本地交付证据一致。实现者不能自填 resolved：需要修改后新审查，或按下节的独立误报复核证据派生处置，没有自动消除问题的按钮。
+start 要求 proposal、design、test-plan、tasks 与派生契约已准备。verify 在冻结副本执行文档/契约检查、Python 测试及 OpenSpec 严格校验；review 默认 direct-api，OCR 无模型准备固定输入，DeepSeek 执行独立判断。gate 重新核对原始模型结果、日志、完整覆盖和当前输入，只表示本地交付证据一致。实现者不能自填 resolved：需要修改后新审查，或按下节的独立误报复核证据派生处置，没有自动消除问题的按钮。
 
 状态保存在忽略目录 `.ar-workflow/tasks/`，报告和日志在 `.ar-workflow/reviews/`。记录原子写入，操作使用单工作区锁。resume 会使输入变化前的证据失效，能识别中断审查和取回已完成结果，**不会自动再次调用 API**；仍活着的执行进程不能被另一个会话抢占。status 可查看精简状态。
 
@@ -152,7 +153,7 @@ start 要求 proposal、design、test-plan、tasks 与派生契约已准备。ve
 
 实际试验发现，多文件的分组 planner 可能在预算检查前调用模型；所以 budget=1 也不是零请求预览，已去掉该做法。只有 delegate preview 不调用模型。正式 review 的规划消耗也计入原始结果，不自动增额重试。
 
-pre-commit 使用 commit-check 导出 **Git 暂存树**，不读取未暂存修复来替代提交内容。提交快检不自动花 API 额度，也不替代独立审查。可以用 `review-prepare --staged` 准备暂存内容；需要 staged 任务时从 `start <change-id> --scope staged` 开始。手动共享检查入口是 `python scripts/workflow.py ci`，Actions 运行同一命令，无需模型凭据。
+新策略 pre-commit 使用 commit-check 导出 **Git 暂存树**，执行文档/派生/配置和 Python 语法检查，不重跑完整 unittest，不读取未暂存修复来替代提交内容。verify 与 CI 保留完整测试，快速提交检查不产生 gate 资格。提交快检不自动花 API 额度，也不替代独立审查。可以用 `review-prepare --staged` 准备暂存内容；需要 staged 任务时从 `start <change-id> --scope staged` 开始。手动共享检查入口是 `python scripts/workflow.py ci`，Actions 运行同一命令，无需模型凭据。
 
 删除和纯删除会从 HEAD 导出完整旧内容及差异到冻结副本的 `.ar-review-context/deletions/`，生成材料必须被 OCR 选中并纳入指纹。审查需检查当前调用方、配置及文档引用；实际验证使用删除后的源码，不把旧代码恢复成当前实现。改名同时覆盖旧路径删除材料和新文件。二进制、非 UTF-8、超出大小约束的删除及未知排除仍明确阻断，需要专项方案。
 
@@ -161,7 +162,7 @@ pre-commit 使用 commit-check 导出 **Git 暂存树**，不读取未暂存修�
 原生 OCR 因工具往返消耗较大而不适合当前整仓复审时，可以使用同一固定 OCR 输入的独立上下文：
 
 ```powershell
-python scripts/workflow.py review <change-id> --mode direct-api --budget 650000 --seconds 600
+python scripts/workflow.py review <change-id> --mode direct-api --budget 100000 --seconds 600
 python scripts/workflow.py gate <change-id>
 ```
 
@@ -169,13 +170,13 @@ python scripts/workflow.py gate <change-id>
 
 先用 `python scripts/workflow.py review-plan <packet-directory>` 查看审查单元、预计用量和缓存命中，不调用模型或凭据助手。只有原始响应完整通过、单元正文及相关上下文/基线/规则/模型完全一致时，才复用 `.ar-workflow/review-cache/` 中的证据；修复导致关联单元失效，无关单元不重复付费。失败与截断从不缓存为通过。首次基线需要覆盖当前全部选中文件，后续普通变更由 OCR 按实际差异筛选；不为每次提交重新搭建基础设施、审查整个历史仓库或运行无关 GPU 测试。
 
-direct-api 使用同一 `deepseek-v4-pro`。所有单元都关闭 thinking，输出上限按正文需要设定：代码单元 8,192（历史响应正文多小于 2 KB；此前的 65,536 上限曾被推理占满并返回空正文），文档/元数据单元 8,192 或 16,384（单元文件数或正文较大时）。finding 的 `path` 允许指向本单元的 assigned 文件或随请求提供的 frozen 上下文文件，但 `reviewed_files` 仍须与 assigned 完全一致；缺少 `level`/`path`/`line` 的样本会在同一批次内重采样一次，第二次仍不合法则整轮 fail-closed。每次采样尝试都单独保留为 `attempt-<批次>-<序号>.json`，`run.json` 的 `batches[].attempts` 记录每次尝试的摘要、实际用量、是否被接受及拒绝原因；`actual_tokens` 与报告合计都计入被拒样本，gate 重算时逐条核对文件摘要并要求记录值与证据一致，避免重采样的费用从证据中消失；accepted 尝试的 `actual_tokens` 必须为正整数且等于该批次解析出的用量。重采样本身也要再过一次预算门（`spent + 估计 > budget` 即停止且不再发请求），否则被拒样本可能把单次运行推过调用方给的上限。裁决阶段（finding-run）的证据校验按内容：引用正文必须在冻结文件中逐字出现，且与标注行区间相距不超过 8 行；实现者自己提交的 rebuttals 证据仍要求区间逐字相符，不享受该容差。按依赖关系提供生产代码及适用任务契约上下文，不将无关渲染 ADR 送入 Python 工作流审查；测试套件逐个分配审查，测试单元仍带生产代码。每单元正文最多约 120 KB，调用方单文件最多 100 KB、总计最多 1 MB，超限在付费前拒绝。完整统计实际 usage；模式不代表质量已获证明，正式结论仍要求全部单元完整覆盖且无未处理问题。参数依据 [DeepSeek 思考模式文档](https://api-docs.deepseek.com/guides/thinking_mode/)；模式、提示、规则及输出上限变化都会改变请求身份，使旧单元缓存失效。用户级 OCR 配置保持原样；不能把连接兼容测试时的非思考配置当作正式复审质量已经验证。
+direct-api 使用上述 `deepseek-flash`、thinking enabled、High。当前工具锁将审查与裁决的单请求输出上限设为 32,768 tokens（含推理），根据用户同意的日常有界方案限制，历史大请求已停止；大任务必须先拆分；这只是上限，不保证无截断，截断仍阻断，不自动降低等级或追加预算。旧快照没有 api_max_output 时保持原 8,192/16,384 请求构造和摘要，不改写历史证据。输出上限计入离线预算预估。finding 的 `path` 允许指向本单元的 assigned 文件或随请求提供的 frozen 上下文文件，但 `reviewed_files` 仍须与 assigned 完全一致；缺少 `level`/`path`/`line` 的样本会在同一批次内重采样一次，第二次仍不合法则整轮 fail-closed。每次采样尝试都单独保留为 `attempt-<批次>-<序号>.json`，`run.json` 的 `batches[].attempts` 记录每次尝试的摘要、实际用量、是否被接受及拒绝原因；`actual_tokens` 与报告合计都计入被拒样本，gate 重算时逐条核对文件摘要并要求记录值与证据一致，避免重采样的费用从证据中消失；accepted 尝试的 `actual_tokens` 必须为正整数且等于该批次解析出的用量。重采样本身也要再过一次预算门（`spent + 估计 > budget` 即停止且不再发请求），否则被拒样本可能把单次运行推过调用方给的上限。裁决阶段（finding-run）的证据校验按内容：引用正文必须在冻结文件中逐字出现，且与标注行区间相距不超过 8 行；实现者自己提交的 rebuttals 证据仍要求区间逐字相符，不享受该容差。按依赖关系提供生产代码及适用任务契约上下文，不将无关渲染 ADR 送入 Python 工作流审查；测试套件逐个分配审查，测试单元仍带生产代码。每单元正文最多约 120 KB，调用方单文件最多 100 KB、总计最多 1 MB，超限在付费前拒绝。完整统计实际 usage；模式不代表质量已获证明，正式结论仍要求全部单元完整覆盖且无未处理问题。参数依据 [DeepSeek 思考模式文档](https://api-docs.deepseek.com/guides/thinking_mode/)；模式、提示、规则及输出上限变化都会改变请求身份，使旧单元缓存失效。用户级 OCR 配置保持原样；不能把连接兼容测试时的非思考配置当作正式复审质量已经验证。
 
 已有任务需要改为暂存模式时，显式 `start <change-id> --scope staged` 会记录范围变化并清空旧验证/审查资格。提交前不再编辑已冻结的暂存内容；修改后重新验证和审查。
 
 本地 hook 可以被绕过；Actions 文件存在不代表服务器跑过，远程 required check 和独立审查身份仍需部署与实测。当前没有宣称自动合并就绪。
 
-远程独立模型审查配置为 `.github/workflows/independent-review.yml`：`pull_request_target` 仅运行默认分支脚本，PR 内容从固定 head/base 导出为数据，绝不执行其脚本、测试或安装步骤。`ai-review` Environment 只允许默认分支，模型密钥仅放该环境，不放仓库级 secrets。自动付费审查仅面向仓库所有者创建的同仓库 PR；每次 400,000 tokens、单请求 480 秒、工作流 10 分钟，不自动增额。超预算/不支持输入会使审查失败，需要明确处理。
+远程独立模型审查配置为 `.github/workflows/independent-review.yml`：`pull_request_target` 仅运行默认分支脚本，PR 内容从固定 head/base 导出为数据，绝不执行其脚本、测试或安装步骤。`ai-review` Environment 只允许默认分支，模型密钥仅放该环境，不放仓库级 secrets。自动付费审查仅面向仓库所有者创建的同仓库 PR；每轮最多 100,000 tokens、单请求 480 秒、工作流 10 分钟，不自动增额。超预算/不支持输入会使审查失败，需要明确处理。
 
 模型结论通过 GitHub Actions 身份发布到确切 PR head 的 `ai-independent-review` 检查，主分支应要求此检查和 `workflow-checks`。这提供服务端结果及默认分支执行隔离，尚不是单独 GitHub App 身份：同样拥有仓库写权限并故意授予 token 写检查权限的工作流可能冒用同一 Actions 身份；仓库管理员也可改变保护。因此不得把它宣传为抵御恶意管理员或所有写入者的防篡改系统。更强身份隔离需后续安装独立 Review App。CI/保护实际部署结果继续记录在当前状态中。
 
@@ -195,7 +196,7 @@ python scripts/workflow.py finding-prepare '<complete-direct-report.json>'
 # 反证 items 每项含 id、argument、evidence；引用包含 path/start_line/end_line/quote
 python scripts/workflow.py finding-prepare '<complete-direct-report.json>' --rebuttals '<counter-evidence.json>'
 # 以下是付费步骤，须明确恢复调用后才执行，不自动重试
-python scripts/workflow.py finding-run '<finding-directory>' --budget 100000 --seconds 180
+python scripts/workflow.py finding-run '<finding-directory>' --budget 100000 --seconds 600
 # 离线核验、派生结果并关联当前任务，然后单独执行原有 gate
 python scripts/workflow.py finding-apply <change-id> '<finding-directory>'
 python scripts/workflow.py gate <change-id>
@@ -214,3 +215,27 @@ python scripts/workflow.py gate <change-id>
 预算估算经 15 个精确请求身份和原始 usage 校准：观测每个输入 token 对应约 3.803～4.354 个 UTF-8 请求字节，当前按 3.5 字节估算输入并加完整输出上限；仍逐次核对实际 usage，不把估算当供应商硬账单上限。
 
 2026-10-20：ai-review 环境、main 分支访问限制及加密环境密钥已配置；实际 runner 访问、Actions、required checks 和 PR 阻断仍未验证。完整复审因结构错误、误报及思考截断未通过。随后已实现 [独立误报复核](独立复审意见处理-2026-10-20.md) 并完成小样本真实 API 联调；该结果不批准整个项目，也不表示远程复核入口已经部署。重新付费前先预览当前输入和剩余预算，不自动增额重试。
+
+## 2026-10-21 日常精简策略
+
+用户已同意保留测试并精简流程；review_policy_version=2 仅改变新包，历史包按冻结策略核验。本轮不恢复此前百万级模型调用，不宣布当前建设已通过独立复审。
+
+日常路线：开发时按影响检查 → 最终输入 verify 一次 → review-plan 预览 → 显式不超过 100000 tokens/600 秒的 review → 必要的同轮 finding 裁决 → gate → 快速提交检查 → 推送后 CI 全量检查。不默认在本地先手动 ci 再重复 verify。当前新回归用于验证精简边界，不删除既有测试。
+
+上下文保留全部模型目标文件及任务依据；Python 仅带直接本地导入、直接调用方和明确路径引用，context.json 可用 review_paths 指定额外源文件。未知动态导入或超限先拒绝，不能截去内容冒充覆盖；此分析不等于完整程序调用图，原生头文件和其他动态关系需要方案声明补充。
+
+仅 docs/README.md、docs/research/、docs/archive/ 内 Markdown 可走确定性文档检查；AGENTS、规范、ADR、架构、工作流规则、当前变更提案和删除材料继续独立审查。报告的 checked_without_model 与 reviewed_files 分开，前者不宣称模型审阅；缺少当前完整验证或覆盖被改写仍阻断。
+
+预算从首次真实付费请求开始按完整源输入 state（HEAD、索引及文件摘要）共享；换 change 或 packet 不能刷新同一输入的预算、截止时间和 pending 阻断，审查和裁决也不能分别重置。旧包已付费/未知的 packet-local 账本须先核对，不能静默重开。截断/错误不自动重采样，未知在途费用阻断后续付费；原始响应与实际 usage 保留。账本与哈希仍只是本地证据，不能提供远程身份或供应商账单硬封顶。
+
+
+## 独立 Codex 上下文的收尾审查
+
+大批历史累计输入不适合重复付费重跑时，可以由统筹实际启动全新只读审查上下文，使用 agent-pack 分配具体目标。先 verify 当前 workspace 输入；审查者读取 packet 的冻结源码、差异和当前任务依据，并写 ar.independent-context/v1 原始 JSON：fingerprint、assignment、reviewer、independent_context=true、status=complete、reviewed_files、findings。每条意见包含 path/line/level/content；不得提交自行 resolved 的意见。审查者返回后，统筹核实上下文、覆盖和原始结果，agent-handoff 记录真实结果及证据路径。
+
+```powershell
+python scripts/workflow.py review-context simplify-workflow-review --coordinator /root --evidence .ar-workflow/agents/<id>/review.json
+python scripts/workflow.py gate simplify-workflow-review
+```
+
+多个证据路径接在 --evidence 后；合并覆盖必须完整，任一意见阻断本轮通过。导入不会启动模型、不会补造遗漏的审查、不会消除旧意见，不能把实现者自己写的 JSON 当独立审查。gate 从保留的原始审查和角色交接快照重算；本机记录仍不是远程身份认证。当前角色包绑定 workspace 字节与索引，导入使用匹配的 workspace 任务；不要在审查期间改源码或暂存选择。修改后必须准备新输入并重审。日常小任务仍可使用预算内 Flash/High API。

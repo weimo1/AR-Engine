@@ -21,6 +21,8 @@ class ApiReviewTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="ar-api-evidence-")
         self.addCleanup(temporary.cleanup)
         self.packet = Path(temporary.name)
+        # This owned legacy fixture also acts as the live controller root in run() tests.
+        core.save(self.packet / 'workflow/tool-lock.json', {'ocr': {'api_model': 'deepseek-flash'}})
         source = self.packet / "snapshot"
         files = {"main.py": b"print('owned fixture')\n",
                  "workflow/tool-lock.json": core.canonical({"ocr": {"api_model": "deepseek-flash"}}),
@@ -101,6 +103,28 @@ class ApiReviewTests(unittest.TestCase):
         self.assertEqual(request["max_tokens"], api.CODE_OUTPUT)
         self.assertEqual(request["thinking"], {"type": "disabled"})
         self.assertNotIn("reasoning_effort", request)
+
+    def test_frozen_high_output_budget_preserves_legacy_requests(self):
+        legacy = api.requests_for(self.packet)[0]
+        tool_path = self.packet / 'snapshot/workflow/tool-lock.json'
+        policy = {'ocr': {'api_model': 'deepseek-flash', 'api_thinking': 'enabled',
+                         'api_reasoning_effort': 'high', 'api_max_output': 65536}}
+        core.save(tool_path, policy)
+        self.manifest['state']['files']['workflow/tool-lock.json'] = core.digest(tool_path.read_bytes())
+        core.save(self.packet / 'manifest.json', self.manifest)
+        request = api.requests_for(self.packet)[0]
+        self.assertEqual(request['max_tokens'], 65536)
+        self.assertEqual(request['thinking'], {'type': 'enabled'})
+        self.assertEqual(request['reasoning_effort'], 'high')
+        self.assertGreater(api.estimate_tokens(request), api.estimate_tokens(legacy))
+        self.assertEqual(legacy['max_tokens'], 8192)
+
+    def test_review_cli_requires_explicit_budget_before_work(self):
+        import subprocess
+        result = subprocess.run([sys.executable, str(core.ROOT / 'scripts/workflow.py'),
+                                 'review', 'fixture-change'], capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b'--budget', result.stderr)
 
     def test_partial_run_and_exhausted_budget_rejected(self):
         for mutation in ({"status": "running"}, {"batches": []}, {"token_budget": 1}):

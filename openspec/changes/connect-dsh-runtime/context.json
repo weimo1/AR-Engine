@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "objective": "通过 DSH SDK 安全地直接下发角色任务并保留执行、用量及交接证据",
+  "non_goals": [
+    "不接管 GUI 会话",
+    "不批准引擎架构",
+    "不自动提交或代替独立审查",
+    "不建设常驻调度平台"
+  ],
+  "tags": [
+    "integration"
+  ],
+  "documents": [
+    {
+      "path": "openspec/changes/connect-agent-task-context/proposal.md",
+      "purpose": "requirement",
+      "status": "confirmed",
+      "basis": "用户已授权角色任务包与任务依据建设，本轮随 DSH 接入一并收尾，不批准引擎架构"
+    }
+  ],
+  "skills": [],
+  "write_paths": [
+    "scripts/*",
+    "scripts/tests/*",
+    "docs/README.md",
+    "docs/workflow/*",
+    "openspec/changes/connect-dsh-runtime/*",
+    "AGENTS.md",
+    "docs/standards/Git提交信息规范.md",
+    "docs/standards/Git提交审查与合并规范.md",
+    ".githooks/commit-msg",
+    "workflow/*",
+    "openspec/schemas/ar-engine/*",
+    "openspec/schemas/ar-engine/templates/*",
+    "openspec/changes/connect-agent-task-context/*"
+  ]
+}

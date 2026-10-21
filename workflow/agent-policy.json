@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "roles": {
+    "coordinator": {
+      "write": true,
+      "goal": "统筹目标、任务依赖、授权边界和交接；不代替用户批准架构或独立 Review",
+      "deliver": "任务分配、实际证据、阻塞与下一步；交接后再执行 Git"
+    },
+    "architect": {
+      "write": true,
+      "goal": "核对需求范围、模块关系、接口和必要图示；未确认差异交用户审阅",
+      "deliver": "方案、取舍、图示与待确认差异，不宣称实现通过"
+    },
+    "developer": {
+      "write": true,
+      "goal": "按当前已确认契约实现代码与适用测试，遵守允许写入范围",
+      "deliver": "修改路径、实际检查及限制，不自授审查通过"
+    },
+    "verifier": {
+      "write": false,
+      "goal": "核对验收到实际测试的映射；会修改源码的验证另交有写权限任务",
+      "deliver": "命令、输入版本、日志、真实结果和未覆盖项"
+    },
+    "reviewer": {
+      "write": false,
+      "goal": "独立审查冻结源码和当前任务契约，不继承开发者聊天推理或完成结论",
+      "deliver": "具体缺陷、触发、影响和依据；正式资格仍须原始审查证据及 gate"
+    },
+    "adjudicator": {
+      "write": false,
+      "goal": "独立核对原始意见、冻结源码及明确标记的反证，不受实现者结论指挥",
+      "deliver": "逐项结论与源码证据；角色交接不能替代 finding-run/apply"
+    }
+  },
+  "base_documents": [
+    {
+      "path": "AGENTS.md",
+      "purpose": "execution",
+      "status": "confirmed",
+      "basis": "项目执行入口；用户当前指令优先"
+    },
+    {
+      "path": "docs/README.md",
+      "purpose": "index",
+      "status": "reference",
+      "basis": "文档索引不代表其所链接全文已经加载或批准"
+    },
+    {
+      "path": "docs/standards/AI任务执行规则.md",
+      "purpose": "execution",
+      "status": "confirmed",
+      "basis": "六项任务执行协议"
+    },
+    {
+      "path": "docs/standards/AI技能约束.md",
+      "purpose": "execution",
+      "status": "confirmed",
+      "basis": "技能采用与授权边界"
+    },
+    {
+      "path": "docs/standards/Git提交信息规范.md",
+      "purpose": "execution",
+      "status": "confirmed",
+      "basis": "2026-10-21 用户要求统一提交前缀与规则；本次实现格式门槛"
+    },
+    {
+      "path": "docs/workflow/多Agent协作与上下文.md",
+      "purpose": "execution",
+      "status": "confirmed",
+      "basis": "本次用户授权的角色和串行交接协议"
+    }
+  ],
+  "native_documents": [
+    {
+      "path": "渲染引擎需求.txt",
+      "purpose": "requirement",
+      "status": "confirmed",
+      "basis": "产品目标；具体范围仍以当前 proposal 与确认依据为准"
+    },
+    {
+      "path": "docs/总体架构与技术路线.md",
+      "purpose": "architecture",
+      "status": "reference",
+      "basis": "包含未确认方案，不能作为全文批准"
+    },
+    {
+      "path": "docs/standards/C++目录命名与格式规范.md",
+      "purpose": "standard",
+      "status": "confirmed",
+      "basis": "已确认修订 1"
+    },
+    {
+      "path": "docs/standards/C++类型接口与资源生命周期规范.md",
+      "purpose": "standard",
+      "status": "confirmed",
+      "basis": "已确认修订 1"
+    },
+    {
+      "path": "docs/standards/架构与设计图规范.md",
+      "purpose": "diagram",
+      "status": "reference",
+      "basis": "草案，按当前具体方案确认范围使用，不新增默认审批门槛"
+    }
+  ],
+  "tag_skills": {
+    "performance": "ar-cpp-hpc-optimization",
+    "third_party": "ar-context7",
+    "public_examples": "ar-grep-app",
+    "integration": "ar-e2e-side-effect-safety",
+    "architecture_rethink": "ar-fresh-arch",
+    "native": "ar-cpp-oop-style"
+  },
+  "native_skill": "ar-cpp-oop-style",
+  "communication_skill": "ar-employee-chat"
+}

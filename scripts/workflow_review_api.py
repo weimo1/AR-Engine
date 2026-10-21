@@ -60,14 +60,23 @@ def requests_for(packet: Path) -> list[dict]:
     if core.validate_packet(packet, manifest):
         raise ValueError("Invalid frozen review packet")
     source = packet / "snapshot"
+    task_context = manifest.get("task_context")
     context_names = ["AGENTS.md", "docs/README.md", "渲染引擎需求.txt",
                      "docs/standards/AI任务执行规则.md", "docs/standards/AI技能约束.md"]
     context_names += sorted(name for name in manifest["state"]["files"]
                             if name.startswith("docs/adr/") and name.endswith(".md"))
     context = {name: (source / name).read_text(encoding="utf-8") for name in context_names
                if (source / name).is_file()}
+    if task_context is not None:
+        import workflow_context
+        context = workflow_context.contents(packet, manifest)
+    import workflow_review_scope as scope
+    compact = scope.enabled(source)
+    deterministic = set(manifest.get("deterministic_files", []))
     categories = defaultdict(dict)
     for name in manifest["reviewable_files"]:
+        if name in deterministic:
+            continue
         text = core.within(source, source / name).read_text(encoding="utf-8")
         length = len(text.encode("utf-8"))
         if length > 100000:
@@ -102,21 +111,23 @@ def requests_for(packet: Path) -> list[dict]:
                                               ".json", ".yaml", ".yml")
                         and name != "package-lock.json"
                         and not name.startswith((".agents/", "docs/", "openspec/", "third_party/"))))}
-    if any(len(text.encode("utf-8")) > 100000 for text in callers.values()):
+    if not compact and any(len(text.encode("utf-8")) > 100000 for text in callers.values()):
         raise ValueError("Caller context file exceeds 100000-byte limit; split review context before API use")
-    if sum(len(text.encode("utf-8")) for text in callers.values()) > 1000000:
+    if not compact and sum(len(text.encode("utf-8")) for text in callers.values()) > 1000000:
         raise ValueError("Combined caller context exceeds 1000000-byte limit; split context before API use")
     result = []
     for kind, group in groups:
         unit_context = dict(context)
-        if kind == "reference":
+        if task_context is not None:
+            pass  # Explicit current task basis and skills survive unit filtering.
+        elif kind == "reference":
             unit_context = {name: value for name, value in context.items() if name in ("AGENTS.md", "docs/README.md")}
-        if kind == "skill-code" and any(Path(name).suffix == ".py" for name in group):
+        if task_context is None and kind == "skill-code" and any(Path(name).suffix == ".py" for name in group):
             # Python networking/corpus maintenance uses skill execution rules,
             # not the renderer's C++ library and shader architecture decisions.
             unit_context = {name: text for name, text in unit_context.items()
                             if not name.startswith("docs/adr/") and name != "渲染引擎需求.txt"}
-        if kind == "code":
+        if task_context is None and kind == "code":
             native_code = any(Path(name).suffix in (".cpp", ".h", ".hpp", ".glsl", ".vert", ".frag", ".comp")
                               for name in group)
             if not native_code:
@@ -127,8 +138,7 @@ def requests_for(packet: Path) -> list[dict]:
                                 ("渲染引擎需求.txt", "docs/README.md", "docs/standards/AI技能约束.md")}
             for name in manifest["state"]["files"]:
                 if (native_code and name.startswith("docs/standards/") and name.endswith(".md")
-                        or native_code and name == "docs/workflow/SDD与CodeReview接入指南.md"
-                        or name.startswith("openspec/changes/complete-local-workflow/") and name.endswith(("/proposal.md", "/design.md"))):
+                        or native_code and name == "docs/workflow/SDD与CodeReview接入指南.md"):
                     if (source / name).is_file():
                         unit_context[name] = (source / name).read_text(encoding="utf-8")
         diff = "Initial publication; complete new source files are supplied."
@@ -143,14 +153,19 @@ def requests_for(packet: Path) -> list[dict]:
         # bodies plus all production callers; other suites are reviewed separately.
         unit_callers = {name: text for name, text in callers.items()
                         if not name.startswith("scripts/tests/") or name in group}
-        # Reasoning used to be enabled for the critical tooling units. Two paid
-        # attempts on 2026-10-20 both ended with finish_reason "length" after
-        # spending the whole 65536-token output cap on reasoning and returning no
-        # content (109902 tokens burned, zero findings), so those units could never
-        # complete. Review tooling without reasoning; the output cap then covers the
-        # JSON body, exactly as it already does for every other code unit.
+        if compact:
+            extra = []
+            if task_context:
+                config_path = source / 'openspec/changes' / task_context['change'] / 'context.json'
+                extra = core.load(config_path).get('review_paths', [])
+                if not isinstance(extra, list) or any(not isinstance(n, str) for n in extra):
+                    raise ValueError('review_paths must be explicit existing source paths')
+            removed = [name for name, info in manifest.get('deletions', {}).items()
+                       if info['artifact'] in group]
+            unit_callers = scope.related(group, callers, extra, removed) if kind == 'code' else {}
         user = {"base_head": manifest["state"]["head"], "scope": manifest["scope"],
             "unit_kind": kind, "confirmed_context": unit_context,
+            "task_basis": task_context or {"mode": "generic-source-only", "limitations": "No current change selected; not task requirement acceptance"},
             "verification": verification_summary(packet, manifest),
             "scope_note": "Review assigned files only. Other source is context, not additional audit targets.",
             "confirmed_review_boundaries": {
@@ -172,8 +187,10 @@ def requests_for(packet: Path) -> list[dict]:
         request = {"model": tool["api_model"], "messages": [
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": json.dumps(user, ensure_ascii=False)}],
-            "response_format": {"type": "json_object"}, "max_tokens": output_budget,
-            "thinking": {"type": "disabled"}}
+            "response_format": {"type": "json_object"}, "max_tokens": tool.get("api_max_output", output_budget),
+            "thinking": {"type": tool.get("api_thinking", "disabled")}}
+        if tool.get("api_reasoning_effort"):
+            request["reasoning_effort"] = tool["api_reasoning_effort"]
         result.append(request)
     return result
 
@@ -247,7 +264,8 @@ def review_plan(packet: Path) -> dict:
         units.append({"kind": payload["unit_kind"], "files": len(payload["assigned_files"]),
                       "request_sha256": core.digest(core.canonical(request)), "cached": reused,
                       "estimated_tokens": 0 if reused else estimate_tokens(request)})
-    return {"units": units, "estimated_tokens": sum(item["estimated_tokens"] for item in units),
+    return {"units": units, "checked_without_model": core.load(packet / "manifest.json").get("deterministic_files", []),
+            "estimated_tokens": sum(item["estimated_tokens"] for item in units),
             "limitations": "Estimate only; no model or credential-helper call is made"}
 
 
@@ -328,23 +346,44 @@ def report(packet: Path, output: Path) -> dict:
             if cached_response(request) != raw_path.read_bytes():
                 raise ValueError("Missing/changed cache evidence for reused review")
         total += batch_tokens(output, batch, tokens)
+    deterministic = manifest.get('deterministic_files', [])
+    if deterministic and verification_summary(packet, manifest).get('status') != 'passed':
+        raise ValueError('Deterministic document coverage requires current full verification')
     if total > record["token_budget"]:
         raise ValueError("Independent API exceeded total budget; no approval")
-    return {"schema_version": 1, "mode": "direct-api-v1", "fingerprint": manifest["fingerprint"],
-            "reviewer": "DeepSeek independent tool-free API context / " + requests[0]["model"],
-            "independent_context": True, "status": "complete",
+    result = {"schema_version": 1, "mode": "direct-api-v1", "fingerprint": manifest["fingerprint"],
+            "reviewer": ("DeepSeek independent tool-free API context / " + requests[0]["model"]
+                         if requests else "Deterministic reference-document checks; no model review"),
+            "independent_context": bool(requests), "status": "complete",
             "decision": "request_changes" if any(x["level"] != "suggestion" for x in all_findings) else "pass",
             "reviewed_files": reviewed, "findings": all_findings, "actual_tokens": total,
             "reused_batches": sum(bool(item.get("reused")) for item in batches),
             "limitations": ["Not an OCR native run or remote authenticated approval",
                             "Model review does not prove absence of defects"]}
+    if 'deterministic_files' in manifest:
+        result['checked_without_model'] = deterministic
+    return result
+
+
+def require_model_selection(root: Path, request: dict) -> None:
+    """Current user selection controls NEW calls; frozen historical requests stay unchanged."""
+    tool = core.load(root / 'workflow/tool-lock.json')['ocr']
+    effort = tool.get('api_reasoning_effort')
+    if effort is not None and (request.get('model') != tool['api_model']
+            or request.get('thinking') != {'type': tool['api_thinking']}
+            or request.get('reasoning_effort') != effort):
+        raise ValueError('DeepSeek selection differs from the current user-required model/High mode; no fallback or request')
 
 
 def run(root: Path, packet: Path, budget: int, seconds: int) -> Path:
     manifest = core.load(packet / "manifest.json")
     if manifest["state"] != core.input_state(root, manifest["scope"]):
         raise ValueError("Independent API input is stale")
+    import workflow_review_budget as round_budget
+    compact = round_budget.limits(root, budget, seconds)
     requests = requests_for(packet)
+    for request in requests:
+        require_model_selection(root, request)
     if not 1 <= budget <= 3000000 or not 1 <= seconds <= 1800:
         raise ValueError("Independent API requires bounded tokens and timeout")
     # This is an estimate, not a provider billing cap. Actual usage is also checked.
@@ -354,6 +393,8 @@ def run(root: Path, packet: Path, budget: int, seconds: int) -> Path:
                  for req, raw in zip(requests, cached)]
     if sum(estimates) > budget:
         raise ValueError(f"Estimated review tokens {sum(estimates)} exceed budget {budget}; no request issued")
+    if compact and any(raw is None for raw in cached):
+        round_budget.preflight(packet, budget, seconds, sum(estimates))
     key = credential() if any(raw is None for raw in cached) else ""
     output = packet / ("direct-" + uuid.uuid4().hex[:12])
     output.mkdir()
@@ -383,8 +424,12 @@ def run(root: Path, packet: Path, budget: int, seconds: int) -> Path:
                     http = urllib.request.Request("https://api.deepseek.com/chat/completions",
                         data=core.canonical(request),
                         headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
-                    with urllib.request.urlopen(http, timeout=seconds) as response:
-                        raw = response.read(4 * 1024 * 1024 + 1)
+                    if compact:
+                        raw = round_budget.send(packet, http, budget, seconds, estimates[number],
+                                                output / f"attempt-{number}-{len(evidence)}.json")
+                    else:
+                        with urllib.request.urlopen(http, timeout=seconds) as response:
+                            raw = response.read(4 * 1024 * 1024 + 1)
                 if len(raw) > 4 * 1024 * 1024:
                     raise ValueError("Independent API response too large")
                 attempt_path = output / f"attempt-{number}-{len(evidence)}.json"
@@ -405,7 +450,7 @@ def run(root: Path, packet: Path, budget: int, seconds: int) -> Path:
                     evidence.append({"path": attempt_path.name, "response_sha256": core.digest(raw),
                                      "actual_tokens": 0 if reused else billed,
                                      "accepted": False, "rejection": str(error)[:200]})
-                    if reused or "malformed" not in str(error) or attempts >= 1:
+                    if compact or reused or "malformed" not in str(error) or attempts >= 1:
                         raise
                     # A re-sample is a second billed request; it passes the same
                     # remaining-budget gate as a first sample. Without this check a

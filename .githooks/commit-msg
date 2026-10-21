@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+if ! git diff --quiet -- scripts/workflow_commit_message.py .githooks/commit-msg; then
+    echo 'Commit blocked: stage or restore the commit-message checker and hook first.' >&2
+    exit 1
+fi
+python scripts/workflow_commit_message.py --file "$1"

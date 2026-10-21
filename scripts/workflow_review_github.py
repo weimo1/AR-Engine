@@ -69,7 +69,7 @@ def main():
         # conservative (about 3.5 bytes per token plus the full output cap), so a
         # tight cap would block ordinary PRs before any request is sent. Oversized
         # inputs still fail closed, and report() re-checks the actual usage.
-        path = review.run(source, packet, budget=400000, seconds=480)
+        path = review.run(source, packet, budget=100000, seconds=480)
         result = review.report(packet, path.parent)
         current = github("GET", prefix + f"/pulls/{pr['number']}")
         if current["head"]["sha"] != pr["head"]["sha"] or current["base"]["sha"] != pr["base"]["sha"]:

@@ -32,6 +32,19 @@ class NativeTests(unittest.TestCase):
     def validate(self, raw=None):
         return runtime.validate_native(raw or self.raw, ["main.cpp"], self.tool, "rule")
 
+    def test_frozen_checks_do_not_inherit_source_git_locations(self):
+        with tempfile.TemporaryDirectory(prefix='ar-check-env-') as temporary:
+            root = Path(temporary).resolve()
+            polluted = {'AR_WORKFLOW_TOOLS_ROOT': str(root), 'GIT_INDEX_FILE': 'foreign-index', 'GIT_DIR': 'foreign-git',
+                        'GIT_WORK_TREE': 'foreign-tree', 'GIT_OBJECT_DIRECTORY': 'foreign-objects'}
+            with patch.dict(os.environ, polluted), patch.object(runtime, 'check_commands', return_value=[['fixture']]), \
+                    patch.object(runtime, 'check_output', return_value={}), \
+                    patch.object(runtime.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=b'', stderr=b'')) as command:
+                runtime.checks(root, root, root / 'output')
+            child_env = command.call_args.kwargs['env']
+            self.assertFalse(any(key.upper().startswith('GIT_') for key in child_env))
+            self.assertEqual(child_env['AR_WORKFLOW_TOOLS_ROOT'], str(root))
+
     def test_complete_fixture_and_open_findings(self):
         self.assertEqual(self.validate(), ([], []))
         self.raw["comments"] = [{"path": "main.cpp", "content": "Known bug", "severity": "critical", "start_line": 2}]

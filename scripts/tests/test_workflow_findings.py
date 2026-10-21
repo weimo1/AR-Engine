@@ -59,6 +59,21 @@ class FindingTests(unittest.TestCase):
             "request_sha256": core.digest(core.canonical(core.load(self.directory / "request.json"))),
             "response_sha256": core.digest((self.directory / "response.json").read_bytes())})
 
+    def test_deletion_material_is_valid_frozen_citation(self):
+        name = '.ar-review-context/deletions/removed.py.md'
+        data = b'Frozen deleted source\nreturn removed_value\n'
+        path = self.packet / 'snapshot' / name
+        path.parent.mkdir(parents=True)
+        path.write_bytes(data)
+        self.manifest['review_artifacts'] = {name: core.digest(data)}
+        core.save(self.packet / 'manifest.json', self.manifest)
+        evidence = {'path': name, 'start_line': 2, 'end_line': 2, 'quote': 'return removed_value'}
+        adjudication.cite(self.packet, evidence)
+        with self.assertRaisesRegex(ValueError, 'differs'):
+            adjudication.cite(self.packet, dict(evidence, quote='invented deleted source'))
+        with self.assertRaisesRegex(ValueError, 'unknown frozen file'):
+            adjudication.cite(self.packet, dict(evidence, path='unknown.py'))
+
     def test_independent_non_defect_preserves_original_and_derives_result(self):
         before = (self.output / "response-0.json").read_bytes()
         self.prepare()
