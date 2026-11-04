@@ -15,6 +15,7 @@ import sys
 import uuid
 
 import workflow as core
+import workflow_p0 as p0
 
 
 def now() -> str:
@@ -312,12 +313,27 @@ def check_output(number: int, stdout: bytes, stderr: bytes, root: Path) -> dict:
     return {}
 
 
-def checks(root: Path, tools_root: Path, output: Path) -> dict:
+def p0_table(root: Path, change: str | None) -> dict | None:
+    """Return the P0 command table only when it is the table of this change."""
+    if not change:
+        return None
+    path = root / "workflow/p0-checks.json"
+    if not path.is_file():
+        return None
+    try:
+        table = p0.load_table(path)
+    except p0.TableError as error:
+        raise ValueError(f"P0 command table is unusable: {error}") from error
+    return table if table.get("change") == change else None
+
+
+def checks(root: Path, tools_root: Path, output: Path, change: str | None = None) -> dict:
     tools_root = Path(os.environ.get("AR_WORKFLOW_TOOLS_ROOT", str(tools_root))).resolve()
     output.mkdir(parents=True, exist_ok=True)
     env = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
     env.update(AR_WORKFLOW_TOOLS_ROOT=str(tools_root), PYTHONDONTWRITEBYTECODE="1",
                OPENSPEC_TELEMETRY="0", OPEN_SPEC_INTERACTIVE="0", OCR_ENABLE_TELEMETRY="0", OCR_NO_UPDATE="1")
+    table = p0_table(root, change)
     commands = check_commands(tools_root)
     results = []
     owned_gpu_sources = []
@@ -327,8 +343,10 @@ def checks(root: Path, tools_root: Path, output: Path) -> dict:
             "third_party", "vcpkg_installed", "__pycache__"}]
         owned_gpu_sources.extend(Path(directory) / name for name in files
                                  if Path(name).suffix.lower() in (".cpp", ".h", ".hpp", ".glsl", ".vert", ".frag", ".comp"))
-    if owned_gpu_sources:
-        raise ValueError("Owned C++/Shader sources require actual build/Shader/GPU check contracts; not configured yet")
+    if owned_gpu_sources and table is None:
+        raise ValueError(
+            "Owned C++/Shader sources require an executed command table with actual build/Shader/GPU "
+            "contracts; workflow/p0-checks.json does not declare this change")
     for number, command in enumerate(commands):
         try:
             result = subprocess.run(command, cwd=root, env=env, capture_output=True, timeout=600)
@@ -347,17 +365,34 @@ def checks(root: Path, tools_root: Path, output: Path) -> dict:
             results.append({"command": command, "passed": False, "reason": "timeout"})
         if not results[-1]["passed"]:
             break
-    evidence = {"status": "passed" if len(results) == len(commands) and all(r["passed"] for r in results) else "failed",
-                "created_at": now(), "checks": results, "limitations": ["Workflow checks only; no engine/GPU verification"]}
+    engine_checks = None
+    if table is not None:
+        p0_output = output / "p0"
+        try:
+            table_result = p0.run_table(table, root, p0_output, env)
+        except (p0.TableError, ValueError) as error:
+            engine_checks = {"change": change, "passed": False, "reason": str(error),
+                             "output": p0_output.as_posix()}
+        else:
+            engine_checks = {"change": change, "passed": True,
+                             "commands": len(table_result["commands"]),
+                             "results": table_result.get("results_path"),
+                             "output": p0_output.as_posix()}
+    evidence = {"status": "passed" if len(results) == len(commands) and all(r["passed"] for r in results)
+                          and (engine_checks is None or engine_checks["passed"]) else "failed",
+                "created_at": now(), "checks": results, "engine_checks": engine_checks,
+                "limitations": ["Workflow checks" + ("" if engine_checks else " only; no engine/GPU verification")]}
     core.save(output / "checks.json", evidence)
     if evidence["status"] != "passed":
+        if engine_checks is not None and not engine_checks["passed"]:
+            raise ValueError(f"Command table failed: {engine_checks['reason']}; inspect {p0_output}")
         detail = (output / f"check-{len(results) - 1}.log")
         tail = detail.read_text(encoding="utf-8", errors="replace")[-2000:] if detail.exists() else "timeout"
         raise ValueError(f"Checks failed; inspect {output}\n{tail}")
     return evidence
 
 
-def verification(root: Path, packet: Path) -> Path:
+def verification(root: Path, packet: Path, change: str | None = None) -> Path:
     manifest = core.load(packet / "manifest.json")
     if core.validate_packet(packet, manifest):
         raise ValueError("Invalid frozen input")
@@ -369,7 +404,7 @@ def verification(root: Path, packet: Path) -> Path:
         shutil.copytree(packet / "snapshot", source,
                         ignore=lambda directory, names: [".ar-review-context"]
                         if Path(directory) == packet / "snapshot" else [])
-    result = checks(source, root, output)
+    result = checks(source, root, output, change)
     if (core.validate_packet(packet, manifest)
             or manifest["state"] != core.input_state(root, manifest.get("scope", "workspace"))):
         raise ValueError("Input changed during checks")
@@ -714,7 +749,7 @@ def dispatch(args, root: Path) -> None:
             if args.command == "verify":
                 data.update(verification=None, review=None)
                 save_task(root, data, "verifying", "verification_started_previous_evidence_invalidated")
-                data["verification"] = str(verification(root, packet))
+                data["verification"] = str(verification(root, packet, data["change"]))
                 save_task(root, data, "verified", "verification_passed")
             elif args.command == "review":
                 if not data.get("verification"):

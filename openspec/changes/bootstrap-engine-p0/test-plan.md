@@ -64,9 +64,9 @@ finish时flush失败还应有可控sink故障覆盖；测试私有适配只在co
 
 ## 5. Harness与云端限制
 
-检查命令、来源与逐case解析按proposal；实现命令表/解析器后才替换原生源码占位保护，保留原check/unittest/OpenSpec三项。故意缺命令/缺用例/错身份/超时/崩溃/返回错枚举均应拒绝。命令表/脚本目前不存在，不以本文视为已接入。
+命令表与解析器已实现（`workflow/p0-checks.json`、`scripts/workflow_p0.py`、`scripts/run_p0_checks.py`），`workflow.py verify` 在 change 匹配时执行该表并替换原生源码占位保护，旧 check/unittest/OpenSpec 三项保留。拒绝路径由 `scripts/tests/test_workflow_p0.py` 覆盖：缺命令/未声明用例/缺用例/失败或跳过用例/错退出码/错身份（sidecar 与依赖记录不符）/超时/崩溃/非法占位符/未知 parser/前向依赖；harness 自身另断言运行不改变 snapshot 文件清单。
 
-云端先核对实际VS2026及工具链，不假设windows-latest满足；缺环境明确未满足，不用空job/跳过取得通过，也不否定单独已完成的本地证据。CI不代替本机设备或GPU运行。
+云端先核对实际VS2026及工具链，不假设windows-latest满足；缺环境明确未满足，不用空job/跳过取得通过，也不否定单独已完成的本地证据。CI不代替本机设备或GPU运行。当前云端未接入（无推送授权、镜像标签与时间预算待用户决定），本地证据与云端结论分开记录。
 
 超时与负载按design建议固定，清理只结束任务拥有进程树，不按名称全杀。文档检查、OpenSpec validate、真实构建/CTest、独立审查分别记录，不相互替代；提交/推送按用户授权，不要求强制gate。
 

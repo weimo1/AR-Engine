@@ -220,6 +220,23 @@ class ExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "actual build"):
             runtime.checks(self.root, self.root, self.root / ".ar-workflow/checks")
 
+    def test_table_of_another_change_does_not_lift_the_placeholder_check(self):
+        (self.root / "src").mkdir()
+        (self.root / "src/main.cpp").write_bytes(b"int main() {}\n")
+        (self.root / "workflow").mkdir()
+        (self.root / "workflow/p0-checks.json").write_text(json.dumps({
+            "schema_version": 1, "change": "another-change", "output_root": "${OUT}",
+            "commands": [{
+                "id": "echo", "argv": [sys.executable, "-c", "print('hi')"], "cwd": "${REPO}",
+                "timeout_seconds": 60, "wrapper_exit": None, "child_exit": None,
+                "parser_id": "msbuild-log", "required": True, "output_dir": "${OUT}/logs",
+                "expected_capability_source": None, "depends_on": [],
+            }],
+        }), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "actual build"):
+            runtime.checks(self.root, self.root, self.root / ".ar-workflow/checks",
+                           "bootstrap-engine-p0")
+
     def test_atomic_record_update_retains_old_record_on_replace_failure(self):
         path = self.root / "state.json"
         core.save(path, {"phase": "before"})

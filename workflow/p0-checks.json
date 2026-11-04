@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "change": "bootstrap-engine-p0",
   "output_root": "${OUT}",
   "output_root_exception": {
     "reason": "vcpkg 用自带 CMake 构建端口时，中文 TMP 或 buildtrees 路径报 D8050（2026-11-03 实证，见 .ar-workflow/p0-d8050-fix-20261103/README.md）。日常生成物已默认在 <repo>/build/；仅依赖安装树与 vcpkg 缓存/临时目录保留 ASCII 例外根。",
@@ -225,7 +226,21 @@
       "parser_id": "ctest-junit",
       "required": true,
       "output_dir": "${OUT}/logs/p0-checks",
-      "expected_capability_source": null
+      "expected_capability_source": null,
+      "expected_cases": [
+        "core-normal-close",
+        "core-open-failed",
+        "core-json-escaping",
+        "core-quota",
+        "core-quota-cumulative",
+        "core-summary-truncated",
+        "core-repeat-finish",
+        "core-late-event",
+        "report-unwritable",
+        "core-flush-failure",
+        "public-headers",
+        "build-identity"
+      ]
     },
     {
       "id": "verify-inputs-Debug",
@@ -421,7 +436,21 @@
       "parser_id": "ctest-junit",
       "required": true,
       "output_dir": "${OUT}/logs/p0-checks",
-      "expected_capability_source": null
+      "expected_capability_source": null,
+      "expected_cases": [
+        "core-normal-close",
+        "core-open-failed",
+        "core-json-escaping",
+        "core-quota",
+        "core-quota-cumulative",
+        "core-summary-truncated",
+        "core-repeat-finish",
+        "core-late-event",
+        "report-unwritable",
+        "core-flush-failure",
+        "public-headers",
+        "build-identity"
+      ]
     },
     {
       "id": "verify-inputs-RelWithDebInfo",

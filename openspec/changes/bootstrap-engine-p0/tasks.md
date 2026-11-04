@@ -1,6 +1,6 @@
 # P0 实施任务
 
-修订：11，2026-11-04。状态：方案已按先不做Probe修订，D1—D3 已确认。2026-11-04 首批实现完成 1.1/1.2/2.2 与 core 相关用例；独立审查提出的阻断/重要问题已修复，两配置各 11/11 重跑通过并重记身份（详见下方"审查修复"段落）。rhi/runtime 及其余用例仍未实现，不把本机临时门禁算正式P0任务完成。
+修订：11，2026-11-04。状态：方案已按先不做Probe修订，D1—D3 已确认。2026-11-04 首批实现完成 1.1/1.2/2.2、core 相关用例与 3.2（命令表驱动的 verify）；独立审查两轮意见已处置，两配置各 12/12 重跑通过并重记身份。rhi/runtime、3.3 云端 CI 与 3.4 交付仍未完成，不把本机临时门禁算正式P0任务完成。
 
 ## 1. 工具链与依赖
 
@@ -16,8 +16,8 @@
 ## 3. 适用验证与交付
 
 - [x] 3.1 随每层加入Catch2/CTest命名测试与真实公共入口集成：按proposal九个负向ID、新增用例（device-none/device-index-invalid/cleanup-failure/cleanup-empty/quarantine-reopen/repeat-close/summary-capability）及必需正向/core测试核对返回、事实、清理、身份/来源；两配置分别运行；不宣称验证了暂缓的Probe进程退出码。（本批完成 core 层 12 个用例：core-normal-close、core-open-failed、core-json-escaping、core-quota、core-quota-cumulative、core-flush-failure、core-summary-truncated、core-repeat-finish、core-late-event、report-unwritable、public-headers、build-identity，Debug/RelWithDebInfo 各 12/12；device-*/cleanup-*/repeat-close/summary-capability 随 2.3/2.1 批次）
-- [ ] 3.2 如接Harness，按proposal实现直接命令表、depends_on、记录/身份和逐case解析，再替换原生源码占位保护；保留旧三项工作流检查，验证错码/错类别/缺用例/过期/超时/崩溃均拒绝，输出不污染输入。
-- [ ] 3.3 核对云端VS2026及固定工具链后接入真实CPU构建/CTest；环境不足明确未满足，本地与云端、查询与GPU运行分开记录。
+- [x] 3.2 如接Harness，按proposal实现直接命令表、depends_on、记录/身份和逐case解析，再替换原生源码占位保护；保留旧三项工作流检查，验证错码/错类别/缺用例/过期/超时/崩溃均拒绝，输出不污染输入。（已完成：`workflow/p0-checks.json` 增加 `change=bootstrap-engine-p0` 与两条 ctest 的 `expected_cases`（12 个用例名）；新增 `scripts/workflow_p0.py` 做表校验（字段/占位符/parser 白名单、依赖顺序、timeout、禁止 shell 字符串）与七个解析器（json-toolchain/json-dependencies/json-identity/cmake-configure/msbuild-log/msbuild-cl/ctest-junit，逐项判定而非只看退出码）；`scripts/run_p0_checks.py` 改为同一实现的 CLI；`workflow_runtime.checks` 在 change 匹配时用表执行，其他 change 保留原"原生源码占位保护"，旧三项检查不变；`scripts/tests/test_workflow_p0.py` 53 个用例覆盖错码/错类别/缺用例/未声明用例/过期身份/超时/崩溃/非法占位符/未知 parser/前向依赖/输出不污染输入）
+- [ ] 3.3 核对云端VS2026及固定工具链后接入真实CPU构建/CTest；环境不足明确未满足，本地与云端、查询与GPU运行分开记录。（未完成：仓库 CI 仅为 `.github/workflows/workflow-checks.yml`（`runs-on: windows-latest`，只跑 `python scripts/workflow.py ci`，15 分钟上限）；GitHub 已提供带 VS2026 的 win25-vs2026 镜像标签，但 `windows-latest` 不保证等于固定 VS2026 实例；本轮未获推送授权，云端结果不可观察；依赖恢复 + 两配置构建 + CTest 明显超出既有 job 预算，需先由用户决定云端 job 的镜像标签、网络依赖策略与时间预算，故不建空 job、不声称云端通过）
 - [ ] 3.4 对实际输入完成适用验证、独立审查及获授权的交付；更新长期模块事实及已知限制，未满足1.4/Heap和应用验收不标通过；不以强制gate或writer包作为人工工作前置。
 
 ## 实施顺序及当前交接
@@ -34,3 +34,5 @@ MF-01/MF-02映射：2.2/2.1实现显式编码错误输入/摘要映射；2.3实�
 
 审查修复后证据：16 条命令全部 exit 0；两配置 CTest 各 11/11（0 失败 0 跳过）；`/std:c++23preview`×4 且 latest=0；Debug `/MDd`×4、RelWithDebInfo `/MD`×4、`/MT`=0；`C4530`=0、编译 warning=0；身份 build_id Debug `4cb46a78…` / RelWithDebInfo `f040c61f…`、input_hash `50ff37ed…`。
 第二轮复审残留处置（2026-11-04，用户授权实现者裁定 R1/R2）：R1 改契约为"项目内 build/ 例外 + configure 前/ctest 后哈希复核"，`verify-inputs-<cfg>` 命令已入表；R2 新增 `ErrorCategory::InvalidState`（13 值），`proposal.md` 的 invalid_state 措辞与实现、模块文档一致；R3 故障注入钩子改为 `AR_ENABLE_TEST_HOOKS` 编译开关（默认 OFF，检查命令传 ON；测试启用时若为 OFF 则 FATAL_ERROR，防止用例集静默缩水；不带测试的生产树用 `-DAR_BUILD_TESTS=OFF`）；R4 新增 core-summary-truncated（summaryBytes=600 + 20 条 cleanup 错误，断言 errors_omitted/计数保留与 primary_error 不丢）；R5 core-flush-failure 增加"两 sink 失败、告警只记一次"的计数断言；R6 保留 build-* 与 clcmd-* 两级（前者覆盖普通增量构建、后者留存命令行证据），并删除测试目标重复的 `/W4`；R7 `decode_output` 改为逐行解码。
+
+3.2 交付（2026-11-04，用户"继续"后实施）：命令表由 `scripts/workflow_p0.py` 校验并执行，`workflow.py verify bootstrap-engine-p0` 现在跑真实 configure/build/CTest 而不是占位保护；表结果与旧三项工作流检查分开记录（`checks.json` 的 `checks` 仍是三项，引擎侧在 `engine_checks`，`gate` 的既有校验口径不变）。本地开发入口 `python scripts/run_p0_checks.py` 与 verify 共用同一实现。单条命令的观察退出码/耗时写 `<output>/logs/p0-checks/results.json`，表内 `wrapper_exit`/`child_exit` 仍是声明字段（null）。尚未完成：3.3 云端 CI（待用户决定镜像标签、依赖策略与时间预算）、2.3 rhi、2.1 runtime、3.4 交付审查。

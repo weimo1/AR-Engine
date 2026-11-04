@@ -155,7 +155,7 @@ python scripts/workflow.py gate <change-id>
 python scripts/workflow.py resume <change-id>
 ```
 
-start 要求 proposal、design、test-plan、tasks 与派生契约已准备。verify 在冻结副本执行文档/契约检查、Python 测试及 OpenSpec 严格校验；review 默认 direct-api，OCR 无模型准备固定输入，DeepSeek 执行独立判断。gate 重新核对原始模型结果、日志、完整覆盖和当前输入，只表示本地交付证据一致。实现者不能自填 resolved：需要修改后新审查，或按下节的独立误报复核证据派生处置，没有自动消除问题的按钮。
+start 要求 proposal、design、test-plan、tasks 与派生契约已准备。verify 在冻结副本执行文档/契约检查、Python 测试及 OpenSpec 严格校验；若 `workflow/p0-checks.json` 的 `change` 与当前 change 相同，还会在冻结副本上执行该命令表（configure/build/clcmd/CTest/身份核对），失败即整体失败，结果显示为 `checks.json` 的 `engine_checks`，与三项工作流检查分开记录。命令表由 `scripts/workflow_p0.py` 校验与执行（argv 直接执行、占位符白名单、parser 逐项判定），本地开发用 `python scripts/run_p0_checks.py` 走同一实现。review 默认 direct-api，OCR 无模型准备固定输入，DeepSeek 执行独立判断。gate 重新核对原始模型结果、日志、完整覆盖和当前输入，只表示本地交付证据一致。实现者不能自填 resolved：需要修改后新审查，或按下节的独立误报复核证据派生处置，没有自动消除问题的按钮。
 
 状态保存在忽略目录 `.ar-workflow/tasks/`，报告和日志在 `.ar-workflow/reviews/`。记录原子写入，操作使用单工作区锁。resume 会使输入变化前的证据失效，能识别中断审查和取回已完成结果，**不会自动再次调用 API**；仍活着的执行进程不能被另一个会话抢占。status 可查看精简状态。
 
