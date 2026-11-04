@@ -159,6 +159,8 @@ start 要求 proposal、design、test-plan、tasks 与派生契约已准备。ve
 
 状态保存在忽略目录 `.ar-workflow/tasks/`，报告和日志在 `.ar-workflow/reviews/`。记录原子写入，操作使用单工作区锁。resume 会使输入变化前的证据失效，能识别中断审查和取回已完成结果，**不会自动再次调用 API**；仍活着的执行进程不能被另一个会话抢占。status 可查看精简状态。
 
+verify 的审查集来自当前未提交差异，工作树干净时 OCR 无可选文件并报 `FAIL: Empty/unknown OCR review set`，这是"没有待审差异"，不是构建或测试失败；已提交的切片要另行复跑命令表（`python scripts/run_p0_checks.py`）记录干净树的身份与用例结果。
+
 审查运行前，执行器离线核对规则的规范化 JSON 摘要与工具清单中的原生规则身份；原生摘要来自固定 OCR 的已记录受控运行，不是 rule.json 的字节摘要。规则或工具变化后须复核并更新清单，不能直接接受未知摘要。结果同时核对冻结任务指纹、HEAD、逐项覆盖及原生源摘要的内部一致性；本地记录仍不提供身份认证。
 
 实际试验发现，多文件的分组 planner 可能在预算检查前调用模型；所以 budget=1 也不是零请求预览，已去掉该做法。只有 delegate preview 不调用模型。正式 review 的规划消耗也计入原始结果，不自动增额重试。
