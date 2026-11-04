@@ -165,7 +165,7 @@ verify 的审查集来自当前未提交差异，工作树干净时 OCR 无可�
 
 实际试验发现，多文件的分组 planner 可能在预算检查前调用模型；所以 budget=1 也不是零请求预览，已去掉该做法。只有 delegate preview 不调用模型。正式 review 的规划消耗也计入原始结果，不自动增额重试。
 
-新策略 pre-commit 使用 commit-check 导出 **Git 暂存树**，执行文档/派生/配置和 Python 语法检查，不重跑完整 unittest，不读取未暂存修复来替代提交内容。verify 与 CI 保留完整测试，快速提交检查不产生 gate 资格。提交快检不自动花 API 额度，也不替代独立审查。可以用 `review-prepare --staged` 准备暂存内容；需要 staged 任务时从 `start <change-id> --scope staged` 开始。手动共享检查入口是 `python scripts/workflow.py ci`，Actions 运行同一命令，无需模型凭据。
+新策略 pre-commit 使用 commit-check 导出 **Git 暂存树**，执行文档/派生/配置和 Python 语法检查，不重跑完整 unittest，不读取未暂存修复来替代提交内容。verify 与 CI 保留完整测试，快速提交检查不产生 gate 资格。提交快检不自动花 API 额度，也不替代独立审查。可以用 `review-prepare --staged` 准备暂存内容；需要 staged 任务时从 `start <change-id> --scope staged` 开始。手动共享检查入口是 `python scripts/workflow.py ci`，Actions 运行同一命令，无需模型凭据。即使仓库含 C++ 或 Shader，该入口也只运行文档、工作流回归与 OpenSpec 检查。任务级 `verify` 仍按变更核对原生构建契约，P0 的实际编译和 CTest 由 P0 命令表及手动 CPU 工作流执行。
 
 删除和纯删除会从 HEAD 导出完整旧内容及差异到冻结副本的 `.ar-review-context/deletions/`，生成材料必须被 OCR 选中并纳入指纹。审查需检查当前调用方、配置及文档引用；实际验证使用删除后的源码，不把旧代码恢复成当前实现。改名同时覆盖旧路径删除材料和新文件。二进制、非 UTF-8、超出大小约束的删除及未知排除仍明确阻断，需要专项方案。
 

@@ -220,6 +220,19 @@ class ExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "actual build"):
             runtime.checks(self.root, self.root, self.root / ".ar-workflow/checks")
 
+    def test_ci_checks_workflow_in_a_repo_with_cpp_sources(self):
+        (self.root / "main.cpp").write_bytes(b"int main() {}\n")
+        with patch.object(runtime, "check_commands", return_value=[
+            [sys.executable, "-c", "print('workflow fixture ran')"],
+        ]):
+            runtime.dispatch(SimpleNamespace(command="ci"), self.root)
+
+        output = self.root / ".ar-workflow/ci"
+        self.assertIn("workflow fixture ran", (output / "check-0.log").read_text())
+        evidence = core.load(output / "checks.json")
+        self.assertEqual(evidence["status"], "passed")
+        self.assertIsNone(evidence["engine_checks"])
+
     def test_table_of_another_change_does_not_lift_the_placeholder_check(self):
         (self.root / "src").mkdir()
         (self.root / "src/main.cpp").write_bytes(b"int main() {}\n")

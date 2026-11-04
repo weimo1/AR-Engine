@@ -327,26 +327,26 @@ def p0_table(root: Path, change: str | None) -> dict | None:
     return table if table.get("change") == change else None
 
 
-def checks(root: Path, tools_root: Path, output: Path, change: str | None = None) -> dict:
+def checks(root: Path, tools_root: Path, output: Path, change: str | None = None, *,
+           workflow_only: bool = False) -> dict:
     tools_root = Path(os.environ.get("AR_WORKFLOW_TOOLS_ROOT", str(tools_root))).resolve()
     output.mkdir(parents=True, exist_ok=True)
     env = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
     env.update(AR_WORKFLOW_TOOLS_ROOT=str(tools_root), PYTHONDONTWRITEBYTECODE="1",
                OPENSPEC_TELEMETRY="0", OPEN_SPEC_INTERACTIVE="0", OCR_ENABLE_TELEMETRY="0", OCR_NO_UPDATE="1")
-    table = p0_table(root, change)
+    table = None if workflow_only else p0_table(root, change)
     commands = check_commands(tools_root)
     results = []
-    owned_gpu_sources = []
-    for directory, directories, files in os.walk(root):
-        directories[:] = [name for name in directories if name not in {
-            ".git", ".tools", ".ar-workflow", "node_modules", ".agents", "docs", "openspec",
-            "third_party", "vcpkg_installed", "__pycache__"}]
-        owned_gpu_sources.extend(Path(directory) / name for name in files
-                                 if Path(name).suffix.lower() in (".cpp", ".h", ".hpp", ".glsl", ".vert", ".frag", ".comp"))
-    if owned_gpu_sources and table is None:
-        raise ValueError(
-            "Owned C++/Shader sources require an executed command table with actual build/Shader/GPU "
-            "contracts; workflow/p0-checks.json does not declare this change")
+    if not workflow_only and table is None:
+        for _, directories, files in os.walk(root):
+            directories[:] = [name for name in directories if name not in {
+                ".git", ".tools", ".ar-workflow", "node_modules", ".agents", "docs", "openspec",
+                "third_party", "vcpkg_installed", "__pycache__"}]
+            if any(Path(name).suffix.lower() in (".cpp", ".h", ".hpp", ".glsl", ".vert", ".frag", ".comp")
+                   for name in files):
+                raise ValueError(
+                    "Owned C++/Shader sources require an executed command table with actual build/Shader/GPU "
+                    "contracts; workflow/p0-checks.json does not declare this change")
     for number, command in enumerate(commands):
         try:
             result = subprocess.run(command, cwd=root, env=env, capture_output=True, timeout=600)
@@ -612,7 +612,7 @@ def dispatch(args, root: Path) -> None:
     if args.command == "ci":
         with operation_lock(root):
             agents.assert_idle(root)
-            checks(root, root, root / ".ar-workflow/ci")
+            checks(root, root, root / ".ar-workflow/ci", workflow_only=True)
         return
     with operation_lock(root, recover=args.command in ("resume", "dsh-stop")):
         if args.command in ("dsh-doctor", "dsh-run", "dsh-usage", "dsh-stop"):
