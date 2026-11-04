@@ -7,7 +7,7 @@ P0技术方案修订：3，2026-11-04。下列P0接口细化是候选，未实�
 - 目录：engine/rhi/include/rhi、engine/rhi/src/vulkan；公开头不增加 ar 路径层。
 - 当前范围：P0 的 Vulkan 能力查询所需底层能力；窗口、交换链、绘制与 Shader 管线属于后续任务，不能混入 P0 验收。
 - 依据与方案：[总体架构](../../总体架构与技术路线.md)、[P0 proposal](../../../openspec/changes/bootstrap-engine-p0/proposal.md)、[P0 design](../../../openspec/changes/bootstrap-engine-p0/design.md)。Vulkan/VMA 等决定引用有效 ADR，不从选型推定同步与接口设计已经批准。
-- 在途变更及设备限制：[模块与变更索引](../../workflow/模块与变更索引.md)、[当前状态](../../workflow/当前决策与待办清单.md)。SDK、离线 Shader 成功不代替设备 Vulkan 1.4 或 Heap 验收。
+- 在途变更及设备限制：[模块与变更索引](../../workflow/模块与变更索引.md)、[项目总任务](../../../TASK.md)。SDK、离线 Shader 成功不代替设备 Vulkan 1.4 或 Heap 验收。
 
 资源所有权、同步和关键时序随实际方案按 [模块模板](../模块设计模板.md) 补充，不以空图表示架构已经完成。
 

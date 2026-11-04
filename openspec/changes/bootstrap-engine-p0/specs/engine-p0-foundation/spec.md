@@ -1,4 +1,4 @@
-<!-- Generated from proposal.md; source-sha256: 36e8e92a94284354971c87b274dfca366df62471d8023f5e87bfe4d0cd898310. Do not edit. -->
+<!-- Generated from proposal.md; source-sha256: d349567706788a3fbc0801675e9059eba7cbb5c3b8f56cf9f168e44ea291875c. Do not edit. -->
 
 ## Purpose
 
@@ -167,9 +167,9 @@ P0 SHALL 以测试程序经正式公开接口验证查询/启动/关闭；Result
 ##### D3命令和身份产物约定（本轮已实现1.1/1.2/3.2切片）
 
 
-以下路径已在本轮落地：workflow/p0-checks.json（命令表）、scripts/p0_build_identity.py（记录/身份）、scripts/workflow_p0.py（表校验、依赖顺序、逐命令解析器）、scripts/run_p0_checks.py（同一实现的命令行入口）。
+以下路径已在本轮落地：workflow/p0-checks.json（命令表）、scripts/p0_build_identity.py（记录/身份）、scripts/workflow_p0.py（表校验、依赖顺序、逐命令解析器）、scripts/build_checks.py（同一实现的命令行入口）。
 
-1. 在版本控制中建立workflow/p0-checks.json，schema_version=1、change=bootstrap-engine-p0、commands数组，每项{id,argv,cwd,timeout_seconds,wrapper_exit,child_exit,parser_id,required,output_dir,expected_capability_source,depends_on,expected_cases}。expected_capability_source取system_loader/fixture_loader/fixture_vulkan_api/null；depends_on列出必须先成功的命令ID；expected_cases只用于parser_id=ctest-junit，声明该配置必须全部出现并通过的用例名。parser_id取json-toolchain/json-dependencies/json-identity/cmake-configure/msbuild-log/msbuild-cl/ctest-junit，每个parser把输出转成逐项事实而不是只看退出码。表中wrapper_exit/child_exit是声明字段，保持null；实际观察的退出码与耗时由runner写入<output>/logs/p0-checks/results.json，不写回被哈希的清单。workflow.py verify按bootstrap-engine-p0选择该表并校验必需ID、依赖顺序和来源断言，再把白名单占位符snapshot/output/configuration展开为绝对路径，禁止自由shell字符串执行；没有表/解析器即阻断。旧工作流三项检查保留，其他change不自动使用此表。
+1. 在版本控制中建立workflow/p0-checks.json，schema_version=1、change=bootstrap-engine-p0、commands数组，每项{id,argv,cwd,timeout_seconds,wrapper_exit,child_exit,parser_id,required,output_dir,expected_capability_source,depends_on,expected_cases}。expected_capability_source取system_loader/fixture_loader/fixture_vulkan_api/null；depends_on列出必须先成功的命令ID；expected_cases只用于parser_id=ctest-junit，声明该配置必须全部出现并通过的用例名。parser_id取json-toolchain/json-dependencies/json-identity/cmake-configure/msbuild-log/msbuild-cl/ctest-junit，每个parser把输出转成逐项事实而不是只看退出码。表中wrapper_exit/child_exit是声明字段，保持null；实际观察的退出码与耗时由runner写入<output>/logs/p0-checks/results.json，不写回被哈希的清单。python scripts/build_checks.py 选择该表并校验必需ID、依赖顺序和来源断言，再把白名单占位符snapshot/output/configuration展开为绝对路径，禁止自由shell字符串执行；没有表/解析器即阻断。旧工作流三项检查保留，其他change不自动使用此表。
 2. 先运行记录命令，再运行各配置identity，顺序固定为toolchain-record→dependencies-record→identity-<configuration>→configure→identity-check-<configuration>→build→clcmd-<configuration>→ctest→verify-inputs-<configuration>：其中clcmd-<configuration>是带 --clean-first -- /v:n 的全量重建，用于留存真实编译命令行证据；verify-inputs在CTest之后重算输入哈希，证明整轮未改动被哈希的输入。
    - toolchain-record：python scripts/p0_build_identity.py record-toolchain --output <output>/toolchain.json --triplet x64-windows-static-md。记录VS实例/工具集/cl/CMake/SDK/generator/架构/triplet及triplet文件SHA256、/MDd与/MD；不联网。
    - dependencies-record：python scripts/p0_build_identity.py record-dependencies --snapshot <snapshot> --output <output>/dependencies.json --install-root <output>/installed --triplet x64-windows-static-md。该命令用固定完整vcpkg按manifest恢复，下载/buildtrees/packages均指向任务自有根，然后记录manifest哈希、baseline、tool commit、triplet和实际解析ports；网络或隔离失败即blocked，不写snapshot或用户共享checkout。

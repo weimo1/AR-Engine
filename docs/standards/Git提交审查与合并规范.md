@@ -101,4 +101,4 @@ MR 使用 [模板](../archive/2026-10-19/templates/11-MR说明.md)，至少说�
 
 ## 8. 当前状态
 
-初稿文档阶段的“尚无首次提交/hooks/CI”已过时。当前已有主分支发布、本地 hook、DeepSeek 审查与真实 Actions 记录；新增多 Agent/DSH 能力仍未完成当前输入独立裁决及 gate。用户延期 PR/远程保护。实时状态见 [当前清单](../workflow/当前决策与待办清单.md)。
+初稿文档阶段的“尚无首次提交/hooks/CI”已过时。当前已有主分支发布、本地 hook、DeepSeek 审查与真实 Actions 记录；新增多 Agent/DSH 能力仍未完成当前输入独立裁决及 gate。用户延期 PR/远程保护。实时状态见 [项目总任务](../../TASK.md)。

@@ -514,5 +514,5 @@
       "expected_capability_source": null
     }
   ],
-  "snapshot_note": "输出根位于 snapshot 内（用户决定的 <repo>/build/），输入清单不收集 build/ 内容；每次构建前由 identity-check 复核输入哈希，ctest 之后再由 verify-inputs 复核一次。命令表的 wrapper_exit/child_exit 是声明字段并保持 null：实际观察退出码由 scripts/run_p0_checks.py 写入 <OUT>/logs/p0-checks/results.json，避免 runner 回填自身被哈希的输入造成身份自引用抖动。"
+  "snapshot_note": "输出根位于 snapshot 内（用户决定的 <repo>/build/），输入清单不收集 build/ 内容；每次构建前由 identity-check 复核输入哈希，ctest 之后再由 verify-inputs 复核一次。命令表的 wrapper_exit/child_exit 是声明字段并保持 null：实际观察退出码由 scripts/build_checks.py 写入 <OUT>/logs/p0-checks/results.json，避免 runner 回填自身被哈希的输入造成身份自引用抖动。"
 }

@@ -18,7 +18,7 @@ C++23、Vulkan1.4、Windows/VS2026；CMake/MSBuild/CTest和vcpkg。Vulkan内存�
 - P0目录和模块职责已确认，公开头使用include/<module>/，不增加ar路径层。
 - P0仅准备目录骨架和方案；链接产物、标准模式和CRT仍待确认，尚无引擎实现或渲染画面验收。
 
-P0的 [技术方案](openspec/changes/bootstrap-engine-p0/design.md)、[验收计划](openspec/changes/bootstrap-engine-p0/test-plan.md) 和 [当前事实与缺口](docs/workflow/当前决策与待办清单.md) 分别维护，不把规划完成当实现完成。
+P0的 [技术方案](openspec/changes/bootstrap-engine-p0/design.md)、[验收计划](openspec/changes/bootstrap-engine-p0/test-plan.md) 和 [项目总任务](TASK.md) 分别维护，不把规划完成当实现完成。
 
 ## 代码组织
 

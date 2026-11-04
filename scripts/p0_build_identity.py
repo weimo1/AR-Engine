@@ -37,7 +37,7 @@ INCLUDE_GLOBS = (
     "engine/**/*",
     "tests/**/*",
     "scripts/p0_build_identity.py",
-    "scripts/run_p0_checks.py",
+    "scripts/build_checks.py",
     "scripts/workflow_p0.py",
     "workflow/p0-checks.json",
 )

@@ -1,9 +1,0 @@
-{
-  "schema_version": 1,
-  "objective": "补齐DSH独立只读reviewer SDK调用及真实desktop保存回执",
-  "non_goals": ["不修改P0/架构或引擎", "不调用付费模型/Git", "不实现长期会话调度及假恢复"],
-  "tags": ["integration"],
-  "documents": [{"path":"docs/workflow/DSH直接执行接入指南.md","purpose":"standard","status":"reference","basis":"现有SDK与官方persistence接入"}],
-  "skills": [],
-  "write_paths": ["scripts/workflow_dsh.py", "scripts/tests/test_workflow_dsh.py", "docs/workflow/DSH直接执行接入指南.md", "docs/workflow/模块与变更索引.md", "openspec/changes/workflow-dsh-readonly-review/*"]
-}

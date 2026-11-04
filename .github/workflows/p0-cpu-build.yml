@@ -1,4 +1,4 @@
-name: P0 CPU build
+name: Engine CPU build and test
 
 # First version: manual dispatch only. This job restores vcpkg from the network and builds
 # both configurations, so it stays off every push until the cloud image, the toolchain and
@@ -77,7 +77,7 @@ jobs:
       # first round so the real restore cost is measured instead of hidden.
       - name: Restore dependencies, build both configurations and run CTest
         shell: pwsh
-        run: python scripts/run_p0_checks.py
+        run: python scripts/build_checks.py
 
       - name: Write the run summary
         if: always()
