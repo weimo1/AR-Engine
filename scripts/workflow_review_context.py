@@ -88,6 +88,8 @@ def ingest(root: Path, packet: Path, evidence: list[Path], coordinator: str, ver
         assignment = core.load(directory / 'assignment.json')
         handoff = core.load(directory / 'handoff.json')
         state = agents.state(root)['assignments'].get(identity, {})
+        import workflow_packages
+        workflow_packages.validate(directory, assignment)
         if (state.get('status') != 'completed'
                 or core.digest(core.canonical(assignment)) != state.get('assignment_sha256')
                 or core.digest((directory / 'task.md').read_bytes()) != state.get('task_sha256')

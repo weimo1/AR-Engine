@@ -98,6 +98,31 @@ class ProtocolTests(unittest.TestCase):
             self.assertNotIn('fixture-key', overlay)
             self.assertEqual(core.load(output / 'runtime.json')['visibility'], 'desktop')
 
+    def test_reviewer_launch_enables_reads_disables_shell_and_preserves_desktop(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            install = base / 'install'
+            (install / 'resources').mkdir(parents=True)
+            (install / 'DSH NEXT.exe').write_bytes(b'fixture')
+            (install / 'resources/app.asar').write_bytes(b'fixture')
+            sessions = base / 'sessions'
+            sessions.mkdir()
+            output = base / 'output'
+            output.mkdir()
+            with patch.object(dsh, 'Client') as client:
+                dsh.launch(base, install, output, 10, store={'root': str(sessions),
+                           'compression': 'zstd'}, reviewer=True)
+            persona = client.call_args.args[2]['DSH_SYSTEM_PROMPT']
+            self.assertIn('independent', persona)
+            self.assertIn('covered and uncovered', persona)
+            self.assertNotIn('execution agent', persona)
+            overlay = (output / 'no-retry.patch.yml').read_text(encoding='utf8')
+            for marker in ('mode: read-only', 'read: true', 'write: false', 'edit: false',
+                           'id: terminal-pwsh\n  disabled: true',
+                           'id: persistent-pwsh\n  disabled: true', 'compression: zstd'):
+                self.assertIn(marker, overlay)
+            self.assertFalse(core.load(output / 'runtime.json')['os_permission_isolation'])
+
     def test_usage_cache_and_reasoning_not_counted_twice(self):
         evidence = dsh.Evidence('owned', 100)
         evidence.observe(message())
@@ -145,6 +170,13 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'threshold'):
             evidence.observe(message())
         self.assertEqual(evidence.total, 33)
+
+    def test_explicit_absent_token_threshold_still_counts_usage_and_completion(self):
+        evidence = dsh.Evidence('owned', None)
+        evidence.observe(message(usage={'inputTokens': 2000000, 'outputTokens': 3}))
+        evidence.observe(event(2, 'turn/end', {'reason': {'kind': 'completed'}}))
+        self.assertEqual(evidence.total, 2000003)
+        self.assertTrue(evidence.completed())
 
     def test_progress_text_does_not_replace_final_text_or_turn(self):
         evidence = dsh.Evidence('owned', 100)
@@ -352,6 +384,180 @@ class DispatchTests(unittest.TestCase):
                 dsh.run(self.root, identity, self.root, 'fixture', 100000, 10, 32,
                         {'root': str(self.root / 'missing'), 'compression': 'zstd'})
         self.assertEqual(dsh.jobs(self.root), [])
+
+    def reviewer(self):
+        return agents.prepare(self.root, 'first-task', 'reviewer', 'independent-DSH', 'read', []).name
+
+    def completed_client(self, mutation=None, reviewer=True):
+        from unittest.mock import MagicMock
+        client = MagicMock()
+        client.process.pid = 123
+        client.stop.return_value = True
+        def call(method, params, observe):
+            if method == 'session/prompt':
+                if reviewer:
+                    self.assertIn('Independent read-only review', params['contentBlocks'][0]['text'])
+                return {'messageId': 'owned-receipt'}
+            self.assertEqual(method, 'session/wait')
+            for frame in (message(), event(2, 'turn/end', {'reason': {'kind': 'completed'}})):
+                frame['params']['sessionId'] = params['sessionId']
+                observe(frame)
+            if mutation:
+                mutation()
+            return {}
+        client.call.side_effect = call
+        return client
+
+    def test_developer_success_keeps_original_launch_and_writer(self):
+        identity = self.prepare()
+        client = self.completed_client(reviewer=False)
+        with patch('workflow_review_api.credential', return_value='fixture-key'), \
+                patch.object(dsh, 'launch', return_value=client) as launch, patch.object(dsh, 'initialize'):
+            path = dsh.run(self.root, identity, self.root, 'deepseek-flash', 100000, 10, 32)
+        self.assertEqual(core.load(path)['status'], 'model_completed')
+        self.assertNotIn('reviewer', launch.call_args.kwargs)
+        self.assertEqual(agents.state(self.root)['writer'], identity)
+
+    def test_current_reviewer_dispatch_has_role_receipt_and_no_writer(self):
+        identity = self.reviewer()
+        client = self.completed_client()
+        with patch('workflow_review_api.credential', return_value='fixture-key'), \
+                patch.object(dsh, 'launch', return_value=client) as launch, patch.object(dsh, 'initialize'):
+            path = dsh.run(self.root, identity, self.root, 'deepseek-flash', 100000, 10, 32)
+        record = core.load(path)
+        self.assertEqual(record['status'], 'model_completed')
+        self.assertEqual(record['role'], 'reviewer')
+        self.assertEqual(record['access'], 'read')
+        self.assertEqual(record['messageId'], 'owned-receipt')
+        self.assertEqual(record['prompt_status'], 'accepted')
+        self.assertTrue(launch.call_args.kwargs['reviewer'])
+        self.assertEqual(record['usage_known_tokens'], 33)
+        self.assertFalse(record['grants_delivery_qualification'])
+        self.assertIsNone(agents.state(self.root)['writer'])
+        with self.assertRaisesRegex(ValueError, 'already dispatched'):
+            dsh.run(self.root, identity, self.root, 'deepseek-flash', 100000, 10, 32)
+
+    def test_nonreview_read_and_active_writer_rejected_before_key(self):
+        identity = agents.prepare(self.root, 'first-task', 'verifier', 'verifier', 'read', []).name
+        with patch('workflow_review_api.credential', side_effect=AssertionError('No key')):
+            with self.assertRaisesRegex(ValueError, 'reviewer role'):
+                dsh.run(self.root, identity, self.root, 'deepseek-flash', 100000, 10, 32)
+            reviewer = self.reviewer()
+            self.prepare()
+            with self.assertRaisesRegex(ValueError, 'idle writer'):
+                dsh.run(self.root, reviewer, self.root, 'deepseek-flash', 100000, 10, 32)
+
+    def test_reviewer_missing_basis_and_stale_input_rejected_before_key(self):
+        identity = self.reviewer()
+        directory = self.root / '.ar-workflow/agents' / identity
+        manifest = core.load(directory / 'package-manifest.json')
+        path = directory / manifest['documents'][0]['frozen_path']
+        original = path.read_bytes()
+        path.unlink()
+        with patch('workflow_review_api.credential', side_effect=AssertionError('No key')):
+            with self.assertRaises(OSError):
+                dsh.run(self.root, identity, self.root, 'deepseek-flash', 100000, 10, 32)
+            path.write_bytes(original)
+            self.write('main.py', 'changed')
+            with self.assertRaisesRegex(ValueError, 'unchanged input'):
+                dsh.run(self.root, identity, self.root, 'deepseek-flash', 100000, 10, 32)
+
+    def test_reviewer_input_changes_during_initialize_never_sends(self):
+        identity = self.reviewer()
+        client = self.completed_client()
+        with patch('workflow_review_api.credential', return_value='fixture-key'), \
+                patch.object(dsh, 'launch', return_value=client), patch.object(
+                    dsh, 'initialize', side_effect=lambda *a: self.write('main.py', 'changed')):
+            with self.assertRaisesRegex(ValueError, 'blocked'):
+                dsh.run(self.root, identity, self.root, 'deepseek-flash', 100000, 10, 32)
+        client.call.assert_not_called()
+        self.assertEqual(core.load(dsh.jobs(self.root)[0])['prompt_status'], 'not_sent')
+
+    def test_reviewer_input_changes_during_turn_cannot_finish_valid_review(self):
+        identity = self.reviewer()
+        client = self.completed_client(lambda: self.write('main.py', 'changed'))
+        with patch('workflow_review_api.credential', return_value='fixture-key'), \
+                patch.object(dsh, 'launch', return_value=client), patch.object(dsh, 'initialize'):
+            with self.assertRaisesRegex(ValueError, 'blocked'):
+                dsh.run(self.root, identity, self.root, 'deepseek-flash', 100000, 10, 32)
+        record = core.load(dsh.jobs(self.root)[0])
+        self.assertEqual(record['status'], 'blocked')
+        self.assertEqual(record['usage_known_tokens'], 33)
+        self.assertTrue(record['runtime_stopped'])
+
+    def test_no_token_limit_is_explicit_and_preserves_actual_usage(self):
+        identity = self.reviewer()
+        with patch('workflow_review_api.credential', return_value='fixture-key'), \
+                patch.object(dsh, 'launch', return_value=self.completed_client()), patch.object(dsh, 'initialize'):
+            path = dsh.run(self.root, identity, self.root, 'deepseek-flash', None, 10, 32,
+                           no_token_limit=True)
+        record = core.load(path)
+        self.assertEqual(record['token_limit_mode'], 'disabled_explicit')
+        self.assertIsNone(record['budget'])
+        self.assertEqual(record['seconds'], 10)
+        self.assertEqual(record['usage_known_tokens'], 33)
+
+    def test_no_limit_does_not_silently_accept_invalid_limits_or_unbound_time(self):
+        identity = self.reviewer()
+        cases = [(None, False, 10), (10, True, 10), (0, False, 10),
+                 (-1, False, 10), (True, False, 10), (None, True, 0), (None, True, 1801)]
+        with patch('workflow_review_api.credential', side_effect=AssertionError('No key')):
+            for budget, unlimited, seconds in cases:
+                with self.subTest(budget=budget, unlimited=unlimited, seconds=seconds):
+                    with self.assertRaisesRegex(ValueError, 'explicit positive budget'):
+                        dsh.run(self.root, identity, self.root, 'deepseek-flash', budget, seconds, 32,
+                                no_token_limit=unlimited)
+
+    def test_new_package_cannot_bypass_previous_unknown_cost(self):
+        identity = self.reviewer()
+        core.save(self.root / dsh.BASE / 'jobs' / ('a' * 24) / 'run.json',
+                  {'assignment': 'old', 'runtime_stopped': True, 'unknown_cost': True})
+        with patch('workflow_review_api.credential', side_effect=AssertionError('No key')):
+            with self.assertRaisesRegex(ValueError, 'runtime/cost unresolved'):
+                dsh.run(self.root, identity, self.root, 'deepseek-flash', None, 10, 32,
+                        no_token_limit=True)
+
+    def resume_fixture(self):
+        sessions = self.root / '.ar-workflow/test-sessions'
+        sessions.mkdir(parents=True)
+        identity = self.reviewer()
+        with patch('workflow_review_api.credential', return_value='fixture-key'), \
+                patch.object(dsh, 'launch', return_value=self.completed_client()), patch.object(dsh, 'initialize'):
+            path = dsh.run(self.root, identity, self.root, 'deepseek-flash', None, 10, 32,
+                           {'root': str(sessions), 'compression': 'zstd'}, no_token_limit=True)
+        agents.handoff(self.root, identity, {'status': 'completed', 'summary': 'fixture only',
+            'next_action': 'readiness investigation', 'evidence': [path.relative_to(self.root).as_posix()]})
+        return path.parent.name, self.reviewer()
+
+    def test_resume_check_is_readonly_and_never_claims_implemented_resume(self):
+        job, identity = self.resume_fixture()
+        record = self.root / dsh.BASE / 'jobs' / job / 'run.json'
+        before = record.read_bytes()
+        with patch('workflow_review_api.credential', side_effect=AssertionError('No key')), \
+                patch.object(dsh, 'launch', side_effect=AssertionError('No SDK launch')):
+            result = dsh.resume_check(self.root, job, identity)
+        self.assertEqual(result['status'], 'preconditions_checked_not_resumed')
+        self.assertFalse(result['model_request_sent'])
+        self.assertFalse(result['resume_implemented'])
+        self.assertEqual(record.read_bytes(), before)
+
+    def test_resume_check_blocks_unknown_cost_role_change_and_stale_package(self):
+        job, identity = self.resume_fixture()
+        record = self.root / dsh.BASE / 'jobs' / job / 'run.json'
+        data = core.load(record)
+        data['unknown_cost'] = True
+        core.save(record, data)
+        result = dsh.resume_check(self.root, job, identity)
+        self.assertTrue(any('cost unresolved' in x for x in result['blockers']))
+        # Restore exact pinned record, then independently test role and input changes.
+        data['unknown_cost'] = False
+        core.save(record, data)
+        wrong = agents.prepare(self.root, 'first-task', 'verifier', 'wrong-role', 'read', []).name
+        result = dsh.resume_check(self.root, job, wrong)
+        self.assertTrue(any('change/role/agent' in x for x in result['blockers']))
+        self.write('main.py', 'new source')
+        result = dsh.resume_check(self.root, job, identity)
+        self.assertTrue(any('unchanged input' in x for x in result['blockers']))
 
 
 if __name__ == '__main__':

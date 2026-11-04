@@ -37,15 +37,18 @@ def paths_changed(before: dict, after: dict) -> list[str]:
                   if before['files'].get(name) != after['files'].get(name))
 
 
-def prepare(root: Path, change: str, role: str, agent: str, access: str, paths: list[str], goal: str | None = None) -> Path:
+def prepare(root: Path, change: str, role: str, agent: str, access: str, paths: list[str], goal: str | None = None,
+            from_handoff: str | None = None) -> Path:
     rules = context.policy(root)
     if role not in rules['roles'] or access not in ('read', 'write') or not agent.strip():
         raise ValueError('Unknown Agent role/access or missing real Agent identifier')
     definition = rules['roles'][role]
     coordination = state(root)
     baseline = core.input_state(root, 'workspace')
-    changed = context.changed_names(root)
-    basis = context.build(root, change, changed)
+    basis = context.for_assignment(root, change)
+    import workflow_relay
+    predecessor = workflow_relay.accept(root, change, from_handoff, baseline) if from_handoff else None
+    relay = workflow_relay.summary(root, change)
     if access == 'write':
         assert_idle(root)
         if not definition['write'] or not paths:
@@ -65,23 +68,18 @@ def prepare(root: Path, change: str, role: str, agent: str, access: str, paths: 
         'role': role, 'access': access, 'paths': paths, 'created_at': now(),
         'task_goal': goal.strip() if goal and goal.strip() else basis['objective'],
         'input': baseline, 'context': basis, 'responsibility': definition,
+        'from_handoff': predecessor, 'relay': relay,
         'limitations': ['Cooperation protocol, not OS isolation', 'No implicit API or Git authorization',
                         'Handoff never supplies verification/review approval']}
-    body = [f'# Agent task {identity}', f'Role: {role}; Agent: {agent}; access: {access}',
-            f'Change goal: {basis["objective"]}', f'Assigned goal: {assignment["task_goal"]}', f'Responsibility: {definition["goal"]}',
-            f'Deliver: {definition["deliver"]}', f'Allowed writes: {paths}',
-            f'Non-goals: {basis["non_goals"]}', f'Input SHA256: {core.digest(core.canonical(baseline))}',
-            'Read assigned source at this input. Do not inherit developer chat reasoning or claims of approval.',
-            'Do not start paid APIs or mutate Git from this assignment; coordinator resumes after handoff.',
-            'Context status is a claim, not authenticated user approval. Current human authorization controls.']
-    for item in basis['documents']:
-        body.extend([f'\n## {item["path"]} [{item["status"]}]', f'Basis: {item["basis"]}',
-                     f'SHA256: {item["sha256"]}', context.text(root, item['path'])])
+    import workflow_packages
+    task = workflow_packages.freeze(root, directory, assignment)
     if baseline != core.input_state(root, 'workspace'):
         raise ValueError('Input changed during Agent context export; unpublished package retained')
+    if from_handoff and predecessor != workflow_relay.accept(root, change, from_handoff, baseline):
+        raise ValueError('Handoff changed during Agent context export; unpublished package retained')
     core.save(directory / 'assignment.json', assignment)
-    task = '\n\n'.join(body) + '\n'
     (directory / 'task.md').write_text(task, encoding='utf-8', newline='\n')
+    workflow_packages.validate(directory, assignment)
     coordination['assignments'][identity] = {'assignment_sha256': core.digest(core.canonical(assignment)),
         'task_sha256': core.digest(task.encode('utf-8')), 'status': 'active'}
     if access == 'write':
@@ -103,6 +101,8 @@ def inspect(root: Path, identity: str) -> tuple[dict, dict, Path]:
     if (core.digest(core.canonical(assignment)) != entry['assignment_sha256']
             or core.digest((directory / 'task.md').read_bytes()) != entry['task_sha256']):
         raise ValueError('Agent task package changed')
+    import workflow_packages
+    workflow_packages.validate(directory, assignment)
     if assignment['access'] == 'write' and coordination['writer'] != identity:
         raise ValueError('Assignment does not own the current writer record')
     return coordination, assignment, directory
@@ -146,9 +146,13 @@ def handoff(root: Path, identity: str, result: dict, release_reason: str | None 
               'start_input': assignment['input'], 'end_input': current,
               'end_input_unavailable': input_error,
               'release_reason': release_reason, 'grants_delivery_qualification': False}
+    record['evidence_receipts'] = [
+        {'path': name, 'sha256': core.digest(core.within(root, root / context.relative(name)).read_bytes())}
+        for name in result['evidence']]
     path = directory / 'handoff.json'
     core.save(path, record)
     coordination['assignments'][identity]['status'] = status
+    coordination['assignments'][identity]['handoff_sha256'] = core.digest(core.canonical(record))
     if coordination['writer'] == identity:
         coordination['writer'] = None
     core.save(state_path(root), coordination)

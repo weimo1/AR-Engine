@@ -111,7 +111,7 @@ def session_store(value: dict) -> dict:
 
 
 def launch(root: Path, install: Path, directory: Path, seconds: int, key: str = '',
-           store: dict | None = None) -> Client:
+           store: dict | None = None, reviewer: bool = False) -> Client:
     store = session_store(store) if store is not None else None
     install = install.resolve()
     exe, archive = install / 'DSH NEXT.exe', install / 'resources/app.asar'
@@ -125,11 +125,28 @@ def launch(root: Path, install: Path, directory: Path, seconds: int, key: str = 
                    'You are an AR Engine execution agent. Follow the supplied task package. '
                    'Do not delegate, launch paid models, change Git, or leave task processes running. '
                    'Finish with a concise factual report. Do not claim review or acceptance.'))
+    if reviewer:
+        env['DSH_SYSTEM_PROMPT'] = (
+            'You are an independent AR Engine read-only reviewer, not the implementer. '
+            'Read the supplied frozen task package and all required documents. '
+            'Review only the explicitly assigned scope, using frozen evidence; never infer approval. '
+            'Do not modify files, run commands, delegate, call paid models, or change Git. '
+            'Return findings with exact paths, lines, triggers, impacts and evidence. '
+            'List covered and uncovered paths explicitly; inability to read is a coverage gap. '
+            'Return the report as final text; the bridge saves it. '
+            'Do not claim whole-workspace coverage, gate approval, or delivery qualification.')
     if key:
         env['DEEPSEEK_API_KEY'] = key
     patch = directory / 'no-retry.patch.yml'
     overlay = ('- id: llm-retry\n  disabled: true\n- id: compaction-basic\n  disabled: true\n'
                '- id: image-offload\n  disabled: true\n')
+    if reviewer:
+        # The installed sdk-minimal profile exposes these capability IDs. No shell is
+        # needed for a document reviewer; the bridge owns evidence file writes.
+        overlay += ('- id: sandbox-policy\n  config:\n    mode: read-only\n'
+                    '- id: tool-fs\n  config:\n    read: true\n    write: false\n    edit: false\n')
+        for identity in ('terminal-bash', 'terminal-pwsh', 'persistent-bash', 'persistent-pwsh'):
+            overlay += f'- id: {identity}\n  disabled: true\n'
     if store:
         overlay += ('- id: sessions\n  config:\n    root: ' + json.dumps(store['root'], ensure_ascii=False)
                     + '\n    compression: ' + store['compression'] + '\n')
@@ -138,6 +155,8 @@ def launch(root: Path, install: Path, directory: Path, seconds: int, key: str = 
         'archive_sha256': core.digest(archive.read_bytes()), 'profile': 'sdk-minimal',
         'cwd': str(root.resolve()), 'max_tokens_as_success': False,
         'patch_sha256': core.digest(patch.read_bytes()), 'automatic_retry_disabled': True,
+        'permission_profile': 'reviewer-read-only-no-shell' if reviewer else 'execution-original',
+        'os_permission_isolation': False,
         'session_storage': store, 'visibility': 'desktop' if store else 'isolated'})
     return Client([str(exe), str(archive / 'lib/desktop-cli.js'), '--profile', 'sdk-minimal',
                    '--patch', str(patch.resolve())],
@@ -154,15 +173,19 @@ def initialize(client: Client, root: Path, model: str, max_output: int):
     return result
 
 
-def doctor(root: Path, install: Path, store: dict | None = None) -> Path:
+def doctor(root: Path, install: Path, store: dict | None = None, reviewer: bool = False) -> Path:
     directory = core.within(root, root / BASE / 'doctors' / uuid.uuid4().hex[:24])
     directory.mkdir(parents=True)
     client = None
     result = {'status': 'blocked', 'model_request_sent': False,
-              'model': 'deepseek-flash', 'reasoning_effort': 'high'}
+              'model': 'deepseek-flash', 'reasoning_effort': 'high',
+              'permission_profile': 'reviewer-read-only-no-shell' if reviewer else 'execution-original'}
     startup_stopped = True
     try:
-        client = launch(root, install, directory, 30, store=store)
+        options = {'store': store}
+        if reviewer:
+            options['reviewer'] = True
+        client = launch(root, install, directory, 30, **options)
         result['server'] = initialize(client, root, 'deepseek-flash', 256)
         session = 'ar-doctor-' + uuid.uuid4().hex
         cwd = client.call('session/working-directory/get', {'sessionId': session})
@@ -209,7 +232,7 @@ def usage_of(event: dict) -> dict | None:
 
 
 class Evidence:
-    def __init__(self, session: str, budget: int):
+    def __init__(self, session: str, budget: int | None):
         self.session, self.budget = session, budget
         self.seen = {}
         self.usage = []
@@ -260,7 +283,7 @@ class Evidence:
                 self.message_turn = data.get('turn')
                 if text.strip():
                     self.reply.append(text)
-            if self.total >= self.budget:
+            if self.budget is not None and self.total >= self.budget:
                 raise ValueError('DSH monitored token threshold reached; in-flight cost may exceed it')
         if kind == 'turn/end':
             self.terminal.append(data.get('reason', {}).get('kind'))
@@ -308,29 +331,43 @@ def recover(root: Path, identity: str) -> Path:
 
 
 def run(root: Path, assignment: str, install: Path, model: str,
-        budget: int, seconds: int, max_output: int, store: dict | None = None) -> Path:
+        budget: int | None, seconds: int, max_output: int, store: dict | None = None,
+        *, no_token_limit: bool = False) -> Path:
     from workflow_review_api import require_model_selection
     require_model_selection(root, {'model': model, 'thinking': {'type': 'enabled'}, 'reasoning_effort': 'high'})
     store = session_store(store) if store is not None else None
-    if (type(budget) is not int or budget <= 0 or not 1 <= seconds <= 1800
+    valid_limit = ((no_token_limit is True and budget is None)
+                   or (no_token_limit is False and type(budget) is int and budget > 0))
+    if (not valid_limit or type(seconds) is not int or not 1 <= seconds <= 1800
             or not 1 <= max_output <= 32768 or not model.strip()):
-        raise ValueError('DSH requires positive budget, seconds<=1800 and max-output<=32768')
-    _, package, source = agents.inspect(root, assignment)
-    if package['access'] != 'write' or package['input'] != core.input_state(root, 'workspace'):
-        raise ValueError('DSH execution requires the current writer package at unchanged input')
+        raise ValueError('DSH requires explicit positive budget OR no-token-limit, seconds<=1800 and max-output<=32768')
+    package, source, reviewer = admission(root, assignment)
     for path in jobs(root):
-        if core.load(core.within(root, path)).get('assignment') == assignment:
+        previous = core.load(core.within(root, path))
+        if previous.get('assignment') == assignment:
             raise ValueError('Assignment already dispatched; inspect evidence, never resend automatically')
-    task = (source / 'task.md').read_text(encoding='utf-8')
-    prompt = f'AR Engine | {package["role"]} | {package["change"]}\n\n' + task
+        if previous.get('runtime_stopped') is not True or previous.get('unknown_cost') is not False:
+            raise ValueError(f'Previous DSH runtime/cost unresolved; inspect {path}; no new-package retry')
+    import workflow_packages
+    prompt = workflow_packages.prompt(source, package)
+    if reviewer:
+        prompt += ('\nIndependent read-only review: read the complete frozen manifest. '
+                   'Report covered/uncovered paths and evidence; output final text only. '
+                   'This assignment does not imply whole-workspace Review or gate coverage.\n')
     estimate = len(prompt.encode('utf-8')) + max_output
-    if estimate > budget:
+    if budget is not None and estimate > budget:
         raise ValueError(f'Initial conservative task estimate {estimate} exceeds budget {budget}')
     directory = core.within(root, root / BASE / 'jobs' / uuid.uuid4().hex[:24])
     directory.mkdir(parents=True)
     session = 'ar-task-' + uuid.uuid4().hex
     record = {'schema_version': 1, 'assignment': assignment, 'sessionId': session,
+        'role': package['role'], 'access': package['access'], 'change': package['change'],
+        'input_sha256': core.digest(core.canonical(package['input'])),
+        'package_manifest_sha256': package.get('package_manifest_sha256'),
+        'permission_profile': 'reviewer-read-only-no-shell' if reviewer else 'execution-original',
+        'prompt_status': 'not_sent', 'session_policy': 'new-session-per-assignment',
         'status': 'starting', 'model': model, 'reasoning_effort': 'high', 'budget': budget, 'seconds': seconds,
+        'token_limit_mode': 'disabled_explicit' if no_token_limit else 'monitored',
         'max_output': max_output, 'initial_estimate': estimate, 'runtime_stopped': False,
         'session_storage': store, 'visibility': 'desktop' if store else 'isolated',
         'task_sha256': core.digest((source / 'task.md').read_bytes()), 'created_at': agents.now(),
@@ -341,23 +378,29 @@ def run(root: Path, assignment: str, install: Path, model: str,
     try:
         from workflow_review_api import credential
         key = credential()
-        client = launch(root, install, directory, seconds, key, store=store)
+        options = {'store': store}
+        if reviewer:
+            options['reviewer'] = True
+        client = launch(root, install, directory, seconds, key, **options)
         record.update(pid=client.process.pid, status='running')
         core.save(directory / 'run.json', record)
         initialize(client, root, model, max_output)
         # Check again immediately before admission; initialize must never submit a prompt.
-        agents.inspect(root, assignment)
-        if core.input_state(root, 'workspace') != package['input']:
-            raise ValueError('Task input changed before DSH prompt admission')
+        admission(root, assignment)
+        record['prompt_status'] = 'sending_receipt_unknown'
+        core.save(directory / 'run.json', record)
         reply = client.call('session/prompt', {'sessionId': session,
             'contentBlocks': [{'type': 'text', 'text': prompt}]}, evidence.observe)
         if not isinstance(reply, dict) or not isinstance(reply.get('messageId'), str) or not reply['messageId']:
             raise ValueError('DSH prompt receipt is missing')
         record['messageId'] = reply['messageId']
+        record['prompt_status'] = 'accepted'
         core.save(directory / 'run.json', record)
         client.call('session/wait', {'sessionId': session}, evidence.observe)
         if not evidence.completed():
             raise ValueError('DSH did not supply completed turn, final text and known usage')
+        if reviewer:
+            admission(root, assignment)
         record.update(status='model_completed', unknown_cost=False)
     except (ValueError, OSError) as error:
         if isinstance(error, StartupFailure):
@@ -377,6 +420,74 @@ def run(root: Path, assignment: str, install: Path, model: str,
     if record['status'] != 'model_completed':
         raise ValueError(f'DSH task blocked; inspect {directory / "run.json"}; writer retained')
     return directory / 'run.json'
+
+
+def admission(root: Path, identity: str) -> tuple[dict, Path, bool]:
+    coordination, package, source = agents.inspect(root, identity)
+    reviewer = package['access'] == 'read' and package['role'] == 'reviewer'
+    if package['access'] != 'write' and not reviewer:
+        raise ValueError('DSH read-only dispatch requires a reviewer role')
+    if reviewer:
+        import workflow_packages
+        if package.get('package_format') != workflow_packages.FORMAT:
+            raise ValueError('DSH reviewer requires a complete frozen v2 package')
+        if coordination['writer']:
+            raise ValueError('DSH independent reviewer requires an idle writer')
+    if package['input'] != core.input_state(root, 'workspace'):
+        raise ValueError('DSH task requires unchanged input')
+    return package, source, reviewer
+
+
+def resume_check(root: Path, job: str, identity: str) -> dict:
+    """Read-only readiness investigation. Never resumes or authorizes a paid call."""
+    if not re.fullmatch(r'[0-9a-f]{24}', job):
+        raise ValueError('Invalid DSH job ID')
+    record = core.load(core.within(root, root / BASE / 'jobs' / job / 'run.json'))
+    result = {'job': job, 'new_assignment': identity, 'sessionId': record.get('sessionId'),
+              'blockers': [], 'model_request_sent': False, 'resume_implemented': False,
+              'grants_delivery_qualification': False}
+    blockers = result['blockers']
+    if record.get('runtime_stopped') is not True:
+        blockers.append('Original runtime exit unconfirmed')
+    if record.get('unknown_cost') is not False:
+        blockers.append('Original cost unresolved; new package cannot clear unknown_cost')
+    if record.get('prompt_status') != 'accepted' or not record.get('messageId'):
+        blockers.append('Original prompt receipt missing or uncertain; never resend automatically')
+    if record.get('model') != 'deepseek-flash' or record.get('reasoning_effort') != 'high':
+        blockers.append('Original model/effort does not match Flash/High')
+    if not isinstance(record.get('sessionId'), str) or not re.fullmatch(r'ar-task-[0-9a-f]{32}', record['sessionId']):
+        blockers.append('Original session identity invalid')
+    try:
+        store = session_store(record.get('session_storage'))
+        if record.get('visibility') != 'desktop':
+            raise ValueError('Official desktop storage required')
+        result['session_storage'] = store
+        usage = core.load(root / BASE / 'jobs' / job / 'usage.json')
+        if (usage.get('unknown_cost') is not False or usage.get('sessionId') != record.get('sessionId')):
+            blockers.append('Original usage unresolved or session mismatch')
+        if record.get('terminal_reasons') != ['completed']:
+            blockers.append('Original turn incomplete; interrupted-turn repair and cost reconciliation required')
+        old_id = record.get('assignment', '')
+        import workflow_relay
+        prior = workflow_relay.handoff(root, old_id, record.get('change', ''))
+        if prior['integrity'] != 'digest_checked' or prior['status'] not in ('completed', 'blocked'):
+            blockers.append('Original assignment not safely handed off')
+        _, package, source = agents.inspect(root, identity)
+        if (identity == old_id or any(package.get(k) != record.get(k) for k in ('role', 'access', 'change'))
+                or package['agent'] != prior['agent']):
+            blockers.append('New assignment must keep original change/role/agent and have a new ID')
+        if any(core.load(path).get('assignment') == identity for path in jobs(root)):
+            blockers.append('New assignment already dispatched')
+        admission(root, identity)
+        if any(core.load(path).get('resume_from_job') == job for path in jobs(root)):
+            blockers.append('Original job already has a continuation record')
+        result['new_task'] = str(source / 'task.md')
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        blockers.append(str(error))
+    result['status'] = 'blocked' if blockers else 'preconditions_checked_not_resumed'
+    result['next_action'] = ('Reconcile original evidence, prepare current frozen package, then separately '
+                             'authorize and implement explicit SDK session/resume + new prompt; no new-session fallback')
+    return result
 
 
 def usage_report(root: Path) -> Path:

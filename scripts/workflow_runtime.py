@@ -331,7 +331,7 @@ def checks(root: Path, tools_root: Path, output: Path) -> dict:
         raise ValueError("Owned C++/Shader sources require actual build/Shader/GPU check contracts; not configured yet")
     for number, command in enumerate(commands):
         try:
-            result = subprocess.run(command, cwd=root, env=env, capture_output=True, timeout=180)
+            result = subprocess.run(command, cwd=root, env=env, capture_output=True, timeout=600)
             log = result.stdout + result.stderr
             (output / f"check-{number}.log").write_bytes(log)
             passed = result.returncode == 0 and b"could not parse" not in log.lower()
@@ -442,12 +442,9 @@ def resume_task(root: Path, data: dict) -> None:
         save_task(root, data, "needs_attention", "review_interrupted_explicit_retry_required")
 
 
-def task_gate(root: Path, data: dict) -> None:
-    if not data.get("verification") or not data.get("review"):
-        raise ValueError("Gate blocked: current verification and independent review are required")
+def check_task_verification(root: Path, data: dict, packet: Path | None = None) -> tuple[Path, dict]:
     verify_path = core.within(root, Path(data["verification"]))
-    report_path = core.within(root, Path(data["review"]))
-    packet = report_path.parent.parent
+    packet = core.within(root, packet if packet is not None else Path(data.get('packet', '')))
     manifest = core.load(packet / "manifest.json")
     # Compare resolved paths: on Windows CI the runner temp directory is exposed
     # through an 8.3 short name (RUNNER~1), so str() equality of the same packet
@@ -471,6 +468,14 @@ def task_gate(root: Path, data: dict) -> None:
             raise ValueError("Gate blocked: unexpected verification command")
         if core.digest((verify_path.parent / f"check-{number}.log").read_bytes()) != item.get("log_sha256"):
             raise ValueError("Gate blocked: check log was changed")
+    return packet, manifest
+
+
+def task_gate(root: Path, data: dict) -> None:
+    if not data.get("verification") or not data.get("review"):
+        raise ValueError("Gate blocked: current verification and independent review are required")
+    report_path = core.within(root, Path(data["review"]))
+    packet, manifest = check_task_verification(root, data, report_path.parent.parent)
     report = core.load(report_path)
     # Rebuild from raw output rather than trusting an edited 'pass' field.
     record = core.load(report_path.parent / "run.json")
@@ -564,6 +569,11 @@ def dispatch(args, root: Path) -> None:
         print(json.dumps(core.load(core.within(root, root / workflow_dsh.BASE / 'jobs' / args.job / 'run.json')),
                          ensure_ascii=False, indent=2))
         return
+    if args.command == "dsh-resume-check":
+        import workflow_dsh
+        print(json.dumps(workflow_dsh.resume_check(root, args.job, args.assignment),
+                         ensure_ascii=False, indent=2))
+        return
     if args.command == "ci":
         with operation_lock(root):
             agents.assert_idle(root)
@@ -580,7 +590,8 @@ def dispatch(args, root: Path) -> None:
                 store = (workflow_dsh.desktop_store(args.desktop_home, args.desktop_compression)
                          if args.visibility == "desktop" else None)
                 print(workflow_dsh.run(root, args.assignment, args.install, args.model,
-                                       args.budget, args.seconds, args.max_output, store))
+                                       args.budget, args.seconds, args.max_output, store,
+                                       no_token_limit=args.no_token_limit))
             elif args.command == "dsh-stop":
                 print(workflow_dsh.recover(root, args.job))
             else:
@@ -589,11 +600,39 @@ def dispatch(args, root: Path) -> None:
         if args.command == "context":
             print(json.dumps(context.build(root, args.change, context.changed_names(root)), ensure_ascii=False, indent=2))
             return
+        if args.command == "relay":
+            import workflow_relay
+            value = workflow_relay.summary(root, args.change)
+            print(workflow_relay.markdown(value) if args.format == 'markdown'
+                  else json.dumps(value, ensure_ascii=False, indent=2))
+            return
         if args.command == "agent-pack":
-            print(agents.prepare(root, args.change, args.role, args.agent, args.access, args.paths, args.goal))
+            print(agents.prepare(root, args.change, args.role, args.agent, args.access, args.paths, args.goal,
+                                 getattr(args, 'from_handoff', None)))
             return
         if args.command == "agent-status":
             print(json.dumps(agents.state(root), ensure_ascii=False, indent=2))
+            return
+        if args.command in ('agent-transfer', 'agent-accept'):
+            import workflow_transfer
+            if args.command == 'agent-accept':
+                value = workflow_transfer.accept(root, args.assignment, args.agent)
+            else:
+                value = workflow_transfer.material(root, args.change, args.assignment)
+            print(workflow_transfer.markdown(value) if getattr(args, 'format', 'json') == 'markdown'
+                  else json.dumps(value, ensure_ascii=False, indent=2))
+            return
+        if args.command in ('temp-create', 'temp-preview', 'temp-archive', 'temp-restore'):
+            import workflow_temporary
+            if args.command == 'temp-create':
+                value = workflow_temporary.create(root, args.assignment, args.text)
+            elif args.command == 'temp-preview':
+                value = workflow_temporary.preview(root, args.assignment)
+            elif args.command == 'temp-archive':
+                value = workflow_temporary.archive(root, args.plan)
+            else:
+                value = workflow_temporary.restore(root, args.journal)
+            print(json.dumps(value, ensure_ascii=False, indent=2))
             return
         if args.command == "agent-handoff":
             print(agents.handoff(root, args.assignment, core.load(core.within(root, args.result.resolve()))))

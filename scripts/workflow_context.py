@@ -126,6 +126,20 @@ def build(root: Path, change: str, changed: list[str]) -> dict:
             'authority_note': 'Status and basis are traceability claims, not authenticated user approval; current user instructions control.'}
 
 
+def for_assignment(root: Path, change: str) -> dict:
+    config = declaration(root, change)
+    selected = [name for name in changed_names(root) if permits(name, config['write_paths'])]
+    value = build(root, change, selected)
+    state = 'docs/workflow/当前决策与待办清单.md'
+    if (root / state).is_file() and not any(x['path'] == state for x in value['documents']):
+        value['documents'].append({'path': state, 'purpose': 'state', 'status': 'reference',
+            'basis': '分配时当前状态快照；事实与批准分别核对', 'sha256': core.digest((root / state).read_bytes())})
+        value['documents'].sort(key=lambda x: x['path'])
+    if sum(len(text(root, x['path']).encode('utf-8')) for x in value['documents']) > 500000:
+        raise ValueError('Task context exceeds 500000-byte limit')
+    return value
+
+
 def validate(packet: Path, manifest: dict) -> list[str]:
     if 'task_context' not in manifest:
         return []  # Legacy/generic source-only packets retain their historical identity.
