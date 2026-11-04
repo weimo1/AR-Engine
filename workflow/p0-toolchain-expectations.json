@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "change": "bootstrap-engine-p0",
+  "recorded_from": {
+    "toolchain_record": "build/metadata/toolchain.json",
+    "recorded_on": "2026-11-04",
+    "recorded_on_host": "local developer workstation",
+    "derived_from": "tasks.md 1.1 与 docs/standards/构建工具链与依赖管理规范.md"
+  },
+  "expected": {
+    "vs_major": "18",
+    "msvc_toolset": "14.51.36231",
+    "cl_version": "19.51.36260",
+    "cmake_version": "4.2.1",
+    "windows_sdk": "10.0.26100.0",
+    "generator": "Visual Studio 18 2026",
+    "triplet": "x64-windows-static-md"
+  },
+  "policy": "缺项或版本不符即失败；实际差异写入 build/logs/ci-preflight.log 供另行审阅，CI 不自动接受新工具链，也不在版本不符时声明云端构建已通过。",
+  "notes": [
+    "vcpkg 工具提交只记录不设门槛：仓库在 vcpkg-configuration.json 固定 registry baseline，runner 自带 vcpkg 的提交可能不同，差异随依赖记录一并留证。",
+    "本站记录取自本机 VS2026；云端 runner 若给出不同 MSVC/CMake/SDK，需要单独审阅工具链变更后再更新本文件。"
+  ]
+}

@@ -142,7 +142,7 @@ SSH 复用已有用户密钥；`ssh -T git@github.com` 已认证为 `weimo1`。G
 4. 用受控样本评估 OCR 的缺陷检出、误报、漏报和成本后，再决定它能否承担必需审查执行器；当前仅试运行。
 5. 渲染程序建好后接真实 GPU 检查；没有引擎源码、支持设备或工具时记录未就绪。
 
-本地 hook 和任务执行器已实现；`.github/workflows/workflow-checks.yml` 已为历史提交实跑成功，新增输入需另核对其提交 SHA 的结果。分支保护、自动合并、长期驻留调度器与真实引擎验收仍未启用。
+本地 hook 和任务执行器已实现；`.github/workflows/workflow-checks.yml` 已为历史提交实跑成功，新增输入需另核对其提交 SHA 的结果。P0 的 CPU 构建/CTest 走独立的手动 job（`.github/workflows/p0-cpu-build.yml`，`workflow_dispatch`、`windows-2025-vs2026`、45 分钟），先跑 `scripts/p0_ci_preflight.py` 核对固定工具链，再执行 `python scripts/run_p0_checks.py` 并上传 `build/` 下的结果、身份与日志；该 job 尚未推送、未触发，不能当作云端通过证据。分支保护、自动合并、长期驻留调度器与真实引擎验收仍未启用。
 
 ## 可选自动化任务执行、恢复与提交
 

@@ -1,0 +1,96 @@
+name: P0 CPU build
+
+# First version: manual dispatch only. This job restores vcpkg from the network and builds
+# both configurations, so it stays off every push until the cloud image, the toolchain and
+# the real timings have been reviewed. The 15-minute workflow-checks job keeps owning the
+# document, workflow and SDD checks.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p0-cpu-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  p0-cpu-build:
+    name: p0-cpu-build
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 45
+    steps:
+      - name: Check out the source under test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install Python for the recorded scripts
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      # Records the runner image and compares VS, MSVC, CMake and the Windows SDK with
+      # workflow/p0-toolchain-expectations.json. A missing tool or a version difference fails
+      # here, before any dependency restore, and the log is uploaded for separate review.
+      # VCPKG_ROOT and AR_P0_DEPS are exported to later steps from the same vcpkg the command
+      # table records, so configure and the toolchain record cannot disagree.
+      - name: Record runner image and check the pinned toolchain
+        shell: pwsh
+        run: python scripts/p0_ci_preflight.py --expectations workflow/p0-toolchain-expectations.json --output build/logs/ci-preflight.json --log build/logs/ci-preflight.log --deps-root build/deps --github-env $env:GITHUB_ENV
+
+      - name: Upload preflight evidence when the toolchain is not the pinned one
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: p0-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/logs/ci-preflight.log
+            build/logs/ci-preflight.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      # One command table drives everything: online vcpkg restore from the pinned baseline,
+      # toolchain and dependency records, identity prepare/check, both configurations from a
+      # real configure/build with the recorded cl command lines, CTest with the required case
+      # set, and a post-test re-check of the input hash. Binary caching stays off for the
+      # first round so the real restore cost is measured instead of hidden.
+      - name: Restore dependencies, build both configurations and run CTest
+        shell: pwsh
+        run: python scripts/run_p0_checks.py
+
+      - name: Write the run summary
+        if: always()
+        shell: pwsh
+        run: |
+          $summary = $env:GITHUB_STEP_SUMMARY
+          if (Test-Path build/logs/ci-preflight.log) {
+            '## P0 CPU preflight' | Out-File -FilePath $summary -Append -Encoding utf8
+            '```' | Out-File -FilePath $summary -Append -Encoding utf8
+            Get-Content build/logs/ci-preflight.log | Out-File -FilePath $summary -Append -Encoding utf8
+            '```' | Out-File -FilePath $summary -Append -Encoding utf8
+          }
+          if (Test-Path build/logs/p0-checks/results.json) {
+            $results = Get-Content build/logs/p0-checks/results.json -Raw | ConvertFrom-Json
+            '## P0 CPU command table' | Out-File -FilePath $summary -Append -Encoding utf8
+            '| command | passed | exit | seconds |' | Out-File -FilePath $summary -Append -Encoding utf8
+            '| --- | --- | --- | --- |' | Out-File -FilePath $summary -Append -Encoding utf8
+            foreach ($command in $results.commands) {
+              "| $($command.id) | $($command.passed) | $($command.child_exit) | $($command.elapsed_seconds) |" | Out-File -FilePath $summary -Append -Encoding utf8
+            }
+          } else {
+            'No results.json: the command table did not reach the end.' | Out-File -FilePath $summary -Append -Encoding utf8
+          }
+
+      - name: Upload build and test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: p0-cpu-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/logs/p0-checks/**
+            build/metadata/**
+            build/identity/**
+          if-no-files-found: warn
+          retention-days: 30
