@@ -31,6 +31,25 @@ jobs:
         with:
           python-version: '3.13'
 
+      # The hosted image updates its default CMake independently of the P0 baseline.
+      - name: Install pinned CMake for this job
+        shell: pwsh
+        run: |
+          $toolDir = Join-Path $env:GITHUB_WORKSPACE 'build/tools/cmake'
+          New-Item -ItemType Directory -Path $toolDir -Force | Out-Null
+          $archive = Join-Path $toolDir 'cmake-4.2.1-windows-x86_64.zip'
+          Invoke-WebRequest -Uri 'https://github.com/Kitware/CMake/releases/download/v4.2.1/cmake-4.2.1-windows-x86_64.zip' -OutFile $archive -TimeoutSec 300
+          $expectedHash = 'dfc2b2afac257555e3b9ce375b12b2883964283a366c17fec96cf4d17e4f1677'
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ine $expectedHash) {
+            throw 'Pinned CMake archive checksum mismatch'
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $toolDir
+          $cmakeBin = Join-Path $toolDir 'cmake-4.2.1-windows-x86_64/bin'
+          if (-not (Test-Path -LiteralPath (Join-Path $cmakeBin 'cmake.exe') -PathType Leaf)) {
+            throw 'Pinned CMake archive did not contain cmake.exe'
+          }
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $cmakeBin -Encoding utf8
+
       # Records the runner image and compares VS, MSVC, CMake and the Windows SDK with
       # workflow/p0-toolchain-expectations.json. A missing tool or a version difference fails
       # here, before any dependency restore, and the log is uploaded for separate review.
