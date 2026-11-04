@@ -441,6 +441,16 @@ struct RhiSession::Impl {
     }
 
     void judge() {
+        // Resolve the variant question first: the version judgment below depends on it.
+        if (report.variantSupported == VariantSupport::Unknown) {
+            if (report.apiVariants.loader.has_value() && report.apiVariants.device.has_value()) {
+                report.variantSupported = (*report.apiVariants.loader == 0
+                                              && *report.apiVariants.device == 0)
+                    ? VariantSupport::True
+                    : VariantSupport::False;
+            }
+        }
+
         const bool loaderEnough = report.loaderApi.has_value() && *report.loaderApi >= kApiVersion1_4;
         const bool deviceEnough = report.deviceApi.has_value() && *report.deviceApi >= kApiVersion1_4;
         const bool requestedEnough = config.requestedApi >= kApiVersion1_4;
@@ -459,15 +469,6 @@ struct RhiSession::Impl {
 
         if (report.loaderApi.has_value() && report.deviceApi.has_value()) {
             report.effectiveApi = std::min({*report.loaderApi, *report.deviceApi, config.requestedApi});
-        }
-
-        if (report.variantSupported == VariantSupport::Unknown) {
-            if (report.apiVariants.loader.has_value() && report.apiVariants.device.has_value()) {
-                report.variantSupported = (*report.apiVariants.loader == 0
-                                              && *report.apiVariants.device == 0)
-                    ? VariantSupport::True
-                    : VariantSupport::False;
-            }
         }
     }
 

@@ -60,7 +60,10 @@ finish时flush失败还应有可控sink故障覆盖；测试私有适配只在co
 | 模式边界 | inspect在device1.3.289完整查询时success但product=false；require_product同设备unsupported；development显式1.3 success；mode/requested_api不符invalid_arguments |
 | build-identity | 正常身份；旧EXE、错配置、改源未重建、缺/陈旧sidecar、triplet/CRT不符都拒绝；revision未知不猜clean |
 
-2026-11-05 rhi 基础切片另有 3 个 rhi 级用例：hi-request-validation（variant 非零/空显式路径在加载前拒绝）、hi-loader-unavailable（显式路径指向不存在文件）、hi-loader-symbol-missing（真实 DLL 缺 vkGetInstanceProcAddr）。它们只证明加载路径与请求校验，**不能替代**上表的 runtime-*、device-*/cleanup-*/quarantine-*/repeat-close 用例，后者仍须经 runtime 公共入口或可注入 fixture loader 覆盖。真实system查询没有跑到时，记录未运行/失败而非用fixture补通过。所有P0 Vulkan用例串行，不重叠使用volk全局状态。后续P1再定义CLI、应用退出、有限帧、resize、Validation及截图验收，不在本P0偷偷恢复Probe。
+2026-11-05 rhi 基础切片另有 16 个 rhi 级用例（`rhi-request-validation`、`rhi-loader-unavailable`、`rhi-loader-symbol-missing`、`rhi-device-none`、`rhi-device-index-out-of-range`、`rhi-api-version-unsupported`、`rhi-api-variant-unsupported`、`rhi-instance-incompatible`、`rhi-instance-init-failed`、`rhi-extension-query-failed`、`rhi-device-extension-query-failed`、`rhi-enumeration-incomplete`、`rhi-device-version-insufficient`、`rhi-descriptor-heap-present`、`rhi-cleanup-instance-retained`、`rhi-repeat-close`），由 `tests/support/rhi_fixture/FixtureLoader.cpp` 编出的 stub 加载器驱动：该 DLL 只导出 `vkGetInstanceProcAddr`，按 `AR_RHI_FIXTURE_SPEC` 改变 loader/device 版本、variant、`vkCreateInstance` 结果、设备数、`VK_INCOMPLETE`、instance/device 扩展查询失败、`vkDestroyInstance` 缺失与 Heap 扩展呈现；测试只经公开 `LoaderSource` 的 `ExplicitLoaderPath` 装载，路径由可执行目录推出。fixture 不是产品加载器，只用于负向与边界用例；它们**不能替代**上表的 runtime-*、`cleanup-empty`、`quarantine-*`、summary-capability 用例，后者仍须经 runtime 公共入口覆盖。真实 system 查询没有跑到时，记录未运行/失败而非用 fixture 补通过。所有 P0 Vulkan 用例串行，不重叠使用 volk 全局状态。后续 P1 再定义 CLI、应用退出、有限帧、resize、Validation 及截图验收，不在本 P0 偷偷恢复 Probe。
+hi-request-validation（variant 非零/空显式路径在加载前拒绝）、
+hi-loader-unavailable（显式路径指向不存在文件）、
+hi-loader-symbol-missing（真实 DLL 缺 vkGetInstanceProcAddr）。它们只证明加载路径与请求校验，**不能替代**上表的 runtime-*、device-*/cleanup-*/quarantine-*/repeat-close 用例，后者仍须经 runtime 公共入口或可注入 fixture loader 覆盖。真实system查询没有跑到时，记录未运行/失败而非用fixture补通过。所有P0 Vulkan用例串行，不重叠使用volk全局状态。后续P1再定义CLI、应用退出、有限帧、resize、Validation及截图验收，不在本P0偷偷恢复Probe。
 
 ## 5. Harness与云端限制
 

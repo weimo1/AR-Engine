@@ -242,7 +242,20 @@
         "build-identity",
         "rhi-request-validation",
         "rhi-loader-unavailable",
-        "rhi-loader-symbol-missing"
+        "rhi-loader-symbol-missing",
+        "rhi-device-none",
+        "rhi-device-index-out-of-range",
+        "rhi-api-version-unsupported",
+        "rhi-api-variant-unsupported",
+        "rhi-instance-incompatible",
+        "rhi-instance-init-failed",
+        "rhi-extension-query-failed",
+        "rhi-device-extension-query-failed",
+        "rhi-enumeration-incomplete",
+        "rhi-device-version-insufficient",
+        "rhi-descriptor-heap-present",
+        "rhi-cleanup-instance-retained",
+        "rhi-repeat-close"
       ]
     },
     {
@@ -455,7 +468,20 @@
         "build-identity",
         "rhi-request-validation",
         "rhi-loader-unavailable",
-        "rhi-loader-symbol-missing"
+        "rhi-loader-symbol-missing",
+        "rhi-device-none",
+        "rhi-device-index-out-of-range",
+        "rhi-api-version-unsupported",
+        "rhi-api-variant-unsupported",
+        "rhi-instance-incompatible",
+        "rhi-instance-init-failed",
+        "rhi-extension-query-failed",
+        "rhi-device-extension-query-failed",
+        "rhi-enumeration-incomplete",
+        "rhi-device-version-insufficient",
+        "rhi-descriptor-heap-present",
+        "rhi-cleanup-instance-retained",
+        "rhi-repeat-close"
       ]
     },
     {

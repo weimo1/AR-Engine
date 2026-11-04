@@ -61,7 +61,32 @@ set(AR_REQUIRED_RHI_CASES
     rhi-request-validation
     rhi-loader-unavailable
     rhi-loader-symbol-missing
+    rhi-device-none
+    rhi-device-index-out-of-range
+    rhi-api-version-unsupported
+    rhi-api-variant-unsupported
+    rhi-instance-incompatible
+    rhi-instance-init-failed
+    rhi-extension-query-failed
+    rhi-device-extension-query-failed
+    rhi-enumeration-incomplete
+    rhi-device-version-insufficient
+    rhi-descriptor-heap-present
+    rhi-cleanup-instance-retained
+    rhi-repeat-close
 )
+
+# A stub loader, so loader/instance/enumeration/cleanup branches run without a GPU.
+find_package(VulkanHeaders CONFIG REQUIRED)
+add_library(ar_rhi_fixture SHARED support/rhi_fixture/FixtureLoader.cpp)
+target_link_libraries(ar_rhi_fixture PRIVATE Vulkan::Headers ar_cxx23 ar_cxx_flags)
+target_compile_options(ar_rhi_fixture PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/W4>
+    $<$<CXX_COMPILER_ID:MSVC>:/permissive->
+    $<$<CXX_COMPILER_ID:MSVC>:/utf-8>
+)
+# The fixture exports the plain C entry point the loader contract names.
+set_target_properties(ar_rhi_fixture PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 add_executable(ar_rhi_tests
     rhi/test_rhi_session.cpp
@@ -71,6 +96,7 @@ target_link_libraries(ar_rhi_tests
         ar_rhi
         Catch2::Catch2WithMain
 )
+add_dependencies(ar_rhi_tests ar_rhi_fixture)
 foreach(case IN LISTS AR_REQUIRED_RHI_CASES)
     add_test(NAME ${case} COMMAND ar_rhi_tests "[${case}]")
     set_tests_properties(${case} PROPERTIES

@@ -2,7 +2,7 @@
 
 P0技术方案修订：3，2026-11-04。下列P0接口细化是候选，未实施、未获逐项确认；历史已确认边界继续有效。
 
-状态：图形底层模块目录与职责已确认；2026-11-05 落盘 rhi 基础切片（公开头 `LoaderSource.h`/`Capabilities.h`/`RhiSession.h`，loader/instance 所有权、枚举、报告与幂等 close，两配置 15/15 用例），quarantine 与可注入 fixture loader 用例仍未实现，详见文末实现状态。不额外叠加通用后端层，不强制虚接口。
+状态：图形底层模块目录与职责已确认；2026-11-05 落盘 rhi 基础切片（公开头 `LoaderSource.h`/`Capabilities.h`/`RhiSession.h`，loader/instance 所有权、枚举、报告与幂等 close，两配置 28/28 用例，含 fixture 加载器驱动的负向用例），quarantine 与 `report()` 失效语义仍未实现，详见文末实现状态。不额外叠加通用后端层，不强制虚接口。
 
 - 目录：engine/rhi/include/rhi、engine/rhi/src/vulkan；公开头不增加 ar 路径层。
 - 当前范围：P0 的 Vulkan 能力查询所需底层能力；窗口、交换链、绘制与 Shader 管线属于后续任务，不能混入 P0 验收。
@@ -107,20 +107,22 @@ open在本轮OS加载前检查隔离；拒绝使用initialization_failed、stage
 
 ## 2026-11-05 实现状态（rhi 基础切片）
 
-已落盘并两配置验证（Debug/RelWithDebInfo 各 15/15 CTest，/std:c++23preview、/MDd|/MD、0 warning）：
+已落盘并两配置验证（Debug/RelWithDebInfo 各 28/28 CTest，`/std:c++23preview`、`/MDd`|`/MD`、0 warning）。
 
-- 公开头：engine/rhi/include/rhi/LoaderSource.h（System / ExplicitPath）、Capabilities.h（报告值数据，无 Vulkan/volk 类型）、RhiSession.h（QueryConfig、open、eport、close）。三个头各自独立编译（public-headers 用例）。
-- 共同加载路径：LoadLibraryW → GetProcAddress("vkGetInstanceProcAddr") → olkInitializeCustom → global 入口检查 → kCreateInstance → olkLoadInstance。加载失败 loader_unavailable/Loader（origin=os），入口缺失 loader_symbol_missing/Loader。
-- 版本与 variant：loader 版本用 kEnumerateInstanceVersion（缺符号时按 1.0）；loader 低于请求版本 → pi_version_unsupported/Instance 且 instance_create.status=not_attempted；非零 variant → pi_variant_unsupported/Instance。
-- 枚举：VK_INCOMPLETE 最多 3 次循环后 query_failed/Enumeration；无设备 device_not_found/Enumeration 且保留部分报告；ExplicitDeviceIndex 越界 invalid_arguments/Enumeration，不换设备；FirstEnumerated 取枚举顺序第一台。
-- 报告：loader/device API、pi_variants、instance_create、实例/设备扩展查询状态与列表、capability_source、ariant_supported、effective_api、judgments{api_version_supported,required_capabilities_supported}、product_target_supported、device_name/driver_version、descriptor_heap（VK_EXT_descriptor_heap 编译期存在时读 feature，否则 
-ot_queried）、enderer_runtime_validated 恒 false、esult/errors。
-- close：首次销毁 instance → olkFinalize → FreeLibrary，记录 esidual_resources（instance/os_module）与 cleanup_failed/Cleanup；重复 close 返回缓存；析构只在未 close 时执行一次同样清理且不抛异常。
+- 公开头：`engine/rhi/include/rhi/LoaderSource.h`（System / ExplicitPath）、`Capabilities.h`（报告值数据，无 Vulkan/volk 类型）、`RhiSession.h`（`QueryConfig`、`open`、`report`、`close`）。三个头各自独立编译（public-headers 用例）。
+- 共同加载路径：`LoadLibraryW` → `GetProcAddress("vkGetInstanceProcAddr")` → `volkInitializeCustom` → global 入口检查 → `vkCreateInstance` → `volkLoadInstance`。加载失败 `loader_unavailable/Loader`（origin=os），入口缺失 `loader_symbol_missing/Loader`。
+- 版本与 variant：loader 版本用 `vkEnumerateInstanceVersion`（缺符号时按 1.0）；loader 低于请求版本 → `api_version_unsupported/Instance` 且 `instance_create.status=not_attempted`；非零 variant → `api_variant_unsupported/Instance`。
+- 枚举：`VK_INCOMPLETE` 最多 3 次循环后 `query_failed/Enumeration`；无设备 `device_not_found/Enumeration` 且保留部分报告；`ExplicitDeviceIndex` 越界 `invalid_arguments/Enumeration`，不换设备；`FirstEnumerated` 取枚举顺序第一台。
+- 报告：loader/device API、`api_variants`、`instance_create`、实例/设备扩展查询状态与列表、`capability_source`、`variant_supported`、`effective_api`、`judgments{api_version_supported,required_capabilities_supported}`、`product_target_supported`、`device_name`/`driver_version`、`descriptor_heap`（编译期存在 `VK_EXT_descriptor_heap` 时读 feature，否则 `not_queried`）、`renderer_runtime_validated` 恒 false、`result`/`errors`。
+- 判定顺序：先由 loader/device variant 决定 `variant_supported`，再算 `api_version_supported`——否则 variant 仍为 unknown 时会把真实支持的设备判成不支持。
+- close：首次销毁 instance → `volkFinalize` → `FreeLibrary`，记录 `residual_resources`（instance/os_module）与 `cleanup_failed/Cleanup`；重复 close 返回缓存；析构只在未 close 时执行一次同样清理且不抛异常。
+- fixture 加载器：`tests/support/rhi_fixture/FixtureLoader.cpp` 编成 `ar_rhi_fixture.dll`，只导出 `vkGetInstanceProcAddr`，按 `AR_RHI_FIXTURE_SPEC`（`loader=`、`loader-variant=`、`device=`、`create=`、`devices=`、`enumerate=`、`instance-ext=`、`device-ext=`、`destroy=`、`heap=`）回答入口点。测试经 `ExplicitLoaderPath` 指向该 DLL，路径由可执行文件目录推出，不写死绝对路径。**它不是产品加载器**，只用于负向与边界用例。
+- rhi 级必需用例（16 个）：`rhi-request-validation`、`rhi-loader-unavailable`、`rhi-loader-symbol-missing`、`rhi-device-none`、`rhi-device-index-out-of-range`、`rhi-api-version-unsupported`、`rhi-api-variant-unsupported`、`rhi-instance-incompatible`、`rhi-instance-init-failed`、`rhi-extension-query-failed`、`rhi-device-extension-query-failed`、`rhi-enumeration-incomplete`、`rhi-device-version-insufficient`、`rhi-descriptor-heap-present`、`rhi-cleanup-instance-retained`、`rhi-repeat-close`。另有隐藏用例 `[.][rhi-system]` 走真实系统加载器与本机 GPU，不作为必需 CTest。
 
 已知差异与剩余项（不得据此宣称 2.3 完成）：
 
-- QueryConfig 增加 equiredDeviceExtensions（用于 equired_capabilities_supported 判定）；这是公开候选接口之外的新增字段，需要用户确认后固化。
-- 报告不含 mode/equirement_profile/schema_version/un_id/uild_id：这些由 runtime 在编码 capability_json 时补齐，rhi 只报告事实。
-- eport() 在 close 后仍返回引用（契约要求失效）；待 runtime 自有快照落地时一并收口，当前以接口前置条件约束调用方。
-- 未实现：进程隔离/quarantine 标志与 quarantine-reopen、可注入 fixture loader（device-none/device-index-invalid/cleanup-failure/cleanup-empty/epeat-close 需要它）、kDestroyInstance 失败不可观测（void 返回，只能报告卸库失败）。
-- 真实系统查询在本机（RTX 4060 Laptop，device API 1.3）为隐藏用例 [rhi-system]，不作为必需 CTest：报告 pi_version_supported=false、product_target_supported=false，descriptor_heap=unsupported。
+- `QueryConfig` 增加 `requiredDeviceExtensions`（用于 `required_capabilities_supported` 判定）；这是公开候选接口之外的新增字段，需要用户确认后固化。
+- 报告不含 `mode`/`requirement_profile`/`schema_version`/`run_id`/`build_id`：这些由 runtime 在编码 `capability_json` 时补齐，rhi 只报告事实。
+- `report()` 在 close 后仍返回引用（契约要求失效）；待 runtime 自有快照落地时一并收口，当前以接口前置条件约束调用方。
+- 未实现：进程隔离/quarantine 标志与 quarantine-reopen、`capability_json` 编码（属 runtime）；`vkDestroyInstance` 失败不可观测（void 返回，只能报告卸库失败）；`cleanup-empty` 的 runtime 语义（无 instance 的会话）留待 2.1。
+- 真实系统查询在本机（RTX 4060 Laptop，device API 1.3）为：`api_version_supported=false`、`product_target_supported=false`、`descriptor_heap=unsupported`。

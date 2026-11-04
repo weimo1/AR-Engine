@@ -279,4 +279,4 @@ runtime-cleanup-failure单独使用“已持有instance但对应销毁入口不�
 
 ## 影响与验收依据
 
-主责为P0跨模块基础工程，长期入口为[core](../../../docs/modules/core/README.md)、[rhi](../../../docs/modules/rhi/README.md)、[runtime](../../../docs/modules/runtime/README.md)。规划阶段只修改规划、派生spec和导航；实现阶段已按用户指令落盘 1.1/1.2/2.2 与 3.2，以及 2.3 的 rhi 基础切片（loader/instance/枚举/报告/幂等 close，公开头与 3 个 rhi 用例），quarantine 与 fixture loader 用例仍待实现，2.3 未勾选。检查映射见[test-plan](test-plan.md)，接口机制及取舍见[design](design.md)。独立方案复核和用户对新增关键差异的确认之后再交实现者；不自动执行Git/付费调用。
+主责为P0跨模块基础工程，长期入口为[core](../../../docs/modules/core/README.md)、[rhi](../../../docs/modules/rhi/README.md)、[runtime](../../../docs/modules/runtime/README.md)。规划阶段只修改规划、派生spec和导航；实现阶段已按用户指令落盘 1.1/1.2/2.2 与 3.2，以及 2.3 的 rhi 基础切片（loader/instance/枚举/报告/幂等 close，公开头与 16 个 rhi 用例，两配置各 28/28 含 fixture 驱动的负向用例），quarantine 进程隔离与 `report()` 失效语义仍待实现，2.3 未勾选。检查映射见[test-plan](test-plan.md)，接口机制及取舍见[design](design.md)。独立方案复核和用户对新增关键差异的确认之后再交实现者；不自动执行Git/付费调用。
