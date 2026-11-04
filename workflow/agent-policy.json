@@ -58,6 +58,12 @@
       "basis": "技能采用与授权边界"
     },
     {
+      "path": "docs/workflow/文档体系与确认机制.md",
+      "purpose": "standard",
+      "status": "confirmed",
+      "basis": "已有文档单源与确认边界；本次用户授权落实任务依据连接"
+    },
+    {
       "path": "docs/standards/Git提交信息规范.md",
       "purpose": "execution",
       "status": "confirmed",
@@ -87,7 +93,7 @@
       "path": "docs/standards/C++目录命名与格式规范.md",
       "purpose": "standard",
       "status": "confirmed",
-      "basis": "已确认修订 1"
+      "basis": "已确认目录/格式约定及用户后续明确修订，以规范现行确认范围为准"
     },
     {
       "path": "docs/standards/C++类型接口与资源生命周期规范.md",

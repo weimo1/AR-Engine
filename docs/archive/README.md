@@ -14,3 +14,5 @@
 | [GameEngineDoc](2026-10-19/references/GameEngineDoc.md) | 他人的游戏引擎方案 | 只作参考，不是本项目指令 |
 
 迁移明细与整理前内容摘要见 [manifest.json](2026-10-19/manifest.json)。旧目录不保留重复占位文档，所有入站和出站 Markdown 链接同步调整。已确认 ADR 与有效规范继续留在当前目录，未删除确认记录。
+
+2026-10-21 补充：[工作流建设状态历史](2026-10-21/discussions/工作流建设状态历史-2026-10-21.md) 保存本次整理前的完整清单；[通用 Agent 规则原稿](2026-10-21/references/agent-skills-AGENTS.md) 保存导入来源。两者均仅供追溯，现行状态和执行规则以当前入口为准。

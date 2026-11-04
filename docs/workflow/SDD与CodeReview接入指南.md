@@ -1,8 +1,12 @@
 # SDD 与 Code Review 接入指南
 
-多 Agent 的任务依据、角色包和串行交接见 [协作与上下文](多Agent协作与上下文.md)。任务级审查绑定当前 change 的冻结规划与适用 Skills；无任务通用检查不冒充需求符合性验收。agent-pack 不自动启动模型；显式 dsh-run 下发执行见 [DSH 接入](DSH直接执行接入指南.md)。新提交遵循 [提交信息规范](../standards/Git提交信息规范.md)，commit-msg 与暂存检查均不调用模型。
+接手已有任务先运行 `python scripts/workflow.py relay <change-id> --format markdown`，查看当前输入、最近交接、有效证据和下一角色；该命令只读，不发模型请求、不自动推进任务状态。新角色包自动携带接力信息；显式 `--from-handoff` 用法及旧记录限制见 [协作指南](多Agent协作与上下文.md#接力入口先看当前输入与下一棒)。
 
-更新：2026-10-21。状态：本地执行链仍为试运行；既有提交的 Actions 已实跑成功，本批多 Agent/DSH/提交信息变更不继承旧批准，须核对对应输入的任务记录及提交/Actions。远程保护未启用；当前任务是否通过以当前输入验证、独立审查和 gate 为准。
+2026-11-03 当前手工方式：用户安排单人写入，直接交办后核对文件、执行、按影响检查并报告结果即可。无需写包、writer 权限登记、领取/释放、冻结包、正式审查导入或流程 gate。独立 Review 按任务需要及用户安排执行，读取明确版本的方案/差异。本文保留的 start/verify/review/gate、OCR 和角色包命令均为可选工具说明，不是手工工作的审批链；工具失败或历史 stale/blocked 不自动阻止已交办的手工修改或只读审查。
+
+协作见 [协作与上下文](多Agent协作与上下文.md)。主动选择 SDK/自动化证据链时，工具自身仍执行快照、锁和数据校验，不改写历史结果或强行绕过正在运行的进程；显式 dsh-run 见 [DSH 接入](DSH直接执行接入指南.md)。新提交遵循 [提交信息规范](../standards/Git提交信息规范.md)，commit-msg 与暂存检查均不调用模型。
+
+历史工具状态（2026-10-21）：本地自动化链试运行，Actions 对既有提交实跑成功，远程保护未启用。手工工作的完成情况以实际输入、适用检查和未完成项判断；不能把旧 Actions、历史 gate 或取消流程 gate 说成当前测试通过。
 
 ## 各工具负责什么
 
@@ -120,6 +124,12 @@ SSH 复用已有用户密钥；`ssh -T git@github.com` 已认证为 `weimo1`。G
 
 早期接入时（首次发布前），`git ls-remote origin` 已通过 SSH 认证，当时尚无分支引用。此段保留初次连接事实；当前已有 main 与正式发布，实际提交和 Actions 见当前状态，不能用此历史记录判断现在的远程状态。模型连接与工具调用测试同样不代表 OCR 的缺陷检出效果已经评估通过。
 
+## 手工执行无需领取写包（2026-10-30）
+
+用户直接指令已明确目标、范围和验收时，执行者核对当前源码及无并发写入后即可修改，不必先运行 agent-pack、agent-accept 或等待统筹再次授权。完成后留下实际差异、检查及未完成项。普通修改无需为领包另开 change；新能力的方案和验收仍按现有 OpenSpec 规则准备。
+
+2026-11-03 起，包生成、交接、冻结、导入和 gate 全部按需使用，不构成手工权限或交付前置。无需因历史 writer/task 状态回统筹申请释放；不删除或篡改这些记录，不接管真实运行的进程。构建、测试及设备能力的技术要求继续按任务方案执行。
+
 ## 归档与后续接入
 
 当前 `complete-local-workflow` 记录执行链补齐，`bootstrap-sdd-review` 保留早期接入记录；两者不是同一批验收输入。实现、验证和独立审查完成前保持在 `changes/`，`openspec/specs/` 不预填引擎愿景。归档要先核对实际任务、有效验证、用户确认范围与独立审查；OpenSpec 本身不会替项目完成这些检查，不应提前执行 sync-specs。
@@ -127,14 +137,14 @@ SSH 复用已有用户密钥；`ssh -T git@github.com` 已认证为 `weimo1`。G
 后续顺序：
 
 1. 收敛总体模块、RHI、生命周期方案，创建首个引擎基础工程变更，接入真实 CMake/CTest/Shader 命令。
-2. 用户仓库 `git@github.com:weimo1/AR-Engine.git` 已通过 SSH 认证与读取验证；既有基线已发布；本次新增内容仍须完成对应检查、独立审查和 gate 后再提交推送。
+2. 用户仓库 `git@github.com:weimo1/AR-Engine.git` 已通过 SSH 认证与读取验证；既有基线已发布；新增内容按实际影响检查、按需独立审查，提交推送按实际授权处理，无需流程 gate。
 3. 先接共享确定性检查与 CI，再配置受信结果来源、主分支保护和独立审查发布身份；本地脚本不能替代它们。
 4. 用受控样本评估 OCR 的缺陷检出、误报、漏报和成本后，再决定它能否承担必需审查执行器；当前仅试运行。
 5. 渲染程序建好后接真实 GPU 检查；没有引擎源码、支持设备或工具时记录未就绪。
 
 本地 hook 和任务执行器已实现；`.github/workflows/workflow-checks.yml` 已为历史提交实跑成功，新增输入需另核对其提交 SHA 的结果。分支保护、自动合并、长期驻留调度器与真实引擎验收仍未启用。
 
-## 任务执行、恢复与提交
+## 可选自动化任务执行、恢复与提交
 
 ```powershell
 python scripts/workflow.py install-hooks
@@ -188,7 +198,7 @@ direct-api 使用上述 `deepseek-flash`、thinking enabled、High。当前工�
 
 ### 完整审查中的误报复核
 
-仅对完整 direct-api 结果使用；失败、截断、缺覆盖的原审查仍需完成，不能借复核放行。证据链已实现，离线回归和小样本真实 API 联调已通过，具体范围见 [当前状态](当前决策与待办清单.md#真实-api-联调2026-10-20)。完整项目复审仍未通过，联调结束后没有后台付费调用。
+仅对完整 direct-api 结果使用；失败、截断、缺覆盖的原审查仍需完成，不能借复核放行。证据链已实现，离线回归和小样本真实 API 联调已通过，具体范围见 [历史联调记录](../archive/2026-10-21/discussions/工作流建设状态历史-2026-10-21.md#真实-api-联调2026-10-20)。该段记录小样本联调，不代表当前输入批准；后续完整复审与交付事实见 [当前状态](当前决策与待办清单.md)。
 
 ```powershell
 # 离线导出稳定 ID 和模板；复制模板填写反证，保留原文和 ID
@@ -208,7 +218,7 @@ python scripts/workflow.py gate <change-id>
 
 旧流程设计、普通模板和讨论沿革见 [历史归档](../archive/README.md)，当前操作只维护于本指南；文档归档与 OpenSpec 能力归档是两回事。
 
-2026-10-20 继续完善现有工作流时，先读 [后续完善交接](AI工作流后续完善交接-2026-10-20.md)。此前付费审查已停止；先离线核对当前输入与剩余事项，不因恢复任务或剩余历史预算自动再次调用模型。
+恢复任务先读 [当前状态](当前决策与待办清单.md)，核对当前输入、任务记录和适用授权。[2026-10-20 交接](AI工作流后续完善交接-2026-10-20.md) 仅供追溯，不因恢复任务或剩余历史预算自动再次调用模型。
 
 服务器审查缓存采用 `cache-mode: read` 和 `actions/cache/restore`，不在 pull_request_target 中发布 PR 证据缓存。GitHub 按 ref 隔离缓存，普通 PR 的 merge-ref 缓存不能由 main 恢复，见 [官方缓存边界](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)。当前没有部署可信服务器缓存写入器，因此服务器缺缓存时正常审查，不宣称跨 PR 复用已验证；本地单元复用仍由实际请求身份严格核验。
 
@@ -220,7 +230,7 @@ python scripts/workflow.py gate <change-id>
 
 用户已同意保留测试并精简流程；review_policy_version=2 仅改变新包，历史包按冻结策略核验。本轮不恢复此前百万级模型调用，不宣布当前建设已通过独立复审。
 
-日常路线：开发时按影响检查 → 最终输入 verify 一次 → review-plan 预览 → 显式不超过 100000 tokens/600 秒的 review → 必要的同轮 finding 裁决 → gate → 快速提交检查 → 推送后 CI 全量检查。不默认在本地先手动 ci 再重复 verify。当前新回归用于验证精简边界，不删除既有测试。
+当前手工路线：明确任务 → 实现 → 按影响检查 → 报告结果；Review、提交及 CI 按任务需要和实际授权安排。下面的 verify/review/finding/gate 为选择自动化审查链时的工具说明，不要求普通任务逐项执行，不删除既有测试。
 
 上下文保留全部模型目标文件及任务依据；Python 仅带直接本地导入、直接调用方和明确路径引用，context.json 可用 review_paths 指定额外源文件。未知动态导入或超限先拒绝，不能截去内容冒充覆盖；此分析不等于完整程序调用图，原生头文件和其他动态关系需要方案声明补充。
 
@@ -231,7 +241,7 @@ python scripts/workflow.py gate <change-id>
 
 ## 独立 Codex 上下文的收尾审查
 
-大批历史累计输入不适合重复付费重跑时，可以由统筹实际启动全新只读审查上下文，使用 agent-pack 分配具体目标。先 verify 当前 workspace 输入；审查者读取 packet 的冻结源码、差异和当前任务依据，并写 ar.independent-context/v1 原始 JSON：fingerprint、assignment、reviewer、independent_context=true、status=complete、reviewed_files、findings。每条意见包含 path/line/level/content；不得提交自行 resolved 的意见。审查者返回后，统筹核实上下文、覆盖和原始结果，agent-handoff 记录真实结果及证据路径。
+手工独立审查可直接指定明确版本的方案/差异与范围，返回原始意见和实际覆盖，不要求先 verify、agent-pack、agent-handoff 或生成 JSON。若主动选择既有结构化导入工具，才使用其完整自动化链：verify 当前 workspace，独立上下文读取冻结源码与依据，生成 ar.independent-context/v1 原始 JSON，并按工具要求核对身份、覆盖、结果及交接。这些技术格式不构成手工 Review 的前置。
 
 ```powershell
 python scripts/workflow.py review-context simplify-workflow-review --coordinator /root --evidence .ar-workflow/agents/<id>/review.json
@@ -239,3 +249,12 @@ python scripts/workflow.py gate simplify-workflow-review
 ```
 
 多个证据路径接在 --evidence 后；合并覆盖必须完整，任一意见阻断本轮通过。导入不会启动模型、不会补造遗漏的审查、不会消除旧意见，不能把实现者自己写的 JSON 当独立审查。gate 从保留的原始审查和角色交接快照重算；本机记录仍不是远程身份认证。当前角色包绑定 workspace 字节与索引，导入使用匹配的 workspace 任务；不要在审查期间改源码或暂存选择。修改后必须准备新输入并重审。日常小任务仍可使用预算内 Flash/High API。
+
+
+## Token 用量记录
+
+- 每个对话在任务完成、交接或主动停止前，由主 Agent 从项目根目录串行执行 `python .ar-workflow/update-token-usage.py`，更新 `.ar-workflow/AI-token用量统计.txt` 和对应 JSON 明细。子 Agent 不并发写统计文件；有可用的会话或请求身份时随交接提供，由主 Agent 统一汇总。
+- 用量只依据实际会话计数、原始响应 usage 或可追溯的原生会话汇总。相同会话的累计计数只取最新值，DeepSeek 按响应 ID 去重；缓存输入、推理输出与继承的会话历史不得重复相加。无法区分父子 Agent 独立消耗时明确标为未拆分，不伪造明细。
+- 失败、截断及重试中已返回的实际 usage 也应计入；中断无响应、记录丢失、口径冲突或来源不完整时标记未知/缺口，不按零处理，不用估算冒充实际消耗。不同来源不能确认无重叠时单列，不强行合并。
+- 统计只离线读取用量记录，不为统计调用模型，不读取或导出凭据，不将会话正文写入报表。Codex token 计数不等于订阅费用或五小时额度，DeepSeek 本地统计不替代供应商账单。
+- 脚本及报表目前是本机 `.ar-workflow/` 中的忽略文件，不自动提交或推送。新环境缺少脚本、记录不可访问或统计失败时，交接中说明具体缺口；不因此安装全局工具、修改原始证据或阻塞其他已授权工作。

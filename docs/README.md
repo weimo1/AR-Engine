@@ -1,20 +1,23 @@
 # AR Engine 文档索引
 
-更新：2026-10-20。当前文档、调研和历史资料分开维护；归档不改变已确认决定，也不把草案升级为规范。
+更新：2026-11-03。当前文档、调研和历史资料分开维护；归档不改变已确认决定，也不把草案升级为规范。
 
 ## 开始阅读
 
 | 想了解什么 | 入口 |
 | --- | --- |
 | 项目做什么 | [渲染引擎需求](../渲染引擎需求.txt) |
-| 模块与技术路线 | [总体架构](总体架构与技术路线.md)：基础选型已定，第 13 节集中维护首版实施提案及待确认边界 |
+| 模块与技术路线 | [总体架构](总体架构与技术路线.md)：基础选型已定，第13节记录本轮RHI、scene/render、视图缓存与诊断性能局部确认，其他提案仍待确认 |
+| 按什么顺序设计和实现 | [实施路线与阶段计划](实施路线与阶段计划.md)：P0—P7 纵切拆分建议；当前先不做独立 Probe，P0 契约和 core 最小技术方案已修订为待确认稿，下一项为审阅新增差异 |
 | 已确定的技术选择 | [ADR 目录](adr/) |
 | 如何开始开发、检查和审查 | [SDD 与 Code Review 指南](workflow/SDD与CodeReview接入指南.md) |
-| 多 Agent 如何分工和交接 | [角色任务包与上下文](workflow/多Agent协作与上下文.md)：共享依据、独立角色、单工作区 writer |
-| 如何直接交给 DSH 执行 | [DSH SDK 接入](workflow/DSH直接执行接入指南.md)：专属进程、任务包、日志和用量 |
+| 多 Agent 如何分工和交接 | [协作与上下文](workflow/多Agent协作与上下文.md)：用户安排单人写入、直接指令执行，无强制权限登记或流程 gate |
+| 新对话如何开始 | [各角色开场提示词](workflow/多Agent对话启动提示词.md)：公共开场加具体任务说明，按直接指令执行；自动化快照按需使用 |
+| 如何直接交给 DSH 执行 | [DSH SDK 接入](workflow/DSH直接执行接入指南.md)：专属进程、内部输入快照、日志和用量 |
+| P0 基础工程方案 | [技术方案与待确认项](../openspec/changes/bootstrap-engine-p0/design.md)、[范围与验收](../openspec/changes/bootstrap-engine-p0/proposal.md)：静态模块、固定C++23preview和动态CRT沿用；先不做独立Probe，改由CTest调用；core接口/预算及替代测试方式待确认，未实施 |
 | 当前进展和缺口 | [当前决策与待办](workflow/当前决策与待办清单.md) |
-| 让其他对话继续完善 AI 工作流 | [后续完善交接](workflow/AI工作流后续完善交接-2026-10-20.md)；不默认恢复付费审查 |
 | 如何维护文档和确认边界 | [文档体系与确认机制](workflow/文档体系与确认机制.md) |
+| 按模块查设计和功能任务 | [模块文档](modules/README.md)、[模块与变更索引](workflow/模块与变更索引.md)：模块、change、步骤和角色包分层定位 |
 | 过去的讨论和旧模板 | [历史归档](archive/README.md) |
 
 项目仓库：[weimo1/AR-Engine](https://github.com/weimo1/AR-Engine)，本地 origin 使用用户给定的 SSH 地址。
@@ -38,7 +41,7 @@
 | 文档 | 确认范围 |
 | --- | --- |
 | [AI 任务规则](standards/AI任务执行规则.md)、[技能约束](standards/AI技能约束.md) | 有效任务协议与技能边界 |
-| [C++ 目录与格式](standards/C++目录命名与格式规范.md)、[类型与生命周期](standards/C++类型接口与资源生命周期规范.md) | 修订 1 已确认，实际模块实现后续建设 |
+| [C++ 目录与格式](standards/C++目录命名与格式规范.md)、[类型与生命周期](standards/C++类型接口与资源生命周期规范.md) | 目录规范修订2已确认，取消公开头ar路径层；类型规范按原确认范围执行 |
 | [数学、坐标与颜色](standards/数学坐标与颜色规范.md) | Flower 对应约定按文中确认范围执行 |
 | [错误、异常与日志](standards/错误异常断言与日志规范.md) | spdlog/诊断方向已定；错误策略仍有草案 |
 | [Shader 与数据契约](standards/Shader编译与数据契约规范.md) | 语言/工具已选；详细编译工作方式仍为草案 |
@@ -52,7 +55,7 @@
 
 ## 变更、技能与参考
 
-- `openspec/changes/`：在途变更；proposal 是行为与验收编辑源，specs 由工具派生。实际模板只维护于 `openspec/schemas/ar-engine/`。
+- `openspec/changes/`：在途变更；proposal 是行为与验收编辑源，specs 由工具派生。实际 SDD 模板只维护于 `openspec/schemas/ar-engine/`；长期模块设计单独使用 [模块模板](modules/模块设计模板.md)。
 - `openspec/specs/`：已验收归档的能力，不预填引擎愿景。
 - [技能安装记录](workflow/技能安装与适配记录.md) / [来源清单](workflow/技能采用清单.json)：七项 ar-* 技能；OpenSpec 生成技能由框架维护。
 - [Flower Shader 调研](research/Flower-Shader编译与宏机制调研.md)、[公开 Shader 方案](research/Shader编译与变体公开方案对照.md)。

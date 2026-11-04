@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "objective": "整理并收口2026-10-23/24/26实际架构对话A1—A6、B1—B4、C1—C5确认记录及文档维护契约，修复2026-10-27只读预审指出的范围/依据/状态/职责一致性问题；不实施引擎，不修改P0；本轮按bbd7任务核对实际修复授权，R1—R4仅为architect建议、待用户确认，纠正SHALL升级及runtime残留措辞",
+  "non_goals": [
+    "不写代码或扩大P0实施范围",
+    "不自行批准缺失的具体架构决定",
+    "不做资产详细设计",
+    "不修改工作流工具、ADR或技能",
+    "不调用付费模型、不提交推送"
+  ],
+  "tags": [],
+  "documents": [
+    {
+      "path": "docs/workflow/模块与变更索引.md",
+      "purpose": "index",
+      "status": "reference",
+      "basis": "按模块定位，不以索引授予批准"
+    },
+    {
+      "path": "docs/workflow/当前决策与待办清单.md",
+      "purpose": "state",
+      "status": "reference",
+      "basis": "当前记录与设备限制，不代表新架构已逐项落文"
+    },
+    {
+      "path": "docs/modules/README.md",
+      "purpose": "index",
+      "status": "reference",
+      "basis": "模块文档入口"
+    },
+    {
+      "path": "docs/modules/模块设计模板.md",
+      "purpose": "template",
+      "status": "reference",
+      "basis": "按本轮实际范围组织文档"
+    },
+    {
+      "path": "docs/modules/core/README.md",
+      "purpose": "module",
+      "status": "reference",
+      "basis": "现有职责入口，按本轮实际确认范围调整"
+    },
+    {
+      "path": "docs/modules/rhi/README.md",
+      "purpose": "module",
+      "status": "reference",
+      "basis": "现有职责入口，按本轮实际确认范围调整"
+    },
+    {
+      "path": "docs/modules/runtime/README.md",
+      "purpose": "module",
+      "status": "reference",
+      "basis": "现有职责入口，按本轮实际确认范围调整"
+    },
+    {
+      "path": "openspec/changes/bootstrap-engine-p0/proposal.md",
+      "purpose": "scope-reference",
+      "status": "reference",
+      "basis": "仅核对P0范围隔离，不修改或复用其任务身份"
+    },
+    {
+      "path": "docs/总体架构与技术路线.md",
+      "purpose": "architecture",
+      "status": "reference",
+      "basis": "包含未确认方案，不能作为全文批准"
+    },
+    {
+      "path": "docs/modules/scene/README.md",
+      "purpose": "module",
+      "status": "reference",
+      "basis": "A2/A4原scene权威与render派生边界；R2具体字段归属为建议待用户确认"
+    },
+    {
+      "path": "docs/modules/render/README.md",
+      "purpose": "module",
+      "status": "reference",
+      "basis": "A/B/C原确认范围；R1—R4细化建议待用户确认，不从入口声明产生批准"
+    },
+    {
+      "path": "openspec/changes/architecture-record-confirmed-boundaries/specs/architecture-decision-documentation/spec.md",
+      "purpose": "derived-contract",
+      "status": "task",
+      "basis": "由本proposal文档维护契约derive派生；仅约束文档产物，不代表引擎功能验收"
+    }
+  ],
+  "skills": [
+    "ar-cpp-oop-style"
+  ],
+  "write_paths": [
+    "docs/总体架构与技术路线.md",
+    "docs/modules/README.md",
+    "docs/modules/core/README.md",
+    "docs/modules/rhi/README.md",
+    "docs/modules/runtime/README.md",
+    "docs/modules/scene/README.md",
+    "docs/modules/render/README.md",
+    "docs/README.md",
+    "docs/workflow/当前决策与待办清单.md",
+    "docs/workflow/模块与变更索引.md",
+    "openspec/changes/architecture-record-confirmed-boundaries/tasks.md",
+    "openspec/changes/architecture-record-confirmed-boundaries/proposal.md",
+    "openspec/changes/architecture-record-confirmed-boundaries/design.md",
+    "openspec/changes/architecture-record-confirmed-boundaries/test-plan.md",
+    "openspec/changes/architecture-record-confirmed-boundaries/context.json",
+    "openspec/changes/architecture-record-confirmed-boundaries/specs/architecture-decision-documentation/spec.md"
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "objective": "连接角色交接、当前输入与变更状态，生成可核对的下一棒摘要并绑定后续角色任务包",
+  "non_goals": [
+    "不批准或修改引擎/P0/架构方案",
+    "不自动调用模型、测试、Git或发送消息",
+    "不重置预算或降低 gate",
+    "不创建第二套人工状态数据库"
+  ],
+  "tags": [
+    "integration"
+  ],
+  "documents": [],
+  "skills": [],
+  "write_paths": [
+    "scripts/workflow.py",
+    "scripts/workflow_agents.py",
+    "scripts/workflow_runtime.py",
+    "scripts/workflow_relay.py",
+    "scripts/tests/test_workflow_relay.py",
+    "docs/workflow/多Agent协作与上下文.md",
+    "docs/workflow/多Agent对话启动提示词.md",
+    "docs/workflow/SDD与CodeReview接入指南.md",
+    "openspec/changes/workflow-connect-handoff-state/*",
+    "docs/workflow/模块与变更索引.md"
+  ]
+}
