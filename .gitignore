@@ -21,6 +21,7 @@ out/
 .vs/
 *.user
 *.suo
+CppProperties.json
 
 # Owned test output
 scripts/tests/.tmp/
