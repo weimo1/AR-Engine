@@ -239,7 +239,10 @@
         "report-unwritable",
         "core-flush-failure",
         "public-headers",
-        "build-identity"
+        "build-identity",
+        "rhi-request-validation",
+        "rhi-loader-unavailable",
+        "rhi-loader-symbol-missing"
       ]
     },
     {
@@ -449,7 +452,10 @@
         "report-unwritable",
         "core-flush-failure",
         "public-headers",
-        "build-identity"
+        "build-identity",
+        "rhi-request-validation",
+        "rhi-loader-unavailable",
+        "rhi-loader-symbol-missing"
       ]
     },
     {

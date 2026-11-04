@@ -60,7 +60,7 @@ finish时flush失败还应有可控sink故障覆盖；测试私有适配只在co
 | 模式边界 | inspect在device1.3.289完整查询时success但product=false；require_product同设备unsupported；development显式1.3 success；mode/requested_api不符invalid_arguments |
 | build-identity | 正常身份；旧EXE、错配置、改源未重建、缺/陈旧sidecar、triplet/CRT不符都拒绝；revision未知不猜clean |
 
-真实system查询没有跑到时，记录未运行/失败而非用fixture补通过。所有P0 Vulkan用例串行，不重叠使用volk全局状态。后续P1再定义CLI、应用退出、有限帧、resize、Validation及截图验收，不在本P0偷偷恢复Probe。
+2026-11-05 rhi 基础切片另有 3 个 rhi 级用例：hi-request-validation（variant 非零/空显式路径在加载前拒绝）、hi-loader-unavailable（显式路径指向不存在文件）、hi-loader-symbol-missing（真实 DLL 缺 vkGetInstanceProcAddr）。它们只证明加载路径与请求校验，**不能替代**上表的 runtime-*、device-*/cleanup-*/quarantine-*/repeat-close 用例，后者仍须经 runtime 公共入口或可注入 fixture loader 覆盖。真实system查询没有跑到时，记录未运行/失败而非用fixture补通过。所有P0 Vulkan用例串行，不重叠使用volk全局状态。后续P1再定义CLI、应用退出、有限帧、resize、Validation及截图验收，不在本P0偷偷恢复Probe。
 
 ## 5. Harness与云端限制
 

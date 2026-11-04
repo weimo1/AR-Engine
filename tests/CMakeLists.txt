@@ -57,14 +57,38 @@ foreach(case IN LISTS AR_REQUIRED_CORE_CASES)
     )
 endforeach()
 
+set(AR_REQUIRED_RHI_CASES
+    rhi-request-validation
+    rhi-loader-unavailable
+    rhi-loader-symbol-missing
+)
+
+add_executable(ar_rhi_tests
+    rhi/test_rhi_session.cpp
+)
+target_link_libraries(ar_rhi_tests
+    PRIVATE
+        ar_rhi
+        Catch2::Catch2WithMain
+)
+foreach(case IN LISTS AR_REQUIRED_RHI_CASES)
+    add_test(NAME ${case} COMMAND ar_rhi_tests "[${case}]")
+    set_tests_properties(${case} PROPERTIES
+        ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
+    )
+endforeach()
+
 # Each translation unit below includes exactly one public header, so a successful compile is
 # the self-containment proof. The test only asserts the objects for this configuration exist.
 add_library(ar_public_header_probe OBJECT
     public_headers/header_error.cpp
     public_headers/header_build_info.cpp
     public_headers/header_diagnostics.cpp
+    public_headers/header_rhi_loader_source.cpp
+    public_headers/header_rhi_capabilities.cpp
+    public_headers/header_rhi_session.cpp
 )
-target_link_libraries(ar_public_header_probe PRIVATE ar_core)
+target_link_libraries(ar_public_header_probe PRIVATE ar_core ar_rhi)
 add_test(NAME public-headers
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/check_public_headers.py"
         --search-root "${CMAKE_CURRENT_BINARY_DIR}"

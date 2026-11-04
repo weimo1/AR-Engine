@@ -1,4 +1,4 @@
-"""Verifies that each public ar_core header compiled on its own.
+"""Verifies that each public ar_core / ar_rhi header compiled on its own.
 
 The compile happens in the ar_public_header_probe object library; this check asserts that the
 objects for the current configuration exist, which is only possible if every translation unit
@@ -11,7 +11,14 @@ import argparse
 import sys
 from pathlib import Path
 
-EXPECTED_STEMS = ("header_error", "header_build_info", "header_diagnostics")
+EXPECTED_STEMS = (
+    "header_error",
+    "header_build_info",
+    "header_diagnostics",
+    "header_rhi_loader_source",
+    "header_rhi_capabilities",
+    "header_rhi_session",
+)
 
 
 def main(argv: list[str]) -> int:

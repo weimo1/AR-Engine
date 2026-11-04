@@ -2,7 +2,7 @@
 
 P0技术方案修订：3，2026-11-04。下列P0接口细化是候选，未实施、未获逐项确认；历史已确认边界继续有效。
 
-状态：图形底层模块目录与职责已确认；尚无引擎实现。本轮确认直接在rhi内实现薄Vulkan封装，不额外叠加通用后端层，不强制虚接口；具体接口与同步策略尚未确定。
+状态：图形底层模块目录与职责已确认；2026-11-05 落盘 rhi 基础切片（公开头 `LoaderSource.h`/`Capabilities.h`/`RhiSession.h`，loader/instance 所有权、枚举、报告与幂等 close，两配置 15/15 用例），quarantine 与可注入 fixture loader 用例仍未实现，详见文末实现状态。不额外叠加通用后端层，不强制虚接口。
 
 - 目录：engine/rhi/include/rhi、engine/rhi/src/vulkan；公开头不增加 ar 路径层。
 - 当前范围：P0 的 Vulkan 能力查询所需底层能力；窗口、交换链、绘制与 Shader 管线属于后续任务，不能混入 P0 验收。
@@ -104,3 +104,23 @@ closed表示API已终止，resources_released表示本会话资源已释放；�
 ## MF-02隔离检查承接（候选）
 
 open在本轮OS加载前检查隔离；拒绝使用initialization_failed、stage=cleanup/category=cleanup_failed，origin=internal/1表示quarantined_process。stage指先前cleanup故障来源，并非本轮执行cleanup。无新会话、无close，加载/volk初始化/instance创建计数0；本次resources_released=true、空残留/空cleanup_errors，既有隔离不清除。空清理是正常分支，不作故障注入。精确事实以P0 proposal为准。
+
+## 2026-11-05 实现状态（rhi 基础切片）
+
+已落盘并两配置验证（Debug/RelWithDebInfo 各 15/15 CTest，/std:c++23preview、/MDd|/MD、0 warning）：
+
+- 公开头：engine/rhi/include/rhi/LoaderSource.h（System / ExplicitPath）、Capabilities.h（报告值数据，无 Vulkan/volk 类型）、RhiSession.h（QueryConfig、open、eport、close）。三个头各自独立编译（public-headers 用例）。
+- 共同加载路径：LoadLibraryW → GetProcAddress("vkGetInstanceProcAddr") → olkInitializeCustom → global 入口检查 → kCreateInstance → olkLoadInstance。加载失败 loader_unavailable/Loader（origin=os），入口缺失 loader_symbol_missing/Loader。
+- 版本与 variant：loader 版本用 kEnumerateInstanceVersion（缺符号时按 1.0）；loader 低于请求版本 → pi_version_unsupported/Instance 且 instance_create.status=not_attempted；非零 variant → pi_variant_unsupported/Instance。
+- 枚举：VK_INCOMPLETE 最多 3 次循环后 query_failed/Enumeration；无设备 device_not_found/Enumeration 且保留部分报告；ExplicitDeviceIndex 越界 invalid_arguments/Enumeration，不换设备；FirstEnumerated 取枚举顺序第一台。
+- 报告：loader/device API、pi_variants、instance_create、实例/设备扩展查询状态与列表、capability_source、ariant_supported、effective_api、judgments{api_version_supported,required_capabilities_supported}、product_target_supported、device_name/driver_version、descriptor_heap（VK_EXT_descriptor_heap 编译期存在时读 feature，否则 
+ot_queried）、enderer_runtime_validated 恒 false、esult/errors。
+- close：首次销毁 instance → olkFinalize → FreeLibrary，记录 esidual_resources（instance/os_module）与 cleanup_failed/Cleanup；重复 close 返回缓存；析构只在未 close 时执行一次同样清理且不抛异常。
+
+已知差异与剩余项（不得据此宣称 2.3 完成）：
+
+- QueryConfig 增加 equiredDeviceExtensions（用于 equired_capabilities_supported 判定）；这是公开候选接口之外的新增字段，需要用户确认后固化。
+- 报告不含 mode/equirement_profile/schema_version/un_id/uild_id：这些由 runtime 在编码 capability_json 时补齐，rhi 只报告事实。
+- eport() 在 close 后仍返回引用（契约要求失效）；待 runtime 自有快照落地时一并收口，当前以接口前置条件约束调用方。
+- 未实现：进程隔离/quarantine 标志与 quarantine-reopen、可注入 fixture loader（device-none/device-index-invalid/cleanup-failure/cleanup-empty/epeat-close 需要它）、kDestroyInstance 失败不可观测（void 返回，只能报告卸库失败）。
+- 真实系统查询在本机（RTX 4060 Laptop，device API 1.3）为隐藏用例 [rhi-system]，不作为必需 CTest：报告 pi_version_supported=false、product_target_supported=false，descriptor_heap=unsupported。

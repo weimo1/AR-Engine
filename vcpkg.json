@@ -6,6 +6,8 @@
   "dependencies": [
     "spdlog",
     "nlohmann-json",
-    "catch2"
+    "catch2",
+    "vulkan-headers",
+    "volk"
   ]
 }

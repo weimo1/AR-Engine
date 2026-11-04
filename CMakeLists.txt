@@ -83,6 +83,7 @@ include(ArBuildIdentity)
 ar_require_cxx23_preview()
 
 add_subdirectory(engine/core)
+add_subdirectory(engine/rhi)
 
 if(AR_BUILD_TESTS)
     enable_testing()

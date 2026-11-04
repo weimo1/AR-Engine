@@ -1,4 +1,4 @@
-<!-- Generated from proposal.md; source-sha256: b63a8995876fa1a52bb4fbdf450d315ba97ede5b0a31cda14f1fe51f57bd6b03. Do not edit. -->
+<!-- Generated from proposal.md; source-sha256: d8cfdd691bc023a15a3a9d9a56058927c518a9b8254383ff60c18277763a2afc. Do not edit. -->
 
 ## Purpose
 
