@@ -11,4 +11,8 @@
 *.hpp text eol=lf
 *.glsl text eol=lf
 
+# CMake inputs are hashed into the build identity, so checkout must not rewrite their bytes.
+*.cmake text eol=lf
+CMakeLists.txt text eol=lf
+
 .githooks/* text eol=lf

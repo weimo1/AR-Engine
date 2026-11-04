@@ -1,0 +1,90 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 2,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "win-vs2026-x64",
+      "displayName": "Visual Studio 2026 x64 (vcpkg x64-windows-static-md)",
+      "hidden": true,
+      "generator": "Visual Studio 18 2026",
+      "architecture": {
+        "value": "x64",
+        "strategy": "set"
+      },
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static-md",
+        "VCPKG_INSTALLED_DIR": "$env{AR_P0_DEPS}/installed",
+        "VCPKG_MANIFEST_INSTALL": "OFF",
+        "CMAKE_FIND_USE_PACKAGE_REGISTRY": "OFF",
+        "CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY": "OFF",
+        "CMAKE_EXPORT_NO_PACKAGE_REGISTRY": "ON",
+        "AR_ENABLE_TEST_HOOKS": "ON"
+      }
+    },
+    {
+      "name": "win-vs2026-debug",
+      "inherits": "win-vs2026-x64",
+      "displayName": "Debug",
+      "binaryDir": "${sourceDir}/build/Debug",
+      "cacheVariables": {
+        "AR_EXPECTED_CONFIGURATION": "Debug",
+        "AR_BUILD_IDENTITY_FILE": "${sourceDir}/build/identity/Debug/build-identity.json"
+      }
+    },
+    {
+      "name": "win-vs2026-relwithdebinfo",
+      "inherits": "win-vs2026-x64",
+      "displayName": "RelWithDebInfo",
+      "binaryDir": "${sourceDir}/build/RelWithDebInfo",
+      "cacheVariables": {
+        "AR_EXPECTED_CONFIGURATION": "RelWithDebInfo",
+        "AR_BUILD_IDENTITY_FILE": "${sourceDir}/build/identity/RelWithDebInfo/build-identity.json"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "win-vs2026-debug",
+      "configurePreset": "win-vs2026-debug",
+      "configuration": "Debug",
+      "jobs": 2
+    },
+    {
+      "name": "win-vs2026-relwithdebinfo",
+      "configurePreset": "win-vs2026-relwithdebinfo",
+      "configuration": "RelWithDebInfo",
+      "jobs": 2
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "win-vs2026-debug",
+      "configurePreset": "win-vs2026-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true,
+        "outputJUnitFile": "${sourceDir}/build/logs/p0-checks/ctest-Debug.xml"
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "win-vs2026-relwithdebinfo",
+      "configurePreset": "win-vs2026-relwithdebinfo",
+      "configuration": "RelWithDebInfo",
+      "output": {
+        "outputOnFailure": true,
+        "outputJUnitFile": "${sourceDir}/build/logs/p0-checks/ctest-RelWithDebInfo.xml"
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    }
+  ]
+}

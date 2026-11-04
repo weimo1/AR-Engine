@@ -1,0 +1,457 @@
+{
+  "schema_version": 1,
+  "output_root": "${OUT}",
+  "output_root_exception": {
+    "reason": "vcpkg 用自带 CMake 构建端口时，中文 TMP 或 buildtrees 路径报 D8050（2026-11-03 实证，见 .ar-workflow/p0-d8050-fix-20261103/README.md）。日常生成物已默认在 <repo>/build/；仅依赖安装树与 vcpkg 缓存/临时目录保留 ASCII 例外根。",
+    "path": "${DEPS}",
+    "scope": "installed（vcpkg 安装树）+ downloads/buildtrees/packages/tmp（vcpkg 工作目录）；不含 CMake 构建树、日志、身份记录",
+    "owner": "bootstrap-engine-p0 首批实现任务（2026-11-04）",
+    "reclamation": "独立审查与交付完成后，确认不再有任务引用该安装树与缓存，再删除整个例外根；删除前核对 build/ 与日志中是否仍有引用。依赖缓存可恢复但需要网络。"
+  },
+  "snapshot": "${REPO}",
+  "commands": [
+    {
+      "id": "toolchain-record",
+      "depends_on": [],
+      "cwd": "${REPO}",
+      "argv": [
+        "python",
+        "scripts/p0_build_identity.py",
+        "record-toolchain",
+        "--output",
+        "${OUT}/metadata/toolchain.json",
+        "--triplet",
+        "x64-windows-static-md"
+      ],
+      "timeout_seconds": 120,
+      "wrapper_exit": null,
+      "child_exit": null,
+      "parser_id": "json-toolchain",
+      "required": true,
+      "output_dir": "${OUT}/logs/p0-checks",
+      "expected_capability_source": null
+    },
+    {
+      "id": "dependencies-record",
+      "depends_on": [
+        "toolchain-record"
+      ],
+      "cwd": "${REPO}",
+      "argv": [
+        "python",
+        "scripts/p0_build_identity.py",
+        "record-dependencies",
+        "--snapshot",
+        "${REPO}",
+        "--output",
+        "${OUT}/metadata/dependencies.json",
+        "--install-root",
+        "${DEPS}/installed",
+        "--dependency-work-root",
+        "${DEPS}",
+        "--triplet",
+        "x64-windows-static-md"
+      ],
+      "timeout_seconds": 3600,
+      "wrapper_exit": null,
+      "child_exit": null,
+      "parser_id": "json-dependencies",
+      "required": true,
+      "output_dir": "${OUT}/logs/p0-checks",
+      "expected_capability_source": null
+    },
+    {
+      "id": "identity-Debug",
+      "depends_on": [
+        "dependencies-record"
+      ],
+      "cwd": "${REPO}",
+      "argv": [
+        "python",
+        "scripts/p0_build_identity.py",
+        "prepare",
+        "--snapshot",
+        "${REPO}",
+        "--output",
+        "${OUT}",
+        "--configuration",
+        "Debug",
+        "--toolchain-record",
+        "${OUT}/metadata/toolchain.json",
+        "--dependency-record",
+        "${OUT}/metadata/dependencies.json"
+      ],
+      "timeout_seconds": 300,
+      "wrapper_exit": null,
+      "child_exit": null,
+      "parser_id": "json-identity",
+      "required": true,
+      "output_dir": "${OUT}/logs/p0-checks",
+      "expected_capability_source": null
+    },
+    {
+      "id": "configure-Debug",
+      "depends_on": [
+        "identity-Debug"
+      ],
+      "cwd": "${REPO}",
+      "argv": [
+        "cmake",
+        "-S",
+        "${REPO}",
+        "-B",
+        "${OUT}/Debug",
+        "-G",
+        "Visual Studio 18 2026",
+        "-A",
+        "x64",
+        "-DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "-DVCPKG_TARGET_TRIPLET=x64-windows-static-md",
+        "-DVCPKG_INSTALLED_DIR=${DEPS}/installed",
+        "-DVCPKG_MANIFEST_INSTALL=OFF",
+        "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF",
+        "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF",
+        "-DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON",
+        "-DAR_EXPECTED_CONFIGURATION=Debug",
+        "-DAR_BUILD_IDENTITY_FILE=${OUT}/identity/Debug/build-identity.json",
+        "-DAR_ENABLE_TEST_HOOKS=ON"
+      ],
+      "timeout_seconds": 900,
+      "wrapper_exit": null,
+      "child_exit": null,
+      "parser_id": "cmake-configure",
+      "required": true,
+      "output_dir": "${OUT}/logs/p0-checks",
+      "expected_capability_source": null
+    },
+    {
+      "id": "identity-check-Debug",
+      "depends_on": [
+        "configure-Debug"
+      ],
+      "cwd": "${REPO}",
+      "argv": [
+        "python",
+        "scripts/p0_build_identity.py",
+        "check",
+        "--snapshot",
+        "${REPO}",
+        "--output",
+        "${OUT}",
+        "--configuration",
+        "Debug",
+        "--toolchain-record",
+        "${OUT}/metadata/toolchain.json",
+        "--dependency-record",
+        "${OUT}/metadata/dependencies.json"
+      ],
+      "timeout_seconds": 300,
+      "wrapper_exit": null,
+      "child_exit": null,
+      "parser_id": "json-identity",
+      "required": true,
+      "output_dir": "${OUT}/logs/p0-checks",
+      "expected_capability_source": null
+    },
+    {
+      "id": "build-Debug",
+      "depends_on": [
+        "identity-check-Debug"
+      ],
+      "cwd": "${REPO}",
+      "argv": [
+        "cmake",
+        "--build",
+        "${OUT}/Debug",
+        "--config",
+        "Debug",
+        "--parallel",
+        "2"
+      ],
+      "timeout_seconds": 1800,
+      "wrapper_exit": null,
+      "child_exit": null,
+      "parser_id": "msbuild-log",
+      "required": true,
+      "output_dir": "${OUT}/logs/p0-checks",
+      "expected_capability_source": null
+    },
+    {
+      "id": "clcmd-Debug",
+      "depends_on": [
+        "build-Debug"
+      ],
+      "cwd": "${REPO}",
+      "argv": [
+        "cmake",
+        "--build",
+        "${OUT}/Debug",
+        "--config",
+        "Debug",
+        "--parallel",
+        "2",
+        "--clean-first",
+        "--",
+        "/v:n"
+      ],
+      "timeout_seconds": 1800,
+      "wrapper_exit": null,
+      "child_exit": null,
+      "parser_id": "msbuild-cl",
+      "required": true,
+      "output_dir": "${OUT}/logs/p0-checks",
+      "expected_capability_source": null
+    },
+    {
+      "id": "ctest-Debug",
+      "depends_on": [
+        "clcmd-Debug"
+      ],
+      "cwd": "${REPO}",
+      "argv": [
+        "ctest",
+        "--test-dir",
+        "${OUT}/Debug",
+        "-C",
+        "Debug",
+        "--no-tests=error",
+        "--output-on-failure",
+        "--output-junit",
+        "${OUT}/logs/p0-checks/ctest-Debug.xml"
+      ],
+      "timeout_seconds": 1200,
+      "wrapper_exit": null,
+      "child_exit": null,
+      "parser_id": "ctest-junit",
+      "required": true,
+      "output_dir": "${OUT}/logs/p0-checks",
+      "expected_capability_source": null
+    },
+    {
+      "id": "verify-inputs-Debug",
+      "depends_on": [
+        "ctest-Debug"
+      ],
+      "cwd": "${REPO}",
+      "argv": [
+        "python",
+        "scripts/p0_build_identity.py",
+        "check",
+        "--snapshot",
+        "${REPO}",
+        "--output",
+        "${OUT}",
+        "--configuration",
+        "Debug",
+        "--toolchain-record",
+        "${OUT}/metadata/toolchain.json",
+        "--dependency-record",
+        "${OUT}/metadata/dependencies.json"
+      ],
+      "timeout_seconds": 300,
+      "wrapper_exit": null,
+      "child_exit": null,
+      "parser_id": "json-identity",
+      "required": true,
+      "output_dir": "${OUT}/logs/p0-checks",
+      "expected_capability_source": null
+    },
+    {
+      "id": "identity-RelWithDebInfo",
+      "depends_on": [
+        "dependencies-record"
+      ],
+      "cwd": "${REPO}",
+      "argv": [
+        "python",
+        "scripts/p0_build_identity.py",
+        "prepare",
+        "--snapshot",
+        "${REPO}",
+        "--output",
+        "${OUT}",
+        "--configuration",
+        "RelWithDebInfo",
+        "--toolchain-record",
+        "${OUT}/metadata/toolchain.json",
+        "--dependency-record",
+        "${OUT}/metadata/dependencies.json"
+      ],
+      "timeout_seconds": 300,
+      "wrapper_exit": null,
+      "child_exit": null,
+      "parser_id": "json-identity",
+      "required": true,
+      "output_dir": "${OUT}/logs/p0-checks",
+      "expected_capability_source": null
+    },
+    {
+      "id": "configure-RelWithDebInfo",
+      "depends_on": [
+        "identity-RelWithDebInfo"
+      ],
+      "cwd": "${REPO}",
+      "argv": [
+        "cmake",
+        "-S",
+        "${REPO}",
+        "-B",
+        "${OUT}/RelWithDebInfo",
+        "-G",
+        "Visual Studio 18 2026",
+        "-A",
+        "x64",
+        "-DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "-DVCPKG_TARGET_TRIPLET=x64-windows-static-md",
+        "-DVCPKG_INSTALLED_DIR=${DEPS}/installed",
+        "-DVCPKG_MANIFEST_INSTALL=OFF",
+        "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF",
+        "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF",
+        "-DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON",
+        "-DAR_EXPECTED_CONFIGURATION=RelWithDebInfo",
+        "-DAR_BUILD_IDENTITY_FILE=${OUT}/identity/RelWithDebInfo/build-identity.json",
+        "-DAR_ENABLE_TEST_HOOKS=ON"
+      ],
+      "timeout_seconds": 900,
+      "wrapper_exit": null,
+      "child_exit": null,
+      "parser_id": "cmake-configure",
+      "required": true,
+      "output_dir": "${OUT}/logs/p0-checks",
+      "expected_capability_source": null
+    },
+    {
+      "id": "identity-check-RelWithDebInfo",
+      "depends_on": [
+        "configure-RelWithDebInfo"
+      ],
+      "cwd": "${REPO}",
+      "argv": [
+        "python",
+        "scripts/p0_build_identity.py",
+        "check",
+        "--snapshot",
+        "${REPO}",
+        "--output",
+        "${OUT}",
+        "--configuration",
+        "RelWithDebInfo",
+        "--toolchain-record",
+        "${OUT}/metadata/toolchain.json",
+        "--dependency-record",
+        "${OUT}/metadata/dependencies.json"
+      ],
+      "timeout_seconds": 300,
+      "wrapper_exit": null,
+      "child_exit": null,
+      "parser_id": "json-identity",
+      "required": true,
+      "output_dir": "${OUT}/logs/p0-checks",
+      "expected_capability_source": null
+    },
+    {
+      "id": "build-RelWithDebInfo",
+      "depends_on": [
+        "identity-check-RelWithDebInfo"
+      ],
+      "cwd": "${REPO}",
+      "argv": [
+        "cmake",
+        "--build",
+        "${OUT}/RelWithDebInfo",
+        "--config",
+        "RelWithDebInfo",
+        "--parallel",
+        "2"
+      ],
+      "timeout_seconds": 1800,
+      "wrapper_exit": null,
+      "child_exit": null,
+      "parser_id": "msbuild-log",
+      "required": true,
+      "output_dir": "${OUT}/logs/p0-checks",
+      "expected_capability_source": null
+    },
+    {
+      "id": "clcmd-RelWithDebInfo",
+      "depends_on": [
+        "build-RelWithDebInfo"
+      ],
+      "cwd": "${REPO}",
+      "argv": [
+        "cmake",
+        "--build",
+        "${OUT}/RelWithDebInfo",
+        "--config",
+        "RelWithDebInfo",
+        "--parallel",
+        "2",
+        "--clean-first",
+        "--",
+        "/v:n"
+      ],
+      "timeout_seconds": 1800,
+      "wrapper_exit": null,
+      "child_exit": null,
+      "parser_id": "msbuild-cl",
+      "required": true,
+      "output_dir": "${OUT}/logs/p0-checks",
+      "expected_capability_source": null
+    },
+    {
+      "id": "ctest-RelWithDebInfo",
+      "depends_on": [
+        "clcmd-RelWithDebInfo"
+      ],
+      "cwd": "${REPO}",
+      "argv": [
+        "ctest",
+        "--test-dir",
+        "${OUT}/RelWithDebInfo",
+        "-C",
+        "RelWithDebInfo",
+        "--no-tests=error",
+        "--output-on-failure",
+        "--output-junit",
+        "${OUT}/logs/p0-checks/ctest-RelWithDebInfo.xml"
+      ],
+      "timeout_seconds": 1200,
+      "wrapper_exit": null,
+      "child_exit": null,
+      "parser_id": "ctest-junit",
+      "required": true,
+      "output_dir": "${OUT}/logs/p0-checks",
+      "expected_capability_source": null
+    },
+    {
+      "id": "verify-inputs-RelWithDebInfo",
+      "depends_on": [
+        "ctest-RelWithDebInfo"
+      ],
+      "cwd": "${REPO}",
+      "argv": [
+        "python",
+        "scripts/p0_build_identity.py",
+        "check",
+        "--snapshot",
+        "${REPO}",
+        "--output",
+        "${OUT}",
+        "--configuration",
+        "RelWithDebInfo",
+        "--toolchain-record",
+        "${OUT}/metadata/toolchain.json",
+        "--dependency-record",
+        "${OUT}/metadata/dependencies.json"
+      ],
+      "timeout_seconds": 300,
+      "wrapper_exit": null,
+      "child_exit": null,
+      "parser_id": "json-identity",
+      "required": true,
+      "output_dir": "${OUT}/logs/p0-checks",
+      "expected_capability_source": null
+    }
+  ],
+  "snapshot_note": "输出根位于 snapshot 内（用户决定的 <repo>/build/），输入清单不收集 build/ 内容；每次构建前由 identity-check 复核输入哈希，ctest 之后再由 verify-inputs 复核一次。命令表的 wrapper_exit/child_exit 是声明字段并保持 null：实际观察退出码由 scripts/run_p0_checks.py 写入 <OUT>/logs/p0-checks/results.json，避免 runner 回填自身被哈希的输入造成身份自引用抖动。"
+}

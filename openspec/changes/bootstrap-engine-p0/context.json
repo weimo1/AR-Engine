@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "objective": "2026-11-03按用户先不做Probe及可以开始指令，修订P0契约/图示/测试/任务，细化core最小技术方案；静态库/工具链/CRT及既有D1/D2语义保留，新的core接口和CTest承接为候选；不实施代码",
+  "non_goals": [
+    "不默认批准总体架构",
+    "本轮不实施引擎源码",
+    "不实现P1窗口/渲染/Shader管线",
+    "不升级驱动或隐式降低产品Vulkan1.4目标"
+  ],
+  "tags": [
+    "native"
+  ],
+  "documents": [
+    {
+      "path": "docs/standards/构建工具链与依赖管理规范.md",
+      "purpose": "standard",
+      "status": "reference",
+      "basis": "构建方向已由ADR确认，具体参数仍以本方案待确认项为准"
+    },
+    {
+      "path": "docs/standards/错误异常断言与日志规范.md",
+      "purpose": "standard",
+      "status": "reference",
+      "basis": "spdlog方向已定；不批准全文异常/日志草案"
+    },
+    {
+      "path": "docs/standards/数学坐标与颜色规范.md",
+      "purpose": "standard",
+      "status": "confirmed",
+      "basis": "仅文中用户已确认的Flower数学/坐标/颜色约定，用于GLM探针；不扩展未确认渲染范围"
+    },
+    {
+      "path": "docs/实施路线与阶段计划.md",
+      "purpose": "architecture",
+      "status": "reference",
+      "basis": "按用户要求以纵切准备P0方案；未将其他阶段候选变成批准"
+    },
+    {
+      "path": "docs/modules/core/README.md",
+      "purpose": "architecture",
+      "status": "reference",
+      "basis": "本轮core候选接口/生命周期，非已实现事实"
+    },
+    {
+      "path": "docs/modules/rhi/README.md",
+      "purpose": "architecture",
+      "status": "reference",
+      "basis": "已有加载/所有权边界"
+    },
+    {
+      "path": "docs/modules/runtime/README.md",
+      "purpose": "architecture",
+      "status": "reference",
+      "basis": "已有组合边界，P0替代入口为候选"
+    }
+  ],
+  "skills": [
+    "ar-cpp-oop-style",
+    "ar-employee-chat"
+  ],
+  "write_paths": [
+    "openspec/changes/bootstrap-engine-p0/proposal.md",
+    "openspec/changes/bootstrap-engine-p0/design.md",
+    "openspec/changes/bootstrap-engine-p0/test-plan.md",
+    "openspec/changes/bootstrap-engine-p0/tasks.md",
+    "openspec/changes/bootstrap-engine-p0/context.json",
+    "openspec/changes/bootstrap-engine-p0/specs/engine-p0-foundation/spec.md",
+    "docs/modules/core/README.md",
+    "docs/modules/rhi/README.md",
+    "docs/modules/runtime/README.md",
+    "docs/README.md",
+    "docs/总体架构与技术路线.md",
+    "docs/实施路线与阶段计划.md",
+    "docs/workflow/当前决策与待办清单.md",
+    "docs/workflow/模块与变更索引.md"
+  ]
+}
