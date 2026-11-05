@@ -176,8 +176,10 @@ def commit_check(root: Path) -> Path:
     import tempfile
     base = core.within(root, root / '.ar-workflow/commit-quick')
     base.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='staged-', dir=base) as temporary:
-        source = core.within(base, Path(temporary))
+    temporary_root = core.within(root, root / 'build/temp/commit-check')
+    temporary_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='staged-', dir=temporary_root) as temporary:
+        source = core.within(temporary_root, Path(temporary))
         for name, body in blobs.items():
             destination = core.within(source, source / name)
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -218,7 +220,7 @@ def dispatch(args, root: Path) -> None:
         return
     with operation_lock(root):
         if args.command == "ci":
-            checks(root, root, root / ".ar-workflow/ci")
+            checks(root, root, root / "build/temp/workflow-ci")
             print("PASS: shared workflow checks (documents, Python tests and OpenSpec)")
         elif args.command == "commit-check":
             commit_check(root)

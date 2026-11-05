@@ -118,7 +118,7 @@ class ExecutionTests(unittest.TestCase):
         ]):
             runtime.dispatch(SimpleNamespace(command="ci"), self.root)
 
-        output = self.root / ".ar-workflow/ci"
+        output = self.root / "build/temp/workflow-ci"
         self.assertIn("workflow fixture ran", (output / "check-0.log").read_text())
         evidence = core.load(output / "checks.json")
         self.assertEqual(evidence["status"], "passed")

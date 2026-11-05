@@ -1,6 +1,6 @@
 # core 模块：P0 最小技术方案
 
-修订：3，2026-11-04。状态：基础职责、spdlog薄封装方向已确认；下列接口、错误返回、同步策略及预算为architect建议，尚未实现或整体获批。用户已要求开始方案准备，不等于批准具体接口或引擎编码。
+修订：3，2026-11-04。状态：基础职责和 spdlog 薄封装方向已确认。P0 最小诊断、错误、事件、摘要和显式结束已实现。接口与预算的适用范围以 P0 契约及下文实现记录为准。
 
 ## 1. 范围与依据
 
@@ -10,7 +10,7 @@
 
 ## 2. 职责、调用方与构建依赖
 
-图CORE-DEP-01：候选静态依赖；箭头为左侧依赖右侧，rhi只借用诊断会话。无引擎实现。
+图 CORE-DEP-01 展示静态依赖方案。箭头从依赖方指向被依赖方，RHI 借用诊断会话。
 
 ```mermaid
 flowchart LR
@@ -86,7 +86,7 @@ P0单owner线程使用，禁止并发emit/finish，不启动日志线程，不�
 
 ## 7. 当前交接及待复核
 
-首批实现已完成：`engine/core/include/core/{Error,BuildInfo,Diagnostics}.h` 公开头、`engine/core/src/{Error,Diagnostics}.cpp` 与 `ar_core` 静态库，Debug/RelWithDebInfo 两配置 CTest 覆盖 normal-close、open-failed、json-escaping、quota、quota-cumulative、flush-failure、summary-truncated、repeat-finish、late-event、report-unwritable、public-headers、build-identity。接口签名、ErrorCategory/ErrorStage、cleanup_errors、重复finish及RunSummaryInput已按用户2026-11-04授权收口；`invalid_state` 在 2026-11-04 复审后新增为独立类别（生命周期违规与参数非法分离）。日志预算数值与 finish 细节按 proposal 候选实现，日志预算、配额与摘要回退行为已有用例覆盖；独立审查不等于用户批准。下一步进入 rhi/runtime 纵切（2.3/2.1），并补齐 device-*/cleanup-* 用例。静态库/动态CRT已是既有确认，不在本页重复等待。
+首批实现已完成：`engine/core/include/core/{Error,BuildInfo,Diagnostics}.h` 公开头、`engine/core/src/{Error,Diagnostics}.cpp` 与 `ar_core` 静态库，Debug/RelWithDebInfo 两配置 CTest 覆盖 normal-close、open-failed、json-escaping、quota、quota-cumulative、flush-failure、summary-truncated、repeat-finish、late-event、report-unwritable、public-headers、build-identity。接口签名、ErrorCategory/ErrorStage、cleanup_errors、重复finish及RunSummaryInput已按用户2026-11-04授权收口；`invalid_state` 在 2026-11-04 复审后新增为独立类别（生命周期违规与参数非法分离）。日志预算数值与 finish 细节按 proposal 候选实现，日志预算、配额与摘要回退行为已有用例覆盖；独立审查不等于用户批准。RHI 和 Runtime 的后续工作及验收进度见 [P0 任务清单](../../../openspec/changes/bootstrap-engine-p0/tasks.md)。静态库/动态CRT已是既有确认，不在本页重复等待。
 
 ## 三项复核后的摘要边界（2026-11-04，候选）
 

@@ -29,7 +29,7 @@ runtime驱动核心阶段，应用在约定时点修改scene；提取交接后�
 
 A2/A4的scene权威、runtime提取、render派生边界保留。场景相机具体参数及关联变换、派生矩阵/历史的字段归属属于R2 architect建议，待用户确认；见[待确认建议](../../总体架构与技术路线.md#2026-10-27-待确认的职责澄清建议)。
 
-2026-11-03 P0修订：先不建设独立ArProbe；模块静态库由CTest公共入口集成测试调用，P1再接独立渲染程序。当前[P0方案](../../../openspec/changes/bootstrap-engine-p0/design.md)已同步候选承接方式；不以旧Probe命令作为实施要求，core接口及替代测试细节仍待用户确认。
+2026-11-03 P0修订：先不建设独立ArProbe；模块静态库由CTest公共入口集成测试调用，P1再接独立渲染程序。公共入口、阶段范围和验收方式见 [P0 方案](../../../openspec/changes/bootstrap-engine-p0/design.md)。
 
 ## P0 启动、结果与关闭技术方案（候选）
 

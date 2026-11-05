@@ -1,11 +1,11 @@
 # 模块文档入口
 
-2026-10-23。这里按已确认模块组织长期设计，不代表模块已实现。组织、命名及变更流程统一见 [文档体系与确认机制](../workflow/文档体系与确认机制.md)。
+2026-10-23。这里按模块组织长期设计。阶段范围、验收与实际进度见 [P0 变更](../../openspec/changes/bootstrap-engine-p0/tasks.md)。组织、命名及变更流程统一见 [文档体系与确认机制](../workflow/文档体系与确认机制.md)。
 
 | 模块 | 长期入口 | 当前边界 |
 | --- | --- | --- |
-| core | [core](core/README.md) | 已确认基础模块目录与职责，详细接口及实现未交付 |
-| rhi | [rhi](rhi/README.md) | 已确认图形底层模块目录与职责，详细接口及实现未交付 |
+| core | [core](core/README.md) | 基础职责已确认；P0 最小诊断、错误和摘要已实现 |
+| rhi | [rhi](rhi/README.md) | 底层职责已确认；P0 基础加载与查询已实现，关闭后报告失效和进程隔离待收口 |
 | runtime | [runtime](runtime/README.md) | 模块组合及scene到render的提取边界已确认；详细接口未交付 |
 | scene | [scene](scene/README.md) | 权威场景数据与render分离已确认；未实施 |
 | render | [render](render/README.md) | 持久场景、视图、缓存及未来GI扩展边界已确认；未实施 |
