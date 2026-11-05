@@ -60,16 +60,13 @@ finish时flush失败还应有可控sink故障覆盖；测试私有适配只在co
 | 模式边界 | inspect在device1.3.289完整查询时success但product=false；require_product同设备unsupported；development显式1.3 success；mode/requested_api不符invalid_arguments |
 | build-identity | 正常身份；旧EXE、错配置、改源未重建、缺/陈旧sidecar、triplet/CRT不符都拒绝；revision未知不猜clean |
 
-2026-11-05 rhi 基础切片另有 16 个 rhi 级用例（`rhi-request-validation`、`rhi-loader-unavailable`、`rhi-loader-symbol-missing`、`rhi-device-none`、`rhi-device-index-out-of-range`、`rhi-api-version-unsupported`、`rhi-api-variant-unsupported`、`rhi-instance-incompatible`、`rhi-instance-init-failed`、`rhi-extension-query-failed`、`rhi-device-extension-query-failed`、`rhi-enumeration-incomplete`、`rhi-device-version-insufficient`、`rhi-descriptor-heap-present`、`rhi-cleanup-instance-retained`、`rhi-repeat-close`），由 `tests/support/rhi_fixture/FixtureLoader.cpp` 编出的 stub 加载器驱动：该 DLL 只导出 `vkGetInstanceProcAddr`，按 `AR_RHI_FIXTURE_SPEC` 改变 loader/device 版本、variant、`vkCreateInstance` 结果、设备数、`VK_INCOMPLETE`、instance/device 扩展查询失败、`vkDestroyInstance` 缺失与 Heap 扩展呈现；测试只经公开 `LoaderSource` 的 `ExplicitLoaderPath` 装载，路径由可执行目录推出。fixture 不是产品加载器，只用于负向与边界用例；它们**不能替代**上表的 runtime-*、`cleanup-empty`、`quarantine-*`、summary-capability 用例，后者仍须经 runtime 公共入口覆盖。真实 system 查询没有跑到时，记录未运行/失败而非用 fixture 补通过。所有 P0 Vulkan 用例串行，不重叠使用 volk 全局状态。后续 P1 再定义 CLI、应用退出、有限帧、resize、Validation 及截图验收，不在本 P0 偷偷恢复 Probe。
-hi-request-validation（variant 非零/空显式路径在加载前拒绝）、
-hi-loader-unavailable（显式路径指向不存在文件）、
-hi-loader-symbol-missing（真实 DLL 缺 vkGetInstanceProcAddr）。它们只证明加载路径与请求校验，**不能替代**上表的 runtime-*、device-*/cleanup-*/quarantine-*/repeat-close 用例，后者仍须经 runtime 公共入口或可注入 fixture loader 覆盖。真实system查询没有跑到时，记录未运行/失败而非用fixture补通过。所有P0 Vulkan用例串行，不重叠使用volk全局状态。后续P1再定义CLI、应用退出、有限帧、resize、Validation及截图验收，不在本P0偷偷恢复Probe。
+2026-11-06 rhi 收口后共 18 个 rhi 级用例（`rhi-request-validation`、`rhi-loader-unavailable`、`rhi-loader-symbol-missing`、`rhi-device-none`、`rhi-device-index-out-of-range`、`rhi-api-version-unsupported`、`rhi-api-variant-unsupported`、`rhi-instance-incompatible`、`rhi-instance-init-failed`、`rhi-extension-query-failed`、`rhi-device-extension-query-failed`、`rhi-enumeration-incomplete`、`rhi-device-version-insufficient`、`rhi-descriptor-heap-present`、`rhi-cleanup-instance-retained`、`rhi-repeat-close`、`rhi-report-after-close`、`rhi-quarantine-reopen`），由 `tests/support/rhi_fixture/FixtureLoader.cpp` 编出的 stub 加载器驱动：该 DLL 只导出 `vkGetInstanceProcAddr`，按 `AR_RHI_FIXTURE_SPEC` 改变 loader/device 版本、variant、`vkCreateInstance` 结果、设备数、`VK_INCOMPLETE`、instance/device 扩展查询失败、`vkDestroyInstance` 缺失与 Heap 扩展呈现；测试只经公开 `LoaderSource` 的 `ExplicitLoaderPath` 装载，路径由可执行目录推出。`rhi-quarantine-reopen` 以 `CreateProcessW` 拉起本可执行文件的隐藏用例 `[.][rhi-quarantine-child]`，在干净进程里制造残留并按 proposal 的精确拒绝字段断言，避免进程级标志污染其它用例；`rhi-report-after-close` 验证"关闭前复制快照仍可读"，并用钩子计数记录关闭后的违规调用，不以未定义行为充当失效证据。fixture 不是产品加载器，只用于负向与边界用例；它们**不能替代**上表的 runtime-*、`cleanup-empty`、`summary-capability` 用例，后者仍须经 runtime 公共入口覆盖（`runtime-quarantine-reopen` 即属该批）。真实 system 查询没有跑到时，记录未运行/失败而非用 fixture 补通过。所有 P0 Vulkan 用例串行，不重叠使用 volk 全局状态。后续 P1 再定义 CLI、应用退出、有限帧、resize、Validation 及截图验收，不在本 P0 偷偷恢复 Probe。
 
 ## 5. Harness与云端限制
 
 命令表与解析器已实现（`workflow/p0-checks.json`、`scripts/workflow_p0.py`、`scripts/build_checks.py`），当前通过 `python scripts/build_checks.py` 执行该表。工作流自检、单元测试和 OpenSpec 检查仍由工作流 CI 运行。拒绝路径由 `scripts/tests/test_workflow_p0.py` 覆盖：缺命令/未声明用例/缺用例/失败或跳过用例/错退出码/错身份（sidecar 与依赖记录不符）/超时/崩溃/非法占位符/未知 parser/前向依赖；harness 自身另断言运行不改变 snapshot 文件清单。
 
-云端先核对实际VS2026及工具链，不假设windows-latest满足；缺环境明确未满足，不用空job/跳过取得通过，也不否定单独已完成的本地证据。CI不代替本机设备或GPU运行。当前云端入口已就位但未运行：`.github/workflows/p0-cpu-build.yml` 仅手动触发、`runs-on: windows-2025-vs2026`、45 分钟上限，先由 `scripts/p0_ci_preflight.py` 比对 `workflow/p0-toolchain-expectations.json` 再复用命令表，失败也上传预检与构建证据；本机只验证了预检 ok 与 mismatch/missing 两条失败路径，未推送、未触发，因此云端工具链版本、恢复耗时与两配置结果是未知项，本地证据与云端结论分开记录。
+云端先核对实际VS2026及工具链，不假设windows-latest满足；缺环境明确未满足，不用空job/跳过取得通过，也不否定单独已完成的本地证据。CI不代替本机设备或GPU运行。云端入口已随 `4cbfe87` 推送，该提交尚未手动触发：`.github/workflows/p0-cpu-build.yml` 仅手动触发、`runs-on: windows-2025-vs2026`、45 分钟上限，先由 `scripts/p0_ci_preflight.py` 比对 `workflow/p0-toolchain-expectations.json` 再复用命令表，失败也上传预检与构建证据；本机已验证预检成功以及 mismatch 和 missing 两类失败路径。`4cbfe87` 的云端工具链版本、恢复耗时与两配置结果仍待验证，本地证据与云端结论分开记录。
 
 超时与负载按design建议固定，清理只结束任务拥有进程树，不按名称全杀。文档检查、OpenSpec validate、真实构建/CTest、独立审查分别记录，不相互替代；提交/推送按用户授权，不要求强制gate。
 
@@ -87,3 +84,10 @@ hi-loader-symbol-missing（真实 DLL 缺 vkGetInstanceProcAddr）。它们只�
 runtime-quarantine-reopen在独占子进程中覆盖：连续两次隔离拒绝精确initialization_failed/cleanup/cleanup_failed；本次resources_released=true/空残留/空cleanup_errors，无会话无close，加载/volk/创建计数0，进程隔离未解除。正常诊断finish；finish失败保留隔离主错误但最终output_failed。诊断create失败则隔离检查0，不能断言已经拒绝过重开。
 
 runtime-cleanup-empty为独立必需用例，尚无instance且无资源时清理成功。runtime-cleanup-failure仅注入持有instance但销毁入口不可用、或依赖已释放后的OS卸库失败；逐项核对残留和禁止后续不安全步骤，不混入空清理。
+
+## 2026-11-06 审查修复回归映射
+
+- F1：`rhi-request-validation` 的非零 variant 非法请求及 `rhi-quarantine-reopen` 子进程，逐字段断言 instanceCreate.requested、apiVariants.requested、capabilitySource 的 kind/id/simulated；拒绝后仍保持 NotAttempted 和隔离路径三项加载计数为 0。
+- F3：`rhi-repeat-close` 在诊断会话结束前销毁已显式 close 两次的 RHI owner，读取落盘 events.jsonl，断言 rhi.close.start 恰一条，覆盖析构不重复清理。
+- F4：子进程等待必须返回 WAIT_OBJECT_0；异常等待记录返回值与超时标识，终止并等待本测试持有的子进程后关闭句柄。正常路径核对 GetExitCodeProcess 成功。超时分支本批未故障注入，不声称实测通过。
+- 复现入口：按 CMakeUserPresets.json 的本机覆盖设置进程级 VCPKG_ROOT/AR_P0_DEPS 后运行 `python scripts/build_checks.py --phase test --test-file tests/rhi/test_rhi_session.cpp`；日志、两配置 JUnit 和身份位于 build/logs/p0-checks 与 build/identity。隐藏 rhi-system 不在本批 CPU 验收内。

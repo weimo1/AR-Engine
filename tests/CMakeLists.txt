@@ -74,6 +74,8 @@ set(AR_REQUIRED_RHI_CASES
     rhi-descriptor-heap-present
     rhi-cleanup-instance-retained
     rhi-repeat-close
+    rhi-report-after-close
+    rhi-quarantine-reopen
 )
 
 # A stub loader, so loader/instance/enumeration/cleanup branches run without a GPU.
@@ -96,6 +98,10 @@ target_link_libraries(ar_rhi_tests
         ar_rhi
         Catch2::Catch2WithMain
 )
+target_include_directories(ar_rhi_tests
+    PRIVATE "${PROJECT_SOURCE_DIR}/engine/rhi/src"
+)
+target_compile_definitions(ar_rhi_tests PRIVATE AR_ENABLE_TEST_HOOKS=1)
 add_dependencies(ar_rhi_tests ar_rhi_fixture)
 foreach(case IN LISTS AR_REQUIRED_RHI_CASES)
     add_test(NAME ${case} COMMAND ar_rhi_tests "[${case}]")
@@ -142,4 +148,5 @@ add_test(NAME build-identity
         --output-root "${AR_P0_OUTPUT_ROOT}"
         --metadata-dir "${AR_P0_OUTPUT_ROOT}/metadata"
         --configuration "$<CONFIG>"
+        --test-hooks "$<IF:$<BOOL:${AR_ENABLE_TEST_HOOKS}>,on,off>"
 )

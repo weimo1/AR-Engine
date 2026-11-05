@@ -1,7 +1,7 @@
 """Negative and positive checks for the compiled build identity.
 
 Covers: matching identity, stale sidecar, wrong configuration, missing sidecar, triplet
-mismatch, CRT mismatch, and source changed without regenerating the identity.
+mismatch, CRT mismatch, test-hook mismatch, and source changed without regenerating the identity.
 """
 
 from __future__ import annotations
@@ -63,6 +63,9 @@ def check_compiled_matches(probe: str, sidecar: Path, toolchain: Path, configura
             f"binary was compiled in {compiled.get('language_mode')!r}, "
             "expected 'c++23preview'"
         )
+    recorded_hooks = recorded.get("build_options", {}).get("test_hooks")
+    if compiled.get("test_hooks") != recorded_hooks:
+        fail("compiled test_hooks does not match the sidecar build_options")
 
     tool = load_json(toolchain)
     if compiled.get("triplet") != tool.get("triplet"):
@@ -94,6 +97,10 @@ def main(argv: list[str]) -> int:
         help="directory holding toolchain.json and dependencies.json (defaults to --output-root)",
     )
     parser.add_argument("--configuration", required=True)
+    parser.add_argument(
+        "--test-hooks", required=True, choices=("on", "off"),
+        help="AR_ENABLE_TEST_HOOKS value this build was configured with",
+    )
     args = parser.parse_args(argv)
 
     snapshot = Path(args.snapshot).resolve()
@@ -157,9 +164,18 @@ def main(argv: list[str]) -> int:
         run([args.probe, "--verify", str(sidecar), "--toolchain", str(bad_crt_path)], expect=2,
             label="probe --verify (CRT mismatch)")
 
+        # 6b. A sidecar that claims the other AR_ENABLE_TEST_HOOKS value must be rejected.
+        flipped_hooks = load_json(sidecar)
+        flipped_hooks.setdefault("build_options", {})["test_hooks"] = not args.test_hooks == "on"
+        flipped_path = workspace / "test-hooks-flipped.json"
+        write_json(flipped_path, flipped_hooks)
+        run([args.probe, "--verify", str(flipped_path), "--toolchain", str(toolchain)], expect=2,
+            label="probe --verify (test-hooks mismatch)")
+
         common = [
             args.python, args.identity_script, "check",
             "--configuration", configuration,
+            "--test-hooks", args.test_hooks,
         ]
 
         # 7. The recorded identity still matches the current sources.

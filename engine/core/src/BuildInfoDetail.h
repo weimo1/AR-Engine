@@ -11,4 +11,8 @@ const char* buildCrtName();
 // The vcpkg triplet recorded in the identity sidecar this binary was compiled from.
 const char* buildTriplet();
 
+// True when this binary was compiled with AR_ENABLE_TEST_HOOKS=ON. Part of the identity because
+// the flag changes the binary without changing any source file.
+bool buildTestHooks();
+
 } // namespace ar::core::detail

@@ -1,8 +1,8 @@
 # rhi 模块
 
-P0技术方案修订：3，2026-11-04。下列P0接口细化是候选，未实施、未获逐项确认；历史已确认边界继续有效。
+P0技术方案修订：3，2026-11-04。模块职责与 P0 查询范围已确认。下文说明接口设计与关闭边界，具体实现进度见文末。
 
-状态：图形底层模块目录与职责已确认；2026-11-05 落盘 rhi 基础切片（公开头 `LoaderSource.h`/`Capabilities.h`/`RhiSession.h`，loader/instance 所有权、枚举、报告与幂等 close，两配置 28/28 用例，含 fixture 加载器驱动的负向用例），quarantine 与 `report()` 失效语义仍未实现，详见文末实现状态。不额外叠加通用后端层，不强制虚接口。
+状态：图形底层模块目录与职责已确认；2026-11-06 完成 rhi 基础切片与收口（公开头 `LoaderSource.h`/`Capabilities.h`/`RhiSession.h`，loader/instance 所有权、枚举、报告与幂等 close，两配置各 30/30 用例，含 fixture 加载器驱动的负向用例、进程隔离与 `report()` 关闭后计数验证），详见文末实现状态。不额外叠加通用后端层，不强制虚接口。
 
 - 目录：engine/rhi/include/rhi、engine/rhi/src/vulkan；公开头不增加 ar 路径层。
 - 当前范围：P0 的 Vulkan 能力查询所需底层能力；窗口、交换链、绘制与 Shader 管线属于后续任务，不能混入 P0 验收。
@@ -31,9 +31,9 @@ P0技术方案修订：3，2026-11-04。下列P0接口细化是候选，未实�
 
 2026-10-27的R1职责细化及R4长期数值单源规则均为architect建议，待用户确认，见[待确认建议](../../总体架构与技术路线.md#2026-10-27-待确认的职责澄清建议)。具体Vulkan同步原语仍待设计；本入口引用B节数值以减少重复，不产生新批准。
 
-2026-11-03 P0修订：先不建设独立ArProbe；模块静态库由CTest公共入口集成测试调用，P1再接独立渲染程序。当前[P0方案](../../../openspec/changes/bootstrap-engine-p0/design.md)已同步候选承接方式；不以旧Probe命令作为实施要求，core接口及替代测试细节仍待用户确认。
+2026-11-03 P0修订：先不建设独立ArProbe；模块静态库由CTest公共入口集成测试调用，P1再接独立渲染程序。公共入口、阶段范围和验收方式见 [P0 方案](../../../openspec/changes/bootstrap-engine-p0/design.md)。
 
-## P0 最小加载与查询技术方案（候选）
+## P0 最小加载与查询技术方案
 
 ### 职责及公开边界
 
@@ -117,12 +117,15 @@ open在本轮OS加载前检查隔离；拒绝使用initialization_failed、stage
 - 判定顺序：先由 loader/device variant 决定 `variant_supported`，再算 `api_version_supported`——否则 variant 仍为 unknown 时会把真实支持的设备判成不支持。
 - close：首次销毁 instance → `volkFinalize` → `FreeLibrary`，记录 `residual_resources`（instance/os_module）与 `cleanup_failed/Cleanup`；重复 close 返回缓存；析构只在未 close 时执行一次同样清理且不抛异常。
 - fixture 加载器：`tests/support/rhi_fixture/FixtureLoader.cpp` 编成 `ar_rhi_fixture.dll`，只导出 `vkGetInstanceProcAddr`，按 `AR_RHI_FIXTURE_SPEC`（`loader=`、`loader-variant=`、`device=`、`create=`、`devices=`、`enumerate=`、`instance-ext=`、`device-ext=`、`destroy=`、`heap=`）回答入口点。测试经 `ExplicitLoaderPath` 指向该 DLL，路径由可执行文件目录推出，不写死绝对路径。**它不是产品加载器**，只用于负向与边界用例。
-- rhi 级必需用例（16 个）：`rhi-request-validation`、`rhi-loader-unavailable`、`rhi-loader-symbol-missing`、`rhi-device-none`、`rhi-device-index-out-of-range`、`rhi-api-version-unsupported`、`rhi-api-variant-unsupported`、`rhi-instance-incompatible`、`rhi-instance-init-failed`、`rhi-extension-query-failed`、`rhi-device-extension-query-failed`、`rhi-enumeration-incomplete`、`rhi-device-version-insufficient`、`rhi-descriptor-heap-present`、`rhi-cleanup-instance-retained`、`rhi-repeat-close`。另有隐藏用例 `[.][rhi-system]` 走真实系统加载器与本机 GPU，不作为必需 CTest。
+- rhi 级必需用例（18 个）：`rhi-request-validation`、`rhi-loader-unavailable`、`rhi-loader-symbol-missing`、`rhi-device-none`、`rhi-device-index-out-of-range`、`rhi-api-version-unsupported`、`rhi-api-variant-unsupported`、`rhi-instance-incompatible`、`rhi-instance-init-failed`、`rhi-extension-query-failed`、`rhi-device-extension-query-failed`、`rhi-enumeration-incomplete`、`rhi-device-version-insufficient`、`rhi-descriptor-heap-present`、`rhi-cleanup-instance-retained`、`rhi-repeat-close`、`rhi-report-after-close`、`rhi-quarantine-reopen`。另有隐藏用例 `[.][rhi-system]`（真实系统加载器与本机 GPU）与 `[.][rhi-quarantine-child]`（quarantine-reopen 的专用子进程），不作为必需 CTest。
+- 进程隔离：close 后若仍有残留资源，置进程级 quarantine 标志；此后 `open()` 在**任何加载之前**拒绝，返回 `initialization_failed` + `primary_error{stage=cleanup, category=cleanup_failed, origin={internal,1}}`，`instance_create.status=not_attempted`、空 `cleanup_errors`，load/volk/instance 计数均为 0。是否解除隔离由进程生命周期决定，诊断会话正常结束不解除；`rhi-quarantine-reopen` 用独立的子进程验证，避免标志污染同进程其它用例。
+- `report()` 生命周期：只在成功 open 且未 close 时允许调用；跨 close 使用须先复制快照（用例 `rhi-report-after-close` 验证关闭前复制仍可读）。关闭后再次调用属于违反前置条件，测试钩子计数该调用而**不**解引用已销毁的快照，因此不以未定义行为充当"失效"证据。
+- `Impl::closed` 终止标志：首次 close 置位后，重复 close 直接返回缓存，析构不再重试清理（2026-11-06 修复的缺陷，此前会导致重复 close 重跑清理、显式 close 后析构再清理一次）。
 
-已知差异与剩余项（不得据此宣称 2.3 完成）：
+已知差异与剩余项（2.3 已按 proposal 收口，以下为仍需 runtime 或后续批次处理的部分）：
 
 - `QueryConfig` 增加 `requiredDeviceExtensions`（用于 `required_capabilities_supported` 判定）；这是公开候选接口之外的新增字段，需要用户确认后固化。
 - 报告不含 `mode`/`requirement_profile`/`schema_version`/`run_id`/`build_id`：这些由 runtime 在编码 `capability_json` 时补齐，rhi 只报告事实。
-- `report()` 在 close 后仍返回引用（契约要求失效）；待 runtime 自有快照落地时一并收口，当前以接口前置条件约束调用方。
-- 未实现：进程隔离/quarantine 标志与 quarantine-reopen、`capability_json` 编码（属 runtime）；`vkDestroyInstance` 失败不可观测（void 返回，只能报告卸库失败）；`cleanup-empty` 的 runtime 语义（无 instance 的会话）留待 2.1。
+- `report()` 契约要求 close 后失效；当前实现返回冻结快照并以计数记录违规调用，正式语义随 runtime 自有快照收口（2.1），届时 rhi 侧改为只保留"关闭前复制"这一支持用法。
+- 未实现：`capability_json` 编码（属 runtime）；`vkDestroyInstance` 失败不可观测（void 返回，只能报告卸库失败）；`cleanup-empty` 的 runtime 语义（无 instance 的会话）留待 2.1。
 - 真实系统查询在本机（RTX 4060 Laptop，device API 1.3）为：`api_version_supported=false`、`product_target_supported=false`、`descriptor_heap=unsupported`。

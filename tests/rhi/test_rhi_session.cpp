@@ -3,11 +3,13 @@
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 
 #include <windows.h>
 
+#include "TestingHooks.h"
 #include "core/BuildInfo.h"
 #include "core/Diagnostics.h"
 #include "rhi/RhiSession.h"
@@ -93,6 +95,12 @@ TEST_CASE("an API variant request is rejected before any loader is touched",
     CHECK(failure.error.stage == core::ErrorStage::Validation);
     CHECK(failure.report.result == core::ResultKind::InvalidArguments);
     CHECK(failure.report.instanceCreate.status == rhi::InstanceCreateStatus::NotAttempted);
+    CHECK(failure.report.instanceCreate.requested == config.requestedApi);
+    CHECK(failure.report.apiVariants.requested == static_cast<std::int32_t>(config.requestedApi >> 29));
+    CHECK(failure.report.capabilitySource.kind == "fixture_loader");
+    CHECK(failure.report.capabilitySource.simulated);
+    CHECK(failure.report.capabilitySource.id ==
+        std::get<rhi::ExplicitLoaderPath>(config.loader).path.filename().string());
     CHECK_FALSE(failure.report.loaderApi.has_value());
     CHECK_FALSE(failure.report.productTargetSupported);
 
@@ -454,6 +462,11 @@ TEST_CASE("a retained instance is reported by close instead of being hidden",
     CHECK(again.errors.size() == closed.errors.size());
     CHECK(again.residualResources.size() == closed.residualResources.size());
 
+    // This case quarantines the process by design; clear it so a whole-binary run continues
+    // from a clean state instead of inheriting the retained instance.
+    CHECK(rhi::detail::isProcessQuarantined());
+    rhi::detail::clearProcessQuarantine();
+
     finishSession(*session, runId);
 }
 
@@ -474,5 +487,135 @@ TEST_CASE("close is idempotent and keeps a single cleanup record", "[rhi-repeat-
     CHECK(first.residualResources.empty());
     CHECK(second.residualResources.empty());
 
+    // Destroy the RHI owner while diagnostics are still open, so duplicate cleanup is observable.
+    opened.value().reset();
     finishSession(*session, runId);
+    std::ifstream events(testOutputRoot() / "rhi" / runId / runId / "events.jsonl");
+    REQUIRE(events.is_open());
+    std::size_t closeStarts = 0;
+    for (std::string line; std::getline(events, line);) {
+        if (line.find("rhi.close.start") != std::string::npos) {
+            ++closeStarts;
+        }
+    }
+    CHECK(closeStarts == 1);
+}
+
+TEST_CASE("report() stays usable only while the session is open", "[rhi-report-after-close]") {
+    const std::string runId = "rhi-report-after-close";
+    auto session = makeSession(freshRunDirectory(runId), runId);
+    rhi::detail::clearProcessQuarantine();
+    rhi::detail::resetProcessCounters();
+
+    auto opened = rhi::RhiSession::open(fixtureConfig("devices=1"), *session);
+    REQUIRE(opened.has_value());
+
+    // The supported pattern: copy the snapshot before close, then keep using the copy.
+    const rhi::CapabilityReport snapshot = opened.value()->report();
+    CHECK(rhi::detail::processCounters().reportCallsAfterClose == 0);
+
+    const rhi::CloseResult closed = opened.value()->close();
+    CHECK(closed.closed);
+    CHECK(snapshot.deviceName == opened.value()->report().deviceName);
+
+    // Misuse is counted instead of dereferencing a destroyed snapshot, so a precondition breach
+    // cannot pass silently and no test relies on undefined behaviour.
+    CHECK(rhi::detail::processCounters().reportCallsAfterClose == 1);
+
+    finishSession(*session, runId);
+}
+
+namespace {
+
+// Runs one child process of this same executable, filtered to the hidden quarantine case, so the
+// process-wide flag starts clean and cannot leak into the other cases.
+bool runQuarantineChild() {
+    wchar_t modulePath[MAX_PATH] = {};
+    const DWORD length = ::GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
+    REQUIRE(length > 0);
+
+    std::wstring commandLine = L"\"";
+    commandLine += modulePath;
+    commandLine += L"\" \"[.][rhi-quarantine-child]\"";
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    const BOOL started = ::CreateProcessW(modulePath, commandLine.data(), nullptr, nullptr, FALSE,
+        0, nullptr, nullptr, &startup, &process);
+    REQUIRE(started != FALSE);
+    const DWORD wait = ::WaitForSingleObject(process.hProcess, 120000);
+    INFO("quarantine child wait result: " << wait << ", timeout=" << (wait == WAIT_TIMEOUT));
+    CHECK(wait == WAIT_OBJECT_0);
+    if (wait != WAIT_OBJECT_0) {
+        // Only terminate the child owned by this test; never leave it running after a timeout.
+        CHECK(::TerminateProcess(process.hProcess, 1) != FALSE);
+        CHECK(::WaitForSingleObject(process.hProcess, 5000) == WAIT_OBJECT_0);
+        ::CloseHandle(process.hThread);
+        ::CloseHandle(process.hProcess);
+        return false;
+    }
+    DWORD exitCode = 1;
+    CHECK(::GetExitCodeProcess(process.hProcess, &exitCode) != FALSE);
+    ::CloseHandle(process.hThread);
+    ::CloseHandle(process.hProcess);
+    return exitCode == 0;
+}
+
+} // namespace
+
+TEST_CASE("a quarantined process refuses to open again", "[rhi-quarantine-reopen]") {
+    CHECK(runQuarantineChild());
+}
+
+TEST_CASE("the quarantine child scenarios run in a dedicated process",
+    "[.][rhi-quarantine-child]") {
+    rhi::detail::clearProcessQuarantine();
+    rhi::detail::resetProcessCounters();
+
+    {
+        const std::string runId = "rhi-quarantine-plant";
+        auto session = makeSession(freshRunDirectory(runId), runId);
+        auto opened = rhi::RhiSession::open(fixtureConfig("destroy=missing"), *session);
+        REQUIRE(opened.has_value());
+        const rhi::CloseResult closed = opened.value()->close();
+        CHECK_FALSE(closed.resourcesReleased);
+        finishSession(*session, runId);
+    }
+    REQUIRE(rhi::detail::isProcessQuarantined());
+
+    // The refusal is decided before any OS load, so nothing of this attempt is counted.
+    rhi::detail::resetProcessCounters();
+    const std::string runId = "rhi-quarantine-reopen";
+    auto session = makeSession(freshRunDirectory(runId), runId);
+    const rhi::QueryConfig config = fixtureConfig("devices=1");
+    auto opened = rhi::RhiSession::open(config, *session);
+    REQUIRE_FALSE(opened.has_value());
+    const rhi::QueryFailure& failure = opened.error();
+    CHECK(failure.error.category == core::ErrorCategory::CleanupFailed);
+    CHECK(failure.error.stage == core::ErrorStage::Cleanup);
+    REQUIRE(failure.error.origin.has_value());
+    CHECK(failure.error.origin->domain == "internal");
+    CHECK(failure.error.origin->code == 1);
+    CHECK(failure.report.result == core::ResultKind::InitializationFailed);
+    CHECK(failure.report.instanceCreate.status == rhi::InstanceCreateStatus::NotAttempted);
+    CHECK(failure.report.instanceCreate.requested == config.requestedApi);
+    CHECK(failure.report.apiVariants.requested == static_cast<std::int32_t>(config.requestedApi >> 29));
+    CHECK(failure.report.capabilitySource.kind == "fixture_loader");
+    CHECK(failure.report.capabilitySource.simulated);
+    CHECK(failure.report.capabilitySource.id ==
+        std::get<rhi::ExplicitLoaderPath>(config.loader).path.filename().string());
+    CHECK_FALSE(failure.report.loaderApi.has_value());
+    CHECK_FALSE(failure.report.deviceApi.has_value());
+    CHECK_FALSE(failure.report.productTargetSupported);
+    CHECK(failure.cleanupErrors.empty());
+
+    const rhi::detail::ProcessCounters counters = rhi::detail::processCounters();
+    CHECK(counters.loadCalls == 0);
+    CHECK(counters.volkInitializeCalls == 0);
+    CHECK(counters.instanceCreateCalls == 0);
+
+    // A finished diagnostic run does not lift the quarantine.
+    finishSession(*session, runId);
+    CHECK(rhi::detail::isProcessQuarantined());
 }

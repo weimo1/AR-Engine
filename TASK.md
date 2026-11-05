@@ -17,12 +17,12 @@
 ## 当前任务
 
 - 当前阶段为 **P0-code 开发**，正在实现 P0 基础工程。
-- 当前开发任务为 **2.3 RHI**，收口隔离与 `report()` 失效语义，并跑对应检查。
-- 后续任务为 **2.1 runtime 组合**，由统筹根据 RHI 的验收结果安排。
+- 当前开发任务为 **2.1 runtime 组合**，把 core 诊断与 rhi 查询串成公共入口，并跑对应检查。
+- **2.3 RHI 已于 2026-11-06 完成**：隔离标志与 quarantine-reopen、`report()` 关闭后失效的计数验证、`Impl::closed` 缺失修复，两配置各 30/30。
 
 ## 开发检查命令
 
-以下以当前 RHI 切片为例。测试源码路径按本批任务替换，多份文件可重复传 `--test-file`。
+以下以刚才的 RHI 切片为例。测试源码路径按本批任务替换，多份文件可重复传 `--test-file`。
 
 ```powershell
 python scripts/build_checks.py --phase build

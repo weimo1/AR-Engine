@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "TestingHooks.h"
 #include "VulkanResult.h"
 
 namespace ar::rhi {
@@ -24,6 +25,21 @@ namespace {
 
 constexpr const char* kModuleName = "rhi";
 constexpr int kMaxEnumerationAttempts = 3;
+
+// Process-wide facts, not per-session: a cleanup that retained resources leaves the loaded
+// library and possibly the volk entry table behind, so reusing them from a new session would
+// silently work on a polluted process. P0 runs one owner thread, so plain members are enough.
+struct ProcessState {
+    bool quarantined = false;
+#ifdef AR_ENABLE_TEST_HOOKS
+    std::size_t loadCalls = 0;
+    std::size_t volkInitializeCalls = 0;
+    std::size_t instanceCreateCalls = 0;
+    std::size_t reportCallsAfterClose = 0;
+#endif
+};
+
+ProcessState g_process;
 
 core::Error makeError(
     core::ErrorCategory category,
@@ -40,6 +56,11 @@ std::optional<core::ErrorOrigin> vulkanOrigin(VkResult result) {
 std::optional<core::ErrorOrigin> osOrigin() {
     return core::ErrorOrigin{"os", static_cast<std::int64_t>(::GetLastError())};
 }
+
+// The only project-internal origin code in P0: the process was quarantined by an earlier
+// cleanup failure, so this refusal did not load anything.
+constexpr const char* kInternalOriginDomain = "internal";
+constexpr std::int64_t kQuarantinedProcessCode = 1;
 
 core::ResultKind resultKindFor(core::ErrorCategory category) {
     switch (category) {
@@ -175,6 +196,9 @@ struct RhiSession::Impl {
     }
 
     std::expected<void, core::Error> loadModule() {
+#ifdef AR_ENABLE_TEST_HOOKS
+        ++g_process.loadCalls;
+#endif
         if (const auto* explicitPath = std::get_if<ExplicitLoaderPath>(&config.loader);
             explicitPath != nullptr) {
             module = ::LoadLibraryW(explicitPath->path.wstring().c_str());
@@ -199,6 +223,9 @@ struct RhiSession::Impl {
         }
         volkInitializeCustom(getInstanceProcAddr);
         volkInitialized = true;
+#ifdef AR_ENABLE_TEST_HOOKS
+        ++g_process.volkInitializeCalls;
+#endif
         if (vkGetInstanceProcAddr == nullptr) {
             return std::unexpected(makeError(
                 core::ErrorCategory::LoaderSymbolMissing,
@@ -264,6 +291,9 @@ struct RhiSession::Impl {
         createInfo.pApplicationInfo = &applicationInfo;
 
         report.instanceCreate.requested = config.requestedApi;
+#ifdef AR_ENABLE_TEST_HOOKS
+        ++g_process.instanceCreateCalls;
+#endif
         const VkResult result = vkCreateInstance(&createInfo, nullptr, &instance);
         report.instanceCreate.vkResult = describe(result);
         if (result != VK_SUCCESS) {
@@ -502,15 +532,34 @@ struct RhiSession::Impl {
             module = nullptr;
         }
         getInstanceProcAddr = nullptr;
+        if (!residualResources.empty()) {
+            // Nothing about this state is retryable in P0: the leftover module or instance is
+            // released only by process exit, and a second open would reuse a polluted process.
+            g_process.quarantined = true;
+        }
     }
 
     std::expected<void, core::Error> query() {
-        if (auto error = validateRequest(config)) {
-            return std::unexpected(std::move(*error));
-        }
         report.capabilitySource = sourceFor(config);
         report.apiVariants.requested = detail::apiVariant(config.requestedApi);
         report.instanceCreate.requested = config.requestedApi;
+
+        // Checked before any OS load, volk initialisation or instance creation: a process that
+        // retained resources must not reuse the previously loaded entry table.
+        if (g_process.quarantined) {
+            report.productTargetSupported = false;
+            report.result = core::ResultKind::InitializationFailed;
+            report.errors.push_back(ReportError{
+                core::ErrorStage::Cleanup, core::ErrorCategory::CleanupFailed, std::nullopt});
+            return std::unexpected(makeError(
+                core::ErrorCategory::CleanupFailed,
+                core::ErrorStage::Cleanup,
+                "the process is quarantined: a previous cleanup retained resources",
+                core::ErrorOrigin{kInternalOriginDomain, kQuarantinedProcessCode}));
+        }
+        if (auto error = validateRequest(config)) {
+            return std::unexpected(std::move(*error));
+        }
 
         emitEvent(*diagnostics, core::LogLevel::Info, "rhi.query.start",
             "querying Vulkan capabilities for API " + apiText(config.requestedApi),
@@ -583,6 +632,9 @@ struct RhiSession::Impl {
         emitEvent(*diagnostics, core::LogLevel::Info, "rhi.close.start",
             "releasing the Vulkan instance and loader", core::ErrorStage::Cleanup);
         shutdown();
+        // Terminal for this session: a second close() returns the cached result, and a destructor
+        // after an explicit close no longer retries the failed steps.
+        closed = true;
         closeResult.closed = true;
         closeResult.errors = cleanupErrors;
         closeResult.residualResources = residualResources;
@@ -621,6 +673,14 @@ std::expected<std::unique_ptr<RhiSession>, QueryFailure> RhiSession::open(
 }
 
 const CapabilityReport& RhiSession::report() const noexcept {
+    if (m_impl->closed) {
+        // The contract allows report() only while open and not closed. The frozen snapshot is
+        // kept alive instead of dangling so this misuse stays observable rather than undefined;
+        // test builds count it so the precondition breach cannot pass unnoticed.
+#ifdef AR_ENABLE_TEST_HOOKS
+        ++g_process.reportCallsAfterClose;
+#endif
+    }
     return m_impl->report;
 }
 
@@ -630,5 +690,33 @@ CloseResult RhiSession::close() {
     }
     return m_impl->doClose();
 }
+
+#ifdef AR_ENABLE_TEST_HOOKS
+
+namespace detail {
+
+bool isProcessQuarantined() noexcept {
+    return g_process.quarantined;
+}
+
+void clearProcessQuarantine() noexcept {
+    g_process.quarantined = false;
+}
+
+ProcessCounters processCounters() noexcept {
+    return ProcessCounters{g_process.loadCalls, g_process.volkInitializeCalls,
+        g_process.instanceCreateCalls, g_process.reportCallsAfterClose};
+}
+
+void resetProcessCounters() noexcept {
+    g_process.loadCalls = 0;
+    g_process.volkInitializeCalls = 0;
+    g_process.instanceCreateCalls = 0;
+    g_process.reportCallsAfterClose = 0;
+}
+
+} // namespace detail
+
+#endif // AR_ENABLE_TEST_HOOKS
 
 } // namespace ar::rhi

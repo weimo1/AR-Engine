@@ -105,6 +105,29 @@ function(ar_add_build_info target)
         message(FATAL_ERROR "build identity sidecar is missing toolchain.triplet")
     endif()
 
+    # Compile options that change the produced binary without changing any source file must be
+    # part of the identity, otherwise a hookless production build can be verified against a
+    # test-hook sidecar of the same configuration.
+    string(JSON test_hooks_type ERROR_VARIABLE test_hooks_type_error TYPE "${raw}" build_options test_hooks)
+    if(test_hooks_type_error OR NOT test_hooks_type STREQUAL "BOOLEAN")
+        message(FATAL_ERROR
+            "build identity sidecar must carry a boolean build_options.test_hooks: ${test_hooks_type_error}")
+    endif()
+    string(JSON sidecar_test_hooks GET "${raw}" build_options test_hooks)
+    if(AR_ENABLE_TEST_HOOKS)
+        set(expected_test_hooks ON)
+        set(cpp_test_hooks "true")
+    else()
+        set(expected_test_hooks OFF)
+        set(cpp_test_hooks "false")
+    endif()
+    if(NOT sidecar_test_hooks STREQUAL expected_test_hooks)
+        message(FATAL_ERROR
+            "build identity sidecar records build_options.test_hooks=${sidecar_test_hooks} but "
+            "AR_ENABLE_TEST_HOOKS='${AR_ENABLE_TEST_HOOKS}'; regenerate the sidecar with "
+            "scripts/p0_build_identity.py prepare --test-hooks on|off to match this build")
+    endif()
+
     _ar_escape_cpp_string(cpp_build_id "${build_id}")
     _ar_escape_cpp_string(cpp_input_hash "${input_hash}")
     _ar_escape_cpp_string(cpp_configuration "${configuration}")
@@ -136,6 +159,7 @@ const char* const kBuildId = ${cpp_build_id};
 const char* const kInputHash = ${cpp_input_hash};
 const char* const kConfiguration = ${cpp_configuration};
 const char* const kTriplet = ${cpp_triplet};
+const bool kTestHooks = ${cpp_test_hooks};
 
 } // namespace
 
@@ -164,6 +188,11 @@ const char* buildCrtName()
 const char* buildTriplet()
 {
     return kTriplet;
+}
+
+bool buildTestHooks()
+{
+    return kTestHooks;
 }
 
 } // namespace detail

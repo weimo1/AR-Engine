@@ -47,6 +47,7 @@ json identityJson()
                                        : json("unknown")}};
     encoded["crt"] = ar::core::detail::buildCrtName();
     encoded["triplet"] = ar::core::detail::buildTriplet();
+    encoded["test_hooks"] = ar::core::detail::buildTestHooks();
     encoded["language_mode"] = languageModeName();
     return encoded;
 }
@@ -123,6 +124,14 @@ int main(int argc, char** argv)
                 compiled["source"]["dirty"]);
     } else {
         std::fprintf(stderr, "identity-mismatch: sidecar has no source stamp\n");
+        ++mismatches;
+    }
+    if (sidecar.contains("build_options") && sidecar["build_options"].is_object()) {
+        compare("build_options.test_hooks",
+                sidecar["build_options"].value("test_hooks", json("")),
+                compiled["test_hooks"]);
+    } else {
+        std::fprintf(stderr, "identity-mismatch: sidecar has no build_options.test_hooks\n");
         ++mismatches;
     }
 

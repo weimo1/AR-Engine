@@ -7,6 +7,10 @@ Subcommands (all deterministic, offline except record-dependencies):
   prepare              write build-input-manifest.json and build-identity.json for one config
   check                recompute the manifest/identity and fail on any difference
 
+The sidecar records the compile options that change the produced binary without changing any
+source file (currently AR_ENABLE_TEST_HOOKS) so a hookless production build cannot be verified
+against a test-hook sidecar of the same configuration.
+
 Identity encoding is canonical UTF-8 JSON: sorted keys, no extra whitespace, non-ASCII
 characters left unescaped.
 """
@@ -381,6 +385,7 @@ def build_identity(
     toolchain: dict,
     dependency_record: dict,
     manifest: dict,
+    build_options: dict,
 ) -> dict:
     dependency_hash = sha256_bytes(canonical_bytes(dependency_record))
     seed = {
@@ -388,6 +393,7 @@ def build_identity(
         "configuration": configuration,
         "toolchain": toolchain,
         "dependency_manifest_hash": dependency_hash,
+        "build_options": build_options,
     }
     return {
         "schema_version": 1,
@@ -396,6 +402,7 @@ def build_identity(
         "configuration": configuration,
         "toolchain": toolchain,
         "dependency_manifest_hash": dependency_hash,
+        "build_options": build_options,
         "source": source_stamp(snapshot),
     }
 
@@ -415,7 +422,10 @@ def prepare(args: argparse.Namespace) -> int:
         Path(args.toolchain_record), Path(args.dependency_record)
     )
     manifest = build_manifest(snapshot)
-    identity = build_identity(snapshot, args.configuration, toolchain, dependency_record, manifest)
+    build_options = {"test_hooks": args.test_hooks == "on"}
+    identity = build_identity(
+        snapshot, args.configuration, toolchain, dependency_record, manifest, build_options
+    )
 
     identity_dir = output_root / "identity" / args.configuration
     write_json(identity_dir / "build-input-manifest.json", manifest)
@@ -453,8 +463,9 @@ def check(args: argparse.Namespace) -> int:
     )
 
     current_manifest = build_manifest(snapshot)
+    build_options = {"test_hooks": args.test_hooks == "on"}
     current_identity = build_identity(
-        snapshot, args.configuration, toolchain, dependency_record, current_manifest
+        snapshot, args.configuration, toolchain, dependency_record, current_manifest, build_options
     )
 
     ok = True
@@ -470,6 +481,9 @@ def check(args: argparse.Namespace) -> int:
     )
     ok &= compare(
         "toolchain", recorded.get("toolchain"), current_identity["toolchain"]
+    )
+    ok &= compare(
+        "build_options", recorded.get("build_options"), current_identity["build_options"]
     )
     if not ok:
         fail("build inputs changed without regenerating the identity sidecar")
@@ -502,6 +516,12 @@ def main(argv: list[str]) -> int:
     prepare_parser.add_argument("--configuration", required=True)
     prepare_parser.add_argument("--toolchain-record", required=True)
     prepare_parser.add_argument("--dependency-record", required=True)
+    prepare_parser.add_argument(
+        "--test-hooks",
+        required=True,
+        choices=("on", "off"),
+        help="whether AR_ENABLE_TEST_HOOKS is part of this build (part of build_options)",
+    )
     prepare_parser.set_defaults(func=prepare)
 
     check_parser = subparsers.add_parser("check")
@@ -510,6 +530,12 @@ def main(argv: list[str]) -> int:
     check_parser.add_argument("--configuration", required=True)
     check_parser.add_argument("--toolchain-record", required=True)
     check_parser.add_argument("--dependency-record", required=True)
+    check_parser.add_argument(
+        "--test-hooks",
+        required=True,
+        choices=("on", "off"),
+        help="whether AR_ENABLE_TEST_HOOKS is part of this build (part of build_options)",
+    )
     check_parser.set_defaults(func=check)
 
     args = parser.parse_args(argv)
