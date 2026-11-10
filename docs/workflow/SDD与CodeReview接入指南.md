@@ -76,13 +76,13 @@ python -m unittest discover -s scripts/tests -v
 
 ## 评审与交付
 
-按本批任务运行 `python scripts/build_checks.py` 的适用模式（开发中用 `--fast`）。需要用 OCR 准备人工评审输入时，暂存差异后运行：
+每个开发任务按 [AGENTS.md](../../AGENTS.md) 先核对技术方案，再执行 TDD 和构建检查。开发中用 `--fast`，收尾运行 `python scripts/build_checks.py` 的完整门禁。通过后，只暂存本批差异并生成 OCR 输入：
 
 ```powershell
 python scripts/prepare_review.py --change <change-id>
 ```
 
-脚本用 OCR 的离线预览筛选文件，记录排除项及输入快照。把打印的目录、方案章节、实际测试结果交给现有评审对话。审查根据实际差异和调用方给出意见；修改后重新验证受影响的检查，并用新差异复核。旧自动交接和模型运行记录保留用于追溯。
+脚本用 OCR 的离线预览筛选文件，记录排除项及输入快照。把打印的目录、方案章节和实际测试结果交给未参与本批实现的 Codex 评审者。评审者按差异和调用方给出阻断意见或通过结论。修复阻断项后重跑受影响的检查，并让同一评审者复核修复差异。OCR 输入无法准备、缺少独立评审结论或额度耗尽时，保留差异，暂停勾选和提交。
 
 提交时由 Git hook 检查暂存内容和提交信息。GitHub Actions 的共享检查在推送 main、PR 或手动触发时运行，使用 `workflow.py ci` 检查文档、Python 工具测试和 OpenSpec。共享检查保留 OCR 安装，因为其中有使用真实 OCR 二进制的离线文件筛选测试。
 
