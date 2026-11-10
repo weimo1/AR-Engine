@@ -1,26 +1,33 @@
 # AR Engine 文档索引
 
-更新：2026-11-03。当前文档、调研和历史资料分开维护；归档不改变已确认决定，也不把草案升级为规范。
+更新：2026-11-10。当前文档、调研和历史资料分开维护；归档不改变已确认决定，也不把草案升级为规范。
 
 ## 开始阅读
 
 | 想了解什么 | 入口 |
 | --- | --- |
+| Agent 怎么干活 | 根目录 [AGENTS.md](../AGENTS.md)：一页规则；无人值守见 [自动运行](workflow/自动运行.md) |
+| 现在做到哪、下一步做什么 | [项目总任务](../TASK.md)：唯一的进度页和任务队列 |
 | 项目做什么 | [渲染引擎需求](../渲染引擎需求.txt) |
-| 模块与技术路线 | [总体架构](总体架构与技术路线.md)：基础选型已定，第13节记录本轮RHI、scene/render、视图缓存与诊断性能局部确认，其他提案仍待确认 |
-| 按什么顺序设计和实现 | [实施路线与阶段计划](实施路线与阶段计划.md)：P0—P7 纵切路线；当前执行顺序和任务见 [项目总任务](../TASK.md) |
+| 模块与技术路线 | [总体架构](总体架构与技术路线.md)、[实施路线](实施路线与阶段计划.md)（P0—P7 阶段） |
 | 已确定的技术选择 | [ADR 目录](adr/) |
-| 如何开始开发、检查和审查 | [SDD 与 Code Review 指南](workflow/SDD与CodeReview接入指南.md) |
-| 怎样让 Agent 自动连续执行 | [自动运行](workflow/自动运行.md)：任务队列 + 门禁 + 无头 CLI 循环，不靠人工转发 |
-| 多 Agent 如何分工和交接（旧，手工模式） | [协作与上下文](workflow/多Agent协作与上下文.md)：用户安排单人写入、直接指令执行，无强制权限登记或流程 gate |
-| 新对话如何开始 | [各角色开场提示词](workflow/多Agent对话启动提示词.md)：公共开场加具体任务说明，按直接指令执行；自动化快照按需使用 |
-| P0 基础工程方案 | [技术方案](../openspec/changes/bootstrap-engine-p0/design.md)、[范围与验收](../openspec/changes/bootstrap-engine-p0/proposal.md)：静态模块、固定C++23preview和动态CRT沿用；由 CTest 调用静态库公共入口；core/rhi/runtime 已本地完成，当前进入 P1 |
-| 当前进展和缺口 | [项目总任务](../TASK.md) |
-| 如何维护文档和确认边界 | [文档体系与确认机制](workflow/文档体系与确认机制.md) |
-| 按模块查设计和功能任务 | [模块文档](modules/README.md)、[模块与变更索引](workflow/模块与变更索引.md)：模块、change、步骤和角色包分层定位 |
-| 过去的讨论和旧模板 | [历史归档](archive/README.md) |
+| 某个模块的长期设计 | [模块文档](modules/README.md)，模块到 change 的对应见 [模块与变更索引](workflow/模块与变更索引.md) |
+| 某个里程碑的范围与验收 | `openspec/changes/<id>/proposal.md`，如 [P0](../openspec/changes/bootstrap-engine-p0/proposal.md) |
+| OpenSpec 与检查命令 | [SDD 指南](workflow/SDD与CodeReview接入指南.md)、[文档体系](workflow/文档体系与确认机制.md) |
+| 过去的讨论、旧的手工多对话模式 | [历史归档](archive/README.md) |
 
-项目仓库：[weimo1/AR-Engine](https://github.com/weimo1/AR-Engine)，本地 origin 使用用户给定的 SSH 地址。
+### 文档分层
+
+| 层 | 位置 | 写什么 | 谁改 |
+| --- | --- | --- | --- |
+| 规则 | AGENTS.md、standards/ | 怎么干活、代码和提交规范 | 用户确认后改 |
+| 产品与选型 | 需求、ADR、总体架构 | 做什么、用什么、模块边界 | 用户决定，架构讨论时改 |
+| 模块设计 | modules/<模块>/README.md | 职责、接口、所有权、失败处理 | 实现改变长期契约时同步改 |
+| 里程碑 | openspec/changes/<id>/ | 本阶段范围与验收用例名 | 开始一个阶段时写 |
+| 进度 | TASK.md | 任务队列、一行结果、待办池 | 每个任务完成时改 |
+| 实现事实 | 代码、测试、提交信息 | 实际行为 | 每次提交 |
+
+同一件事只写在一层。进度不写进模块文档或 change；实现细节不写进需求。
 
 ## 已确认的技术决策
 

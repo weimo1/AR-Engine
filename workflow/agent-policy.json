@@ -70,10 +70,10 @@
       "basis": "2026-10-21 用户要求统一提交前缀与规则；本次实现格式门槛"
     },
     {
-      "path": "docs/workflow/多Agent协作与上下文.md",
+      "path": "docs/workflow/自动运行.md",
       "purpose": "execution",
       "status": "confirmed",
-      "basis": "本次用户授权的角色和串行交接协议"
+      "basis": "2026-11-10 用户确认的任务队列与自动循环"
     }
   ],
   "native_documents": [

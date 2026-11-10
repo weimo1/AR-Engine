@@ -4,11 +4,9 @@
 
 文档、OpenSpec 契约或工作流配置改动后，从仓库根运行 `python scripts/workflow.py check`。它检查文档链接、派生契约和工具配置，结果直接显示在终端。日常自检无需保存日志或生成任务包。修改代码时，另跑覆盖该改动的构建和测试，交接时用一行记录实际命令与结果即可。
 
-## 第二步：多 Agent 交接
+## 第二步：交接
 
-在对话里交代任务、方案依据、输入版本和验收情况。接手者核对同一版差异后开始工作。直接复制 [四行交接格式](多Agent协作与上下文.md#从方案到交付怎么交接)。
-
-统筹维护 [项目总任务](../../TASK.md)。用户安排本批执行者，按现有方案和实际差异交接。
+日常开发由 [自动运行](自动运行.md) 驱动，交接靠 TASK.md 和 Git，不在对话间转发。需要人工交接时，说清任务编号、依据和已跑的检查即可。
 
 ## 本地准备
 
@@ -78,7 +76,7 @@ python -m unittest discover -s scripts/tests -v
 
 ## 评审与交付
 
-按本批任务运行 `python scripts/build_checks.py` 的适用模式。暂存本批差异后运行：
+按本批任务运行 `python scripts/build_checks.py` 的适用模式（开发中用 `--fast`）。需要用 OCR 准备人工评审输入时，暂存差异后运行：
 
 ```powershell
 python scripts/prepare_review.py --change <change-id>
@@ -92,14 +90,4 @@ python scripts/prepare_review.py --change <change-id>
 
 ## Token 用量记录
 
-- 每个对话在任务完成、交接或主动停止前，由主 Agent 从项目根目录串行执行 `python .ar-workflow/update-token-usage.py`，更新 `.ar-workflow/AI-token用量统计.txt` 和对应 JSON 明细。子 Agent 不并发写统计文件；有可用的会话或请求身份时随交接提供，由主 Agent 统一汇总。
-- 用量只依据实际会话计数、原始响应 usage 或可追溯的原生会话汇总。相同会话的累计计数只取最新值，DeepSeek 按响应 ID 去重；缓存输入、推理输出与继承的会话历史不得重复相加。无法区分父子 Agent 独立消耗时明确标为未拆分，不伪造明细。
-- 失败、截断及重试中已返回的实际 usage 也应计入；中断无响应、记录丢失、口径冲突或来源不完整时标记未知/缺口，不按零处理，不用估算冒充实际消耗。不同来源不能确认无重叠时单列，不强行合并。
-- 统计只离线读取用量记录，不为统计调用模型，不读取或导出凭据，不将会话正文写入报表。Codex token 计数不等于订阅费用或五小时额度，DeepSeek 本地统计不替代供应商账单。
-- 脚本及报表目前是本机 `.ar-workflow/` 中的忽略文件，不自动提交或推送。新环境缺少脚本、记录不可访问或统计失败时，交接中说明具体缺口；不因此安装全局工具、修改原始证据或阻塞其他已授权工作。
-
-## 临时过程文件
-
-普通检查日志、试验截图、临时脚本及重复导出统一使用 `build/temp/<task>/`，任务结束后确认无进程使用及无待审引用即可清理对应子目录。共享工作流 CI 的本地过程输出固定使用 `build/temp/workflow-ci/`，后续运行覆盖该位置。
-
-长期方案和必要的复现结论写回 `docs/` 与对应 change。正式构建、依赖缓存及待审 OCR 快照分别沿用现有目录；命令表验收输出仍在 `build/logs/`、`build/metadata/` 等约定位置。清理 `build/temp/` 前结束使用这些文件的检查任务。
+本机 `.ar-workflow/update-token-usage.py` 可离线汇总 Codex/DeepSeek 用量，需要时手动运行，不再是每个任务的必做步骤。

@@ -33,7 +33,7 @@ P0 基础工程（core 诊断、rhi 能力查询、runtime 组合）已本地完
 
 - 了解项目：[文档索引](docs/README.md)。
 - AI进入任务：[AGENTS.md](AGENTS.md)。
-- 分配角色、准备对话：[多Agent协作](docs/workflow/多Agent协作与上下文.md)。
+- 让 Agent 自动连续开发：[自动运行](docs/workflow/自动运行.md)。
 - 恢复工具与执行检查：[SDD与CodeReview接入指南](docs/workflow/SDD与CodeReview接入指南.md)。
 
 开发按“明确任务 → 实现 → 按影响检查 → 报告结果”推进；独立 Review 按任务需要及用户安排执行，提交与 CI 按实际授权处理。用户协调单人写入，不要求写包、writer 权限登记或流程 gate。新能力先确认方案，小修引用已有方案；可选工具见接入指南。
