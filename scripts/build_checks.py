@@ -8,6 +8,8 @@ Paths use ${REPO}, ${OUT}, ${VCPKG_ROOT} and ${DEPS}; ${OUT} defaults to
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -28,6 +30,23 @@ def build_commands(table: dict) -> list[str]:
     return [name for name in commands if name in selected]
 
 
+def fast_commands(table: dict) -> list[str]:
+    """Incremental Debug build and CTest: no clean rebuild, no second configuration."""
+    return [command['id'] for command in table['commands']
+            if 'RelWithDebInfo' not in command['id']
+            and not command['id'].startswith(('clcmd-', 'verify-inputs-'))]
+
+
+def load_local_paths(repo_root: Path) -> None:
+    """Take VCPKG_ROOT / AR_P0_DEPS from the ignored CMakeUserPresets.json when unset."""
+    presets = repo_root / 'CMakeUserPresets.json'
+    if not presets.is_file():
+        return
+    for preset in json.loads(presets.read_text(encoding='utf-8')).get('configurePresets', []):
+        for key, value in preset.get('environment', {}).items():
+            os.environ.setdefault(key, value)
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", default=None,
@@ -36,6 +55,8 @@ def main(argv: list[str]) -> int:
                         help="root for ${OUT} (default: <repo>/build)")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--phase', choices=('build', 'test'), help='build only, or build and run required tests')
+    mode.add_argument('--fast', action='store_true',
+                      help='inner loop: incremental Debug build and CTest only')
     mode.add_argument("--only", nargs="+", default=None, help="run only the named command ids")
     parser.add_argument('--test-file', action='append', type=Path, default=[],
                         help='affected test source under tests/ (repeat for multiple files)')
@@ -49,6 +70,7 @@ def main(argv: list[str]) -> int:
     table_path = Path(args.manifest) if args.manifest else repo_root / "workflow" / "p0-checks.json"
     output_root = Path(args.output_root).resolve() if args.output_root else repo_root / "build"
 
+    load_local_paths(repo_root)
     try:
         tests_root = (repo_root / 'tests').resolve()
         for name in args.test_file:
@@ -57,6 +79,8 @@ def main(argv: list[str]) -> int:
                 raise ValueError(f'Test file missing or outside tests/: {name}')
         table = p0.load_table(table_path)
         only = build_commands(table) if args.phase == 'build' else args.only
+        if args.fast:
+            only = fast_commands(table)
         if args.phase == 'test' and not any(
             command['parser_id'] == 'ctest-junit' and command['required'] and command['expected_cases']
             for command in table['commands']

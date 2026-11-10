@@ -1,18 +1,16 @@
-"""Drive the TASK.md queue unattended: implement -> gate -> review -> commit -> next.
+"""Drive the TASK.md queue unattended: (tests) -> implement -> gate -> review -> commit -> next.
 
 Each task runs in a fresh headless agent process (Codex or Claude Code), so no conversation
 context accumulates. State lives only in TASK.md and Git. The gate is run by this script, not
 trusted from the agent's report. Stops at a task marked [人工], on a red gate after the retry
 budget, on a blocking review that survives one fix round, or when the queue is empty.
 
-    python scripts/autorun.py --agent codex --reviewer claude
+    python scripts/autorun.py --agent codex --tester claude --reviewer claude
     python scripts/autorun.py --dry-run
 """
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import re
 import shutil
 import subprocess
@@ -37,13 +35,32 @@ AGENTS = {
     },
 }
 
+TEST_PROMPT = """你是 AR Engine 的测试工程师，工作区 {root}。先读 AGENTS.md 并遵守。
+只为 TASK.md 里的这一项任务写验收测试，不实现功能：
+
+{task}
+
+要求：
+1. 按“验收”在 tests/ 下写 Catch2 用例，用例名与任务里的 CTest 名一致，并登记到
+   tests/CMakeLists.txt 和 workflow/p0-checks.json 的 expected_cases。
+2. 断言写可观察行为，覆盖主路径和真实会遇到的失败，不堆穷举矩阵。
+3. 不修改 engine/ 下的实现；需要的公开接口按任务目标和相邻模块的约定假定，写在测试里。
+4. 此时编译失败是预期的，不要运行门禁，不要提交。
+"""
+
+TESTS_READY = """
+验收测试已由测试角色写好（见 git status）。实现到它们通过；接口形状不合适可以调整测试的
+调用方式，但不得删除用例或削弱断言。
+"""
+
 DEV_PROMPT = """你是 AR Engine 的开发者，工作区 {root}。先读 AGENTS.md 并遵守。
 只做 TASK.md 里的这一项任务，不做后续任务：
 
 {task}
 
 要求：
-1. 按 TDD 实现并补测试，自己运行 `python scripts/build_checks.py` 直到全绿。
+1. 按 TDD 实现并补测试。开发中用 `python scripts/build_checks.py --fast`（增量 Debug），
+   收尾前跑一次完整的 `python scripts/build_checks.py` 直到全绿。
 2. 全绿后在 TASK.md 把该任务勾选为 [x]，并在标题行末尾补一句结果。
 3. 把提交信息（按 docs/standards/Git提交信息规范.md，含 Why/What/Tests/Refs）写入 {msg}。
 4. 不要执行 git commit 或 git push，提交由外层脚本完成。不要新建记录过程的脚本、JSON 或文档。
@@ -55,7 +72,8 @@ REVIEW_PROMPT = """你是独立代码评审，只读。工作区 {root}。评审
 {task}
 
 只报告阻断级问题：编译或测试必然失败、崩溃、资源泄漏、数据错误、违反模块依赖方向或 ADR、
-验收未满足。风格、命名和“可以更健壮”不算。每个问题给出文件、行和触发方式。
+验收未满足、测试被删除或断言被削弱、新增了记录过程用的脚本/JSON/文档或源码目录里的临时文件。
+风格、命名和“可以更健壮”不算。每个问题给出文件、行和触发方式。
 最后一行必须是 `VERDICT: PASS` 或 `VERDICT: BLOCK`。"""
 
 
@@ -73,22 +91,12 @@ def next_task() -> tuple[str, str, str] | None:
     return None
 
 
-def gate_environment() -> dict[str, str]:
-    env = dict(os.environ)
-    presets = ROOT / 'CMakeUserPresets.json'
-    if presets.is_file():
-        local = json.loads(presets.read_text(encoding='utf-8'))['configurePresets'][0]
-        for key, value in local.get('environment', {}).items():
-            env.setdefault(key, value)
-    return env
-
-
-def run(command: list[str], log: Path, prompt: str | None = None, env: dict | None = None) -> int:
+def run(command: list[str], log: Path, prompt: str | None = None) -> int:
     executable = shutil.which(command[0])
     if not executable:
         raise SystemExit(f'autorun: {command[0]} not found on PATH')
     with log.open('w', encoding='utf-8', errors='replace') as handle:
-        result = subprocess.run([executable, *command[1:]], cwd=ROOT, input=prompt, env=env,
+        result = subprocess.run([executable, *command[1:]], cwd=ROOT, input=prompt,
                                 stdout=handle, stderr=subprocess.STDOUT, encoding='utf-8',
                                 errors='replace')
     print(f'  [{"ok" if result.returncode == 0 else "exit " + str(result.returncode)}] '
@@ -105,32 +113,55 @@ def git(*args: str) -> subprocess.CompletedProcess:
                           errors='replace')
 
 
-def run_task(task_id: str, task: str, agent: str, reviewer: str) -> str | None:
+def format_changed() -> None:
+    """Apply .clang-format to the C++ files this task touched, so style never needs a review."""
+    tool = shutil.which('clang-format')
+    if not tool:
+        found = sorted(Path(p) for root in ('C:/Program Files', 'D:/Program Files')
+                       for p in Path(root).glob(
+                           'Microsoft Visual Studio/*/*/VC/Tools/Llvm/x64/bin/clang-format.exe'))
+        tool = str(found[-1]) if found else None
+    if not tool:
+        print('  [skip] clang-format not found', flush=True)
+        return
+    changed = git('status', '--porcelain', '--untracked-files=all', '--', 'engine', 'tests',
+                  'examples').stdout.splitlines()
+    files = [line[3:].strip('"') for line in changed
+             if line[:2].strip() != 'D' and line.endswith(('.h', '.cpp', '.h"', '.cpp"'))]
+    if files:
+        subprocess.run([tool, '-i', *files], cwd=ROOT, check=False)
+
+
+def run_task(task_id: str, task: str, agent: str, tester: str, reviewer: str) -> str | None:
     """Returns None when the task was committed, otherwise the reason to stop."""
     out = ROOT / 'build' / 'temp' / 'autorun' / task_id
     out.mkdir(parents=True, exist_ok=True)
     msg = out / 'commit-msg.txt'
     msg.unlink(missing_ok=True)
     fields = {'root': ROOT, 'task': task, 'task_id': task_id, 'msg': msg}
-    env = gate_environment()
 
     def develop_until_green(extra: str, label: str) -> str | None:
         for attempt in range(1, GATE_RETRIES + 1):
             run(AGENTS[agent]['write'], out / f'{label}-{attempt}.log',
-                DEV_PROMPT.format(extra=extra, **fields), env)
+                DEV_PROMPT.format(extra=extra, **fields))
+            format_changed()
             gate_log = out / f'{label}-gate-{attempt}.log'
-            if run(GATE, gate_log, env=env) == 0:
+            if run(GATE, gate_log) == 0:
                 return None
             extra = f'\n上一轮门禁失败，先修复它。日志末尾：\n{tail(gate_log)}\n'
         return f'gate still red after {GATE_RETRIES} attempts, see {out}'
 
-    failure = develop_until_green('', 'dev')
+    first = ''
+    if tester != 'none':
+        run(AGENTS[tester]['write'], out / 'test.log', TEST_PROMPT.format(**fields))
+        first = TESTS_READY
+    failure = develop_until_green(first, 'dev')
     if failure:
         return failure
 
     if reviewer != 'none':
         review_log = out / 'review.log'
-        run(AGENTS[reviewer]['read'], review_log, REVIEW_PROMPT.format(**fields), env)
+        run(AGENTS[reviewer]['read'], review_log, REVIEW_PROMPT.format(**fields))
         review = review_log.read_text(encoding='utf-8', errors='replace')
         if 'VERDICT: PASS' not in review:
             failure = develop_until_green(
@@ -148,6 +179,7 @@ def run_task(task_id: str, task: str, agent: str, reviewer: str) -> str | None:
     if commit.returncode != 0:
         return f'commit rejected:\n{commit.stdout}{commit.stderr}'
     print(f'  committed {git("log", "--oneline", "-1").stdout.strip()}', flush=True)
+    shutil.rmtree(out, ignore_errors=True)  # logs only matter when a task stops
     return None
 
 
@@ -155,6 +187,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--agent', choices=sorted(AGENTS), default='codex')
+    parser.add_argument('--tester', choices=[*sorted(AGENTS), 'none'], default='none',
+                        help='write the acceptance tests first with a separate agent')
     parser.add_argument('--reviewer', choices=[*sorted(AGENTS), 'none'], default='none')
     parser.add_argument('--max-tasks', type=int, default=20)
     parser.add_argument('--dry-run', action='store_true', help='print the next task and exit')
@@ -176,7 +210,7 @@ def main() -> int:
         if git('status', '--porcelain').stdout.strip():
             print('autorun: working tree is not clean; commit or stash first', file=sys.stderr)
             return 1
-        reason = run_task(task_id, task, args.agent, args.reviewer)
+        reason = run_task(task_id, task, args.agent, args.tester, args.reviewer)
         if reason:
             print(f'autorun: stopped at {task_id}: {reason}', file=sys.stderr)
             return 1

@@ -36,7 +36,12 @@
 - 在 GitHub Actions 页面手动运行一次 “Engine CPU build and test”（本机没有 `gh`）。首跑大概率因工具链精确版本不符失败；把结果贴给 Agent，再决定放宽版本检查并改成推送触发 + vcpkg 缓存。
 - `ce17449` 之后的 3 个本地提交尚未推送；确认后 `git push`。
 
+- 首次使用自动循环前：修正 Codex CLI 的默认模型（见 [自动运行](docs/workflow/自动运行.md) 的注意事项），设置 `CLAUDE_CODE_GIT_BASH_PATH`，然后用 `--max-tasks 1` 试跑 T01。
+
 ## 待办池（建议级，不阻塞）
+
+- 完整门禁每个配置先增量构建、再干净重编一次（为了采集编译命令行），代码变多后耗时翻倍；评估去掉其中一次。
+- clang-tidy 需要 compile_commands.json，VS 生成器不产出；P1 后评估用 Ninja 预设跑静态检查。
 
 - CMake 目前必须先由脚本生成 build identity 才能配置；P1 有可执行程序后评估给缺省值，方便直接在 VS 打开。
 - 工具链检查由精确版本改为最低版本。

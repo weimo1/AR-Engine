@@ -7,13 +7,17 @@ C++23 / Vulkan 1.4 独立渲染引擎（毕设）。渲染优先，编辑器后�
 1. 读 [TASK.md](TASK.md)，取队列里第一项未勾选的任务。任务写了目标、范围和验收，这就是全部授权，直接做。
 2. 需要设计依据时查 [文档索引](docs/README.md)：[需求](渲染引擎需求.txt)、[ADR](docs/adr/)、[总体架构](docs/总体架构与技术路线.md)、[模块方案](docs/modules/README.md)。只读本任务用得上的部分。
 3. 写代码的同时写测试（TDD）：先让验收用例失败，再实现到通过。
-4. 运行门禁，全绿才算完成：
+4. 开发中用快速检查（增量 Debug 构建加 CTest，约 20 秒），收尾跑一次完整门禁，全绿才算完成：
+
+   ```powershell
+   python scripts/build_checks.py --fast
+   ```
 
    ```powershell
    python scripts/build_checks.py
    ```
 
-   门禁是：两配置（Debug / RelWithDebInfo）编译零警告、CTest 全过。新增用例要登记到 `workflow/p0-checks.json` 的 `expected_cases`。本机路径取自 `CMakeUserPresets.json`（需要环境变量 `VCPKG_ROOT`、`AR_P0_DEPS`）。
+   完整门禁是：两配置（Debug / RelWithDebInfo）干净重编零警告、CTest 全过。新增用例要登记到 `workflow/p0-checks.json` 的 `expected_cases`。本机依赖路径脚本会自动从 `CMakeUserPresets.json` 读取。
 5. 门禁通过后：在 TASK.md 勾选该任务并用一行写结果，按 [提交规范](docs/standards/Git提交信息规范.md) 提交（`type(scope): 摘要` + Why/What/Tests/Refs）。只提交本任务的文件，不用 `--no-verify`。
 6. 继续下一项。遇到标 `[人工]` 的任务停下，等用户。
 
@@ -23,6 +27,7 @@ C++23 / Vulkan 1.4 独立渲染引擎（毕设）。渲染优先，编辑器后�
 
 - **够用就停。** 只实现当前任务验收需要的东西。不为未来阶段预留抽象，不为原型阶段的代码补穷举式失败矩阵。一个任务的测试覆盖主路径和真实会遇到的失败即可。
 - **不写流水账。** 不新建记录“我做了什么”的脚本、JSON、证据目录或交接文档。事实只存三处：代码、提交信息、TASK.md 的一行结果。
+- **不留垃圾。** 一次性的改稿脚本、探针和提交信息草稿只放 `build/temp/<任务>/`，任务结束前删掉自己建的。源码目录、仓库根和系统临时目录不留任何临时文件。
 - **不扩建工作流。** 不新增检查脚本、gate、角色、模板。现有 `scripts/` 够用；确实挡路时改最小的一处并在提交信息里说明。
 - **自己拿主意。** 命名、内部结构、局部接口、测试写法自行决定。只有会改变 ADR 选型、模块边界、需求范围，或要花钱、推送、删除非本任务文件时才停下来问。
 - **先查再写。** 改代码前看相邻实现和调用方，沿用已有约定；外部 API 不确定就查头文件或文档，不凭记忆。
@@ -36,6 +41,7 @@ C++23 / Vulkan 1.4 独立渲染引擎（毕设）。渲染优先，编辑器后�
 
 ## 工程约定
 
+- 格式由仓库根 `.clang-format` 决定，不手工争论风格；自动循环会在门禁前格式化改动过的 C++ 文件。
 - 目录、命名、所有权见 [C++ 目录与格式](docs/standards/C++目录命名与格式规范.md)、[类型与生命周期](docs/standards/C++类型接口与资源生命周期规范.md)；数学与坐标见 [数学规范](docs/standards/数学坐标与颜色规范.md)。
 - 模块依赖单向：`core ← rhi ← render`，`runtime` 负责组合；core 不依赖 Vulkan。
 - 所有可再生输出放仓库根 `build/`，临时文件放 `build/temp/<任务>/`，不在源码目录或盘符根建输出目录。
