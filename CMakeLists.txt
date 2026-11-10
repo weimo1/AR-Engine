@@ -87,6 +87,7 @@ include(ArBuildIdentity)
 ar_require_cxx23_preview()
 
 add_subdirectory(engine/core)
+add_subdirectory(engine/platform)
 add_subdirectory(engine/rhi)
 add_subdirectory(engine/runtime)
 

@@ -7,6 +7,7 @@
 | core | [core](core/README.md) | 基础职责已确认；P0 最小诊断、错误和摘要已实现 |
 | rhi | [rhi](rhi/README.md) | 底层职责已确认；P0 基础加载与查询已实现，关闭后报告失效和进程隔离待收口 |
 | runtime | [runtime](runtime/README.md) | 模块组合及scene到render的提取边界已确认；详细接口未交付 |
+| platform | [platform](platform/README.md) | 窗口、事件及呈现所需的平台接入 |
 | scene | [scene](scene/README.md) | 权威场景数据与render分离已确认；未实施 |
 | render | [render](render/README.md) | 持久场景、视图、缓存及未来GI扩展边界已确认；未实施 |
 

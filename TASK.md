@@ -10,7 +10,7 @@
 
 ## 任务队列
 
-- [ ] T01 platform 模块与 GLFW 窗口
+- [x] T01 platform 模块与 GLFW 窗口：GLFW 3.4 已接入，隐藏窗口和 Vulkan 扩展查询通过，双配置各 51/51、零编译警告。
   - 目标：vcpkg 加入 glfw3；新增 `engine/platform` 静态库（`ar_platform`），提供 Window：创建/销毁、事件轮询、关闭请求、帧缓冲尺寸、是否最小化、所需 instance 扩展列表。不含输入映射。
   - 验收：CTest `platform-window-create`（创建隐藏窗口、轮询若干次、读取尺寸、销毁）；公开头检查通过；门禁全绿。
 - [ ] T02 rhi 逻辑设备与 Validation

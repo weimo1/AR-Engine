@@ -2,12 +2,13 @@
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
   "name": "ar-engine",
   "version-string": "0.1.0-p0",
-  "description": "AR Engine P0 dependencies. The registry baseline is pinned in vcpkg-configuration.json.",
+  "description": "AR Engine dependencies. The registry baseline is pinned in vcpkg-configuration.json.",
   "dependencies": [
     "spdlog",
     "nlohmann-json",
     "catch2",
     "vulkan-headers",
-    "volk"
+    "volk",
+    "glfw3"
   ]
 }

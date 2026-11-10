@@ -280,9 +280,12 @@
         "runtime-summary-capability",
         "runtime-summary-output-failure",
         "runtime-system-development",
-        "runtime-system-inspect"
+        "runtime-system-inspect",
+        "platform-window-create",
+        "platform-window-vulkan-extensions"
       ],
       "gpu_cases": [
+        "platform-window-vulkan-extensions",
         "runtime-system-development",
         "runtime-system-inspect"
       ]
@@ -537,9 +540,12 @@
         "runtime-summary-capability",
         "runtime-summary-output-failure",
         "runtime-system-development",
-        "runtime-system-inspect"
+        "runtime-system-inspect",
+        "platform-window-create",
+        "platform-window-vulkan-extensions"
       ],
       "gpu_cases": [
+        "platform-window-vulkan-extensions",
         "runtime-system-development",
         "runtime-system-inspect"
       ]

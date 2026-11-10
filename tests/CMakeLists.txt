@@ -158,6 +158,14 @@ endforeach()
 # workflow/p0-checks.json.
 set_tests_properties(runtime-system-inspect runtime-system-development PROPERTIES LABELS gpu)
 
+add_executable(ar_platform_tests platform/test_window.cpp)
+target_link_libraries(ar_platform_tests PRIVATE ar_platform Catch2::Catch2WithMain)
+foreach(case IN ITEMS platform-window-create platform-window-vulkan-extensions)
+    add_test(NAME ${case} COMMAND ar_platform_tests "[${case}]")
+    set_tests_properties(${case} PROPERTIES TIMEOUT 15)
+endforeach()
+set_tests_properties(platform-window-vulkan-extensions PROPERTIES LABELS gpu)
+
 # F5 launches the executable directly, so CTest's ENVIRONMENT property does not apply.
 foreach(test_target IN ITEMS ar_core_tests ar_rhi_tests ar_runtime_tests)
     set_target_properties(${test_target} PROPERTIES
@@ -176,8 +184,9 @@ add_library(ar_public_header_probe OBJECT
     public_headers/header_rhi_session.cpp
     public_headers/header_runtime_config.cpp
     public_headers/header_runtime_session.cpp
+    public_headers/header_platform_window.cpp
 )
-target_link_libraries(ar_public_header_probe PRIVATE ar_core ar_rhi ar_runtime)
+target_link_libraries(ar_public_header_probe PRIVATE ar_core ar_rhi ar_runtime ar_platform)
 add_test(NAME public-headers
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/check_public_headers.py"
         --search-root "${CMAKE_CURRENT_BINARY_DIR}"
@@ -208,8 +217,9 @@ add_test(NAME build-identity
         --test-hooks "$<IF:$<BOOL:${AR_ENABLE_TEST_HOOKS}>,on,off>"
 )
 
-# Visual Studio solution folders. The three suites are the entry points a developer runs; the
+# Visual Studio solution folders. The suites are the entry points a developer runs; the
 # fixture loader and the two probes only exist to serve them.
-set_target_properties(ar_core_tests ar_rhi_tests ar_runtime_tests PROPERTIES FOLDER "Tests")
+set_target_properties(ar_core_tests ar_rhi_tests ar_runtime_tests ar_platform_tests
+    PROPERTIES FOLDER "Tests")
 set_target_properties(ar_rhi_fixture ar_identity_probe ar_public_header_probe
     PROPERTIES FOLDER "TestSupport")

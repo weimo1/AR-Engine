@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "objective": "P1a 首个画面。本批按用户指令实现 T01 GLFW 窗口并跑本机双配置验收。",
+  "non_goals": ["本批不接入 surface、设备和渲染", "P1a 不扩展到输入映射和编辑器"],
+  "tags": ["native"],
+  "documents": [
+    {"path": "TASK.md", "purpose": "requirements", "status": "confirmed", "basis": "本批 T01 的范围和验收"},
+    {"path": "docs/实施路线与阶段计划.md", "purpose": "architecture", "status": "reference", "basis": "P1a 阶段依赖"},
+    {"path": "docs/modules/platform/README.md", "purpose": "architecture", "status": "reference", "basis": "窗口边界和所有权"}
+  ],
+  "skills": ["ar-cpp-oop-style", "ar-e2e-side-effect-safety", "ar-context7"],
+  "write_paths": [
+    "openspec/changes/p1a-first-frame/**", "docs/modules/platform/**",
+    "docs/modules/README.md", "docs/workflow/模块与变更索引.md", "TASK.md",
+    "engine/platform/**", "CMakeLists.txt", "vcpkg.json",
+    "tests/CMakeLists.txt", "tests/platform/**", "tests/public_headers/header_platform_window.cpp",
+    "tests/check_public_headers.py", "workflow/p0-checks.json"
+  ]
+}
