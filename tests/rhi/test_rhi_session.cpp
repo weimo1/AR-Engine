@@ -6,6 +6,8 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include <windows.h>
 
@@ -230,7 +232,103 @@ constexpr std::int64_t kErrorInitializationFailed = -3;
 constexpr std::int64_t kErrorFeatureNotPresent = -8;
 constexpr std::int64_t kErrorIncompatibleDriver = -9;
 
+bool containsEvent(
+    const std::filesystem::path& directory, const std::string& runId, std::string_view eventId) {
+    std::ifstream events(directory / runId / "events.jsonl");
+    REQUIRE(events.is_open());
+    for (std::string line; std::getline(events, line);) {
+        if (line.find(eventId) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
+
+TEST_CASE("a real Vulkan 1.3 graphics device starts and closes", "[rhi-device-create]") {
+    const std::string runId = "rhi-device-create";
+    const auto directory = freshRunDirectory(runId);
+    auto diagnostics = makeSession(directory, runId);
+    rhi::QueryConfig config;
+    config.requestedApi = rhi::makeApiVersion(1, 3);
+    config.createGraphicsDevice = true;
+    auto opened = rhi::RhiSession::open(config, *diagnostics);
+    INFO((opened ? "" : opened.error().error.message));
+    REQUIRE(opened.has_value());
+    auto& session = **opened;
+    CHECK_FALSE(session.report().capabilitySource.simulated);
+    const auto device = session.graphicsDeviceInfo();
+    REQUIRE(device.has_value());
+#ifdef _DEBUG
+    CHECK(device->validationEnabled);
+#else
+    CHECK_FALSE(device->validationEnabled);
+#endif
+    CHECK(session.close().resourcesReleased);
+    CHECK_FALSE(session.graphicsDeviceInfo().has_value());
+    finishSession(*diagnostics, runId);
+    CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
+}
+
+TEST_CASE("a missing Vulkan 1.3 feature prevents device creation", "[rhi-device-missing-feature]") {
+    const std::string runId = "rhi-device-missing-feature";
+    auto diagnostics = makeSession(freshRunDirectory(runId), runId);
+    auto config = fixtureConfig("device=1.3;dynamic=missing");
+    config.requestedApi = rhi::makeApiVersion(1, 3);
+    config.createGraphicsDevice = true;
+    auto opened = rhi::RhiSession::open(config, *diagnostics);
+    REQUIRE_FALSE(opened.has_value());
+    CHECK(opened.error().error.stage == core::ErrorStage::Capability);
+    CHECK(opened.error().error.message.find("dynamicRendering") != std::string::npos);
+    CHECK(opened.error().cleanupErrors.empty());
+    CHECK(opened.error().residualResources.empty());
+    finishSession(*diagnostics, runId);
+}
+
+TEST_CASE(
+    "graphics selection skips an unsupported adapter and forwards validation",
+    "[rhi-device-selection]") {
+    const std::string runId = "rhi-device-selection";
+    const auto directory = freshRunDirectory(runId);
+    auto diagnostics = makeSession(directory, runId);
+    auto config = fixtureConfig("device=1.3;devices=2;dynamic=first-missing");
+    config.requestedApi = rhi::makeApiVersion(1, 3);
+    config.createGraphicsDevice = true;
+
+    config.device = rhi::ExplicitDeviceIndex{0};
+    auto explicitFirst = rhi::RhiSession::open(config, *diagnostics);
+    REQUIRE_FALSE(explicitFirst.has_value());
+    CHECK(explicitFirst.error().error.message.find("dynamicRendering") != std::string::npos);
+
+    config.device = rhi::FirstEnumerated{};
+    rhi::detail::resetProcessCounters();
+    auto opened = rhi::RhiSession::open(config, *diagnostics);
+    INFO((opened ? "" : opened.error().error.message));
+    REQUIRE(opened.has_value());
+    const auto device = (*opened)->graphicsDeviceInfo();
+    REQUIRE(device.has_value());
+    CHECK(device->graphicsQueueFamily == 1);
+
+    const auto overlapping = rhi::RhiSession::open(config, *diagnostics);
+    REQUIRE_FALSE(overlapping.has_value());
+    CHECK(overlapping.error().error.category == core::ErrorCategory::InvalidState);
+    CHECK(rhi::detail::processCounters().loadCalls == 1);
+
+    CHECK((*opened)->close().resourcesReleased);
+    CHECK((*opened)->close().resourcesReleased);
+#ifdef _DEBUG
+    CHECK(rhi::detail::processShutdownOrder() == std::vector<int>{4, 5, 1, 2, 3});
+#else
+    CHECK(rhi::detail::processShutdownOrder() == std::vector<int>{4, 1, 2, 3});
+#endif
+    finishSession(*diagnostics, runId);
+#ifdef _DEBUG
+    CHECK(containsEvent(directory, runId, "rhi.validation.warning"));
+#else
+    CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.warning"));
+#endif
+}
 
 TEST_CASE("a fixture without physical devices reports device_not_found", "[rhi-device-none]") {
     const std::string runId = "rhi-device-none";

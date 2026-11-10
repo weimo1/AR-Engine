@@ -2,7 +2,7 @@
 
 ## 问题与范围
 
-把 P0 能力查询推进到独立三角形示例。按 [任务队列](../../../TASK.md) 实施窗口、设备、呈现、Shader、截图与窗口变化。沿用 [阶段路线](../../../docs/实施路线与阶段计划.md) 和 [构建选型](../../../docs/adr/0007-基础构建与第三方依赖选型.md)。开发基线 Vulkan 1.3，产品 1.4/Descriptor Heap 独立验收。本批只执行 T01。
+把 P0 能力查询推进到独立三角形示例。按 [任务队列](../../../TASK.md) 实施窗口、设备、呈现、Shader、截图与窗口变化。沿用 [阶段路线](../../../docs/实施路线与阶段计划.md) 和 [构建选型](../../../docs/adr/0007-基础构建与第三方依赖选型.md)。开发基线 Vulkan 1.3，产品 1.4/Descriptor Heap 独立验收。
 
 ## Capabilities
 
@@ -29,13 +29,21 @@ platform SHALL 在主线程管理 GLFW 窗口，提供事件轮询、关闭请�
 - **WHEN** 调用者查询 Vulkan 所需 instance 扩展
 - **THEN** 可用时返回独立持有的扩展名，不可用时返回错误，由本机 `platform-window-vulkan-extensions` 覆盖可用路径
 
+### Requirement: 逻辑设备与诊断
+
+RHI SHALL 在显式请求时创建支持 Vulkan 1.3 Dynamic Rendering、Synchronization2 和 graphics 队列的设备。能力不足 SHALL 明确拒绝，Debug SHALL 启用 Validation 并把诊断转入 core。
+
+#### Scenario: 设备创建与拒绝
+- **WHEN** 执行 `rhi-device-create`、`rhi-device-missing-feature` 与 `rhi-device-selection`
+- **THEN** 本机设备可创建和释放，Debug 零 Validation 错误；fixture 验证缺特性时拒绝、可用设备选择和 Debug 诊断转发
+
 ### Requirement: 最小 Vulkan 绘制
 
 示例 SHALL 使用 Vulkan 1.3 Dynamic Rendering 与 Synchronization2 绘制三角形，并支持有限帧退出。能力不足 SHALL 明确失败。
 
 #### Scenario: 设备及画面验证
-- **WHEN** 执行设备、清屏及三角形用例
-- **THEN** `rhi-device-create`、`rhi-device-missing-feature`、`sample-clear-frames`、`shader-build`、`sample-triangle-frames` 满足对应任务的判定
+- **WHEN** 执行清屏及三角形用例
+- **THEN** `sample-clear-frames`、`shader-build`、`sample-triangle-frames` 满足对应任务的判定
 
 ### Requirement: 截图与窗口变化
 

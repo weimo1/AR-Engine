@@ -65,6 +65,9 @@ set(AR_REQUIRED_RHI_CASES
     rhi-loader-unavailable
     rhi-loader-symbol-missing
     rhi-device-none
+    rhi-device-create
+    rhi-device-missing-feature
+    rhi-device-selection
     rhi-device-index-out-of-range
     rhi-api-version-unsupported
     rhi-api-variant-unsupported
@@ -112,6 +115,8 @@ foreach(case IN LISTS AR_REQUIRED_RHI_CASES)
         ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
     )
 endforeach()
+
+set_tests_properties(rhi-device-create PROPERTIES LABELS gpu TIMEOUT 30)
 
 set(AR_REQUIRED_RUNTIME_CASES
     runtime-rollback

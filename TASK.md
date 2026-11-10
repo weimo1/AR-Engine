@@ -6,14 +6,14 @@
 
 ## 当前阶段
 
-**P1a 首个画面**：窗口 → device → swapchain → 三角形 → 截图。开发机驱动暂为 Vulkan 1.3，P1/P2 以 1.3 为开发基线（Dynamic Rendering、Synchronization2），产品目标 1.4 与 Descriptor Heap 另行验收。
+**P1a 首个画面**：窗口 → device → swapchain → 三角形 → 截图。P1/P2 以 Vulkan 1.3 为开发基线（Dynamic Rendering、Synchronization2）。本机 RTX 4060 Laptop GPU 在 621.01 驱动下实测设备 API 为 1.4.357，产品目标 1.4 与 Descriptor Heap 另行验收。
 
 ## 任务队列
 
-- [x] T01 platform 模块与 GLFW 窗口：GLFW 3.4 已接入，隐藏窗口和 Vulkan 扩展查询通过，双配置各 51/51、零编译警告。
+- [x] T01 platform 模块与 GLFW 窗口：GLFW 3.4 已接入，隐藏窗口和 Vulkan 扩展查询通过，双配置各 51/51、零编译警告；`0de8052` 已补独立评审，无阻断项。
   - 目标：vcpkg 加入 glfw3；新增 `engine/platform` 静态库（`ar_platform`），提供 Window：创建/销毁、事件轮询、关闭请求、帧缓冲尺寸、是否最小化、所需 instance 扩展列表。不含输入映射。
   - 验收：CTest `platform-window-create`（创建隐藏窗口、轮询若干次、读取尺寸、销毁）；公开头检查通过；门禁全绿。
-- [ ] T02 rhi 逻辑设备与 Validation
+- [x] T02 rhi 逻辑设备与 Validation：真实设备创建与释放、缺特性拒绝、选卡及 Validation 转发通过；双配置各 54/54、零编译警告，Debug 零 Validation 错误，独立评审无阻断项。
   - 目标：在现有 instance 之上创建 surface 无关的逻辑 device：按 1.3 特性（dynamicRendering、synchronization2）选择物理设备，graphics 队列；Debug 配置启用 Validation 层和 debug messenger，消息转入 core 诊断。缺能力时返回明确错误，不强行运行。
   - 验收：CTest `rhi-device-create`、`rhi-device-missing-feature`（fixture）；真实 GPU 用例加 CTest 标签 `gpu`；Validation 零错误；门禁全绿。
 - [ ] T03 swapchain、帧循环与清屏示例

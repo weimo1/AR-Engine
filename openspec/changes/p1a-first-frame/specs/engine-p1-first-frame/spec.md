@@ -1,4 +1,4 @@
-<!-- Generated from proposal.md; source-sha256: 6161bc27ec212a696bd7ac03d4b1fa2cd5cbdb7f5b0a6a5dcbdfe31c7fdcd599. Do not edit. -->
+<!-- Generated from proposal.md; source-sha256: b7263afeb1ce4c968672d16d0cbd734a3d9605ce71a8ba64f1f3d747a28791a7. Do not edit. -->
 
 ## Purpose
 
@@ -18,13 +18,21 @@ platform SHALL 在主线程管理 GLFW 窗口，提供事件轮询、关闭请�
 - **WHEN** 调用者查询 Vulkan 所需 instance 扩展
 - **THEN** 可用时返回独立持有的扩展名，不可用时返回错误，由本机 `platform-window-vulkan-extensions` 覆盖可用路径
 
+### Requirement: 逻辑设备与诊断
+
+RHI SHALL 在显式请求时创建支持 Vulkan 1.3 Dynamic Rendering、Synchronization2 和 graphics 队列的设备。能力不足 SHALL 明确拒绝，Debug SHALL 启用 Validation 并把诊断转入 core。
+
+#### Scenario: 设备创建与拒绝
+- **WHEN** 执行 `rhi-device-create`、`rhi-device-missing-feature` 与 `rhi-device-selection`
+- **THEN** 本机设备可创建和释放，Debug 零 Validation 错误；fixture 验证缺特性时拒绝、可用设备选择和 Debug 诊断转发
+
 ### Requirement: 最小 Vulkan 绘制
 
 示例 SHALL 使用 Vulkan 1.3 Dynamic Rendering 与 Synchronization2 绘制三角形，并支持有限帧退出。能力不足 SHALL 明确失败。
 
 #### Scenario: 设备及画面验证
-- **WHEN** 执行设备、清屏及三角形用例
-- **THEN** `rhi-device-create`、`rhi-device-missing-feature`、`sample-clear-frames`、`shader-build`、`sample-triangle-frames` 满足对应任务的判定
+- **WHEN** 执行清屏及三角形用例
+- **THEN** `sample-clear-frames`、`shader-build`、`sample-triangle-frames` 满足对应任务的判定
 
 ### Requirement: 截图与窗口变化
 

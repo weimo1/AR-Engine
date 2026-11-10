@@ -10,7 +10,7 @@
 
 ## 实现与取舍
 
-T01 按 [platform 模块技术方案](../../../docs/modules/platform/README.md) 落地 GLFW 窗口和公开头验证。后续任务按阶段依赖接入逻辑设备、surface、呈现及 Shader。
+T01 按 [platform 模块技术方案](../../../docs/modules/platform/README.md) 接入 GLFW 窗口。T02 按 [RHI 模块技术方案](../../../docs/modules/rhi/README.md#p1a-逻辑设备与-validation) 接入逻辑设备和 Validation。后续任务按阶段依赖接入 surface、呈现及 Shader。
 
 ## 任务上下文与协作
 

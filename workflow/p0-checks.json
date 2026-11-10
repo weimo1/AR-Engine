@@ -254,6 +254,9 @@
         "rhi-device-extension-query-failed",
         "rhi-device-index-out-of-range",
         "rhi-device-none",
+        "rhi-device-create",
+        "rhi-device-missing-feature",
+        "rhi-device-selection",
         "rhi-device-version-insufficient",
         "rhi-enumeration-incomplete",
         "rhi-extension-query-failed",
@@ -285,6 +288,7 @@
         "platform-window-vulkan-extensions"
       ],
       "gpu_cases": [
+        "rhi-device-create",
         "platform-window-vulkan-extensions",
         "runtime-system-development",
         "runtime-system-inspect"
@@ -514,6 +518,9 @@
         "rhi-device-extension-query-failed",
         "rhi-device-index-out-of-range",
         "rhi-device-none",
+        "rhi-device-create",
+        "rhi-device-missing-feature",
+        "rhi-device-selection",
         "rhi-device-version-insufficient",
         "rhi-enumeration-incomplete",
         "rhi-extension-query-failed",
@@ -545,6 +552,7 @@
         "platform-window-vulkan-extensions"
       ],
       "gpu_cases": [
+        "rhi-device-create",
         "platform-window-vulkan-extensions",
         "runtime-system-development",
         "runtime-system-inspect"

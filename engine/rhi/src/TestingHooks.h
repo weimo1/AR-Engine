@@ -37,7 +37,7 @@ void resetProcessCounters() noexcept;
 void failNextUnloadForTesting() noexcept;
 
 // Release steps recorded by shutdown(), in order: 1 = instance destroy attempt, 2 = volk
-// cleanup, 3 = module unload attempt. A caller asserts the sequence, not just the totals.
+// cleanup, 3 = module unload attempt, 4 = device destroy, 5 = messenger destroy.
 std::vector<int> processShutdownOrder();
 
 } // namespace ar::rhi::detail

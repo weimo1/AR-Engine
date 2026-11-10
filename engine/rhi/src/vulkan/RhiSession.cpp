@@ -30,6 +30,7 @@ constexpr int kMaxEnumerationAttempts = 3;
 // library and possibly the volk entry table behind, so reusing them from a new session would
 // silently work on a polluted process. P0 runs one owner thread, so plain members are enough.
 struct ProcessState {
+    bool active = false;
     bool quarantined = false;
 #ifdef AR_ENABLE_TEST_HOOKS
     std::size_t loadCalls = 0;
@@ -40,8 +41,7 @@ struct ProcessState {
     std::size_t unloadCalls = 0;
     std::size_t reportCallsAfterClose = 0;
     std::size_t quarantineChecks = 0;
-    // Release steps in execution order (1 instance, 2 volk, 3 module), so a test asserts the
-    // sequence rather than only the totals.
+    // Release steps in execution order, as defined in TestingHooks.h.
     std::vector<int> shutdownOrder;
     // Injected once by runtime-cleanup-failure: the OS refuses to unload an already destroyed
     // instance's module. The module stays loaded until process exit, which is what the assertion
@@ -76,6 +76,7 @@ constexpr std::int64_t kQuarantinedProcessCode = 1;
 core::ResultKind resultKindFor(core::ErrorCategory category) {
     switch (category) {
     case core::ErrorCategory::InvalidArguments:
+    case core::ErrorCategory::InvalidState:
         return core::ResultKind::InvalidArguments;
     case core::ErrorCategory::ApiVersionUnsupported:
     case core::ErrorCategory::ApiVariantUnsupported:
@@ -112,6 +113,33 @@ void emitEvent(
     event.stage = stage;
     event.origin = std::move(origin);
     (void)diagnostics.emit(event);
+}
+
+VKAPI_ATTR VkBool32 VKAPI_CALL validationCallback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+    VkDebugUtilsMessageTypeFlagsEXT,
+    const VkDebugUtilsMessengerCallbackDataEXT* data,
+    void* userData) noexcept {
+    const bool error = severity == VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    try {
+        emitEvent(
+            *static_cast<core::DiagnosticSession*>(userData),
+            error ? core::LogLevel::Error : core::LogLevel::Warning,
+            error ? "rhi.validation.error" : "rhi.validation.warning",
+            data->pMessage);
+    } catch (...) {
+        // The C callback must not unwind through Vulkan.
+        std::fputs("rhi: could not forward a Vulkan validation message\n", stderr);
+    }
+    return VK_FALSE;
+}
+
+constexpr bool validationBuild() noexcept {
+#ifdef _DEBUG
+    return true;
+#else
+    return false;
+#endif
 }
 
 std::string apiText(std::uint32_t apiVersion) {
@@ -153,6 +181,12 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorStage::Validation,
             "requested_api above 1.4 is not a known Vulkan version");
     }
+    if (config.createGraphicsDevice && version < VK_API_VERSION_1_3) {
+        return makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "a graphics device requires a Vulkan API request of at least 1.3");
+    }
     if (const auto* explicitPath = std::get_if<ExplicitLoaderPath>(&config.loader);
         explicitPath != nullptr && explicitPath->path.empty()) {
         return makeError(
@@ -192,6 +226,11 @@ struct RhiSession::Impl {
     HMODULE module = nullptr;
     PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
     VkInstance instance = VK_NULL_HANDLE;
+    VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
+    VkDevice graphicsDevice = VK_NULL_HANDLE;
+    VkQueue graphicsQueue = VK_NULL_HANDLE;
+    std::optional<GraphicsDeviceInfo> graphicsInfo;
+    bool ownsProcess = false;
     bool volkInitialized = false;
     bool closed = false;
     CloseResult closeResult;
@@ -301,6 +340,26 @@ struct RhiSession::Impl {
         createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         createInfo.pApplicationInfo = &applicationInfo;
 
+        constexpr const char* validationLayer = "VK_LAYER_KHRONOS_validation";
+        constexpr const char* debugExtension = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+        VkDebugUtilsMessengerCreateInfoEXT debugInfo{};
+        const bool enableValidation = config.createGraphicsDevice && validationBuild();
+        if (enableValidation) {
+            debugInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+            debugInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                                        VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+            debugInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                                    VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                                    VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+            debugInfo.pfnUserCallback = validationCallback;
+            debugInfo.pUserData = diagnostics;
+            createInfo.pNext = &debugInfo;
+            createInfo.enabledLayerCount = 1;
+            createInfo.ppEnabledLayerNames = &validationLayer;
+            createInfo.enabledExtensionCount = 1;
+            createInfo.ppEnabledExtensionNames = &debugExtension;
+        }
+
         report.instanceCreate.requested = config.requestedApi;
 #ifdef AR_ENABLE_TEST_HOOKS
         ++g_process.instanceCreateCalls;
@@ -315,12 +374,36 @@ struct RhiSession::Impl {
                 incompatible ? core::ErrorCategory::RequestedApiUnsupported
                              : core::ErrorCategory::InitializationFailed,
                 core::ErrorStage::Instance,
-                incompatible ? "the loader rejected the requested API version"
-                             : "vkCreateInstance failed",
+                incompatible
+                    ? "the loader rejected the requested API version"
+                    : (enableValidation && result == VK_ERROR_LAYER_NOT_PRESENT
+                           ? "VK_LAYER_KHRONOS_validation is required for Debug device creation"
+                       : enableValidation && result == VK_ERROR_EXTENSION_NOT_PRESENT
+                           ? "VK_EXT_debug_utils is required for Debug device creation"
+                           : "vkCreateInstance failed"),
                 vulkanOrigin(result)));
         }
         report.instanceCreate.status = InstanceCreateStatus::Success;
         volkLoadInstance(instance);
+        if (enableValidation) {
+            if (vkCreateDebugUtilsMessengerEXT == nullptr ||
+                vkDestroyDebugUtilsMessengerEXT == nullptr) {
+                return std::unexpected(makeError(
+                    core::ErrorCategory::LoaderSymbolMissing,
+                    core::ErrorStage::Instance,
+                    "Vulkan debug messenger entry points are unavailable"));
+            }
+            const VkResult debugResult =
+                vkCreateDebugUtilsMessengerEXT(instance, &debugInfo, nullptr, &debugMessenger);
+            if (debugResult != VK_SUCCESS) {
+                debugMessenger = VK_NULL_HANDLE;
+                return std::unexpected(makeError(
+                    core::ErrorCategory::InitializationFailed,
+                    core::ErrorStage::Instance,
+                    "vkCreateDebugUtilsMessengerEXT failed",
+                    vulkanOrigin(debugResult)));
+            }
+        }
         return {};
     }
 
@@ -416,6 +499,114 @@ struct RhiSession::Impl {
             return devices[explicitIndex->index];
         }
         return devices.front();
+    }
+
+    std::expected<std::uint32_t, core::Error> graphicsFamily(VkPhysicalDevice physical) {
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(physical, &properties);
+        if (detail::apiVariant(properties.apiVersion) != 0 ||
+            properties.apiVersion < VK_API_VERSION_1_3) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::ApiVersionUnsupported,
+                core::ErrorStage::Capability,
+                "the physical device does not support Vulkan 1.3"));
+        }
+        VkPhysicalDeviceVulkan13Features core13{};
+        core13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        VkPhysicalDeviceFeatures2 features{};
+        features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features.pNext = &core13;
+        vkGetPhysicalDeviceFeatures2(physical, &features);
+        if (core13.dynamicRendering != VK_TRUE || core13.synchronization2 != VK_TRUE) {
+            const char* missing =
+                core13.dynamicRendering != VK_TRUE ? "dynamicRendering" : "synchronization2";
+            return std::unexpected(makeError(
+                core::ErrorCategory::QueryFailed,
+                core::ErrorStage::Capability,
+                std::string("missing required Vulkan 1.3 feature: ") + missing));
+        }
+
+        std::uint32_t count = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, nullptr);
+        std::vector<VkQueueFamilyProperties> queues(count);
+        if (!queues.empty()) {
+            vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, queues.data());
+        }
+        for (std::uint32_t family = 0; family < count; ++family) {
+            if (queues[family].queueCount != 0 &&
+                (queues[family].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
+                return family;
+            }
+        }
+        return std::unexpected(makeError(
+            core::ErrorCategory::QueryFailed,
+            core::ErrorStage::Capability,
+            "the physical device exposes no graphics queue"));
+    }
+
+    std::expected<std::uint32_t, core::Error>
+    selectGraphicsDevice(const std::vector<VkPhysicalDevice>& devices, VkPhysicalDevice& selected) {
+        if (vkGetPhysicalDeviceProperties == nullptr || vkGetPhysicalDeviceFeatures2 == nullptr ||
+            vkGetPhysicalDeviceQueueFamilyProperties == nullptr) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::LoaderSymbolMissing,
+                core::ErrorStage::Capability,
+                "Vulkan graphics device discovery entry points are unavailable"));
+        }
+        auto family = graphicsFamily(selected);
+        if (family || std::holds_alternative<ExplicitDeviceIndex>(config.device)) {
+            return family;
+        }
+        for (std::size_t index = 1; index < devices.size(); ++index) {
+            if (auto alternative = graphicsFamily(devices[index]); alternative) {
+                selected = devices[index];
+                return alternative;
+            }
+        }
+        return family;
+    }
+
+    std::expected<void, core::Error> createDevice(VkPhysicalDevice physical, std::uint32_t family) {
+        if (vkCreateDevice == nullptr || vkDestroyDevice == nullptr ||
+            vkGetDeviceQueue == nullptr) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::LoaderSymbolMissing,
+                core::ErrorStage::Capability,
+                "Vulkan logical device entry points are unavailable"));
+        }
+        constexpr float priority = 1.0F;
+        VkDeviceQueueCreateInfo queue{};
+        queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queue.queueFamilyIndex = family;
+        queue.queueCount = 1;
+        queue.pQueuePriorities = &priority;
+        VkPhysicalDeviceVulkan13Features core13{};
+        core13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        core13.dynamicRendering = VK_TRUE;
+        core13.synchronization2 = VK_TRUE;
+        VkDeviceCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        info.pNext = &core13;
+        info.queueCreateInfoCount = 1;
+        info.pQueueCreateInfos = &queue;
+        const VkResult result = vkCreateDevice(physical, &info, nullptr, &graphicsDevice);
+        if (result != VK_SUCCESS) {
+            graphicsDevice = VK_NULL_HANDLE;
+            return std::unexpected(makeError(
+                core::ErrorCategory::InitializationFailed,
+                core::ErrorStage::Capability,
+                "vkCreateDevice failed",
+                vulkanOrigin(result)));
+        }
+        vkGetDeviceQueue(graphicsDevice, family, 0, &graphicsQueue);
+        if (graphicsQueue == VK_NULL_HANDLE) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::InitializationFailed,
+                core::ErrorStage::Capability,
+                "vkGetDeviceQueue did not return the graphics queue"));
+        }
+        graphicsInfo = GraphicsDeviceInfo{family, debugMessenger != VK_NULL_HANDLE};
+        return {};
     }
 
     void queryDeviceFacts(VkPhysicalDevice device) {
@@ -528,6 +719,25 @@ struct RhiSession::Impl {
 
     // Releases whatever was acquired, in reverse order, and records what could not be released.
     void shutdown() {
+        if (!std::exchange(ownsProcess, false)) {
+            return;
+        }
+        if (graphicsDevice != VK_NULL_HANDLE) {
+#ifdef AR_ENABLE_TEST_HOOKS
+            g_process.shutdownOrder.push_back(4);
+#endif
+            vkDestroyDevice(graphicsDevice, nullptr);
+            graphicsDevice = VK_NULL_HANDLE;
+            graphicsQueue = VK_NULL_HANDLE;
+            graphicsInfo.reset();
+        }
+        if (debugMessenger != VK_NULL_HANDLE) {
+#ifdef AR_ENABLE_TEST_HOOKS
+            g_process.shutdownOrder.push_back(5);
+#endif
+            vkDestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
+            debugMessenger = VK_NULL_HANDLE;
+        }
         if (instance != VK_NULL_HANDLE) {
 #ifdef AR_ENABLE_TEST_HOOKS
             ++g_process.destroyInstanceCalls;
@@ -549,6 +759,7 @@ struct RhiSession::Impl {
             // leave a live instance behind a dangling entry table. Keep both, quarantine the
             // process, and let process exit release them (proposal: instance and module retained).
             g_process.quarantined = true;
+            g_process.active = false;
             return;
         }
         if (volkInitialized) {
@@ -589,6 +800,7 @@ struct RhiSession::Impl {
             // released only by process exit, and a second open would reuse a polluted process.
             g_process.quarantined = true;
         }
+        g_process.active = false;
     }
 
     std::expected<void, core::Error> query() {
@@ -616,6 +828,14 @@ struct RhiSession::Impl {
         if (auto error = validateRequest(config)) {
             return std::unexpected(std::move(*error));
         }
+        if (g_process.active) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::InvalidState,
+                core::ErrorStage::Validation,
+                "a Vulkan session is already active in this process"));
+        }
+        g_process.active = true;
+        ownsProcess = true;
 
         emitEvent(
             *diagnostics,
@@ -644,6 +864,14 @@ struct RhiSession::Impl {
         if (!device) {
             return std::unexpected(std::move(device.error()));
         }
+        std::optional<std::uint32_t> family;
+        if (config.createGraphicsDevice) {
+            auto selected = selectGraphicsDevice(*devices, *device);
+            if (!selected) {
+                return std::unexpected(std::move(selected.error()));
+            }
+            family = *selected;
+        }
         queryDeviceFacts(*device);
         judge();
 
@@ -652,6 +880,11 @@ struct RhiSession::Impl {
                 core::ErrorCategory::QueryFailed,
                 core::ErrorStage::Capability,
                 "the device extension list could not be queried"));
+        }
+        if (family) {
+            if (auto created = createDevice(*device, *family); !created) {
+                return created;
+            }
         }
 
         report.productTargetSupported =
@@ -673,6 +906,7 @@ struct RhiSession::Impl {
 
     QueryFailure failure(core::Error error) {
         shutdown();
+        closed = true;
         report.productTargetSupported = false;
         report.result = resultKindFor(error.category);
         report.errors.push_back(
@@ -706,7 +940,7 @@ struct RhiSession::Impl {
             *diagnostics,
             core::LogLevel::Info,
             "rhi.close.start",
-            "releasing the Vulkan instance and loader",
+            "releasing Vulkan session resources",
             core::ErrorStage::Cleanup);
         shutdown();
         // Terminal for this session: a second close() returns the cached result, and a destructor
@@ -743,10 +977,11 @@ std::expected<std::unique_ptr<RhiSession>, QueryFailure>
 RhiSession::open(const QueryConfig& config, core::DiagnosticSession& diagnostics) {
     auto impl = std::make_unique<Impl>(diagnostics);
     impl->config = config;
-    if (auto queried = impl->query(); !queried) {
-        return std::unexpected(impl->failure(std::move(queried.error())));
+    auto session = std::unique_ptr<RhiSession>(new RhiSession(std::move(impl)));
+    if (auto queried = session->m_impl->query(); !queried) {
+        return std::unexpected(session->m_impl->failure(std::move(queried.error())));
     }
-    return std::unique_ptr<RhiSession>(new RhiSession(std::move(impl)));
+    return session;
 }
 
 const CapabilityReport& RhiSession::report() const noexcept {
@@ -766,6 +1001,10 @@ CloseResult RhiSession::close() {
         return m_impl->closeResult;
     }
     return m_impl->doClose();
+}
+
+std::optional<GraphicsDeviceInfo> RhiSession::graphicsDeviceInfo() const noexcept {
+    return m_impl->graphicsInfo;
 }
 
 #ifdef AR_ENABLE_TEST_HOOKS

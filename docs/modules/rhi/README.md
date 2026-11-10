@@ -1,5 +1,13 @@
 # rhi 模块
 
+## P1a 逻辑设备与 Validation
+
+`RhiSession::open` 通过 `QueryConfig::createGraphicsDevice` 显式启用逻辑设备。查询模式仍只做 P0 能力探测。创建设备要求请求与物理设备的 Vulkan API 均至少为 1.3，并要求 `dynamicRendering`、`synchronization2` 和至少一个可用 graphics 队列。默认按枚举顺序选择第一个符合条件的设备，指定索引时只检查该设备。首个可用 graphics 队列族内创建一个队列，只启用本切片需要的两项核心特性。surface、present 与 swapchain 的能力选择在呈现切片接入。
+
+Debug 创建设备时，instance 启用 `VK_LAYER_KHRONOS_validation` 和 `VK_EXT_debug_utils`。缺少层、扩展或 messenger 入口时启动失败，错误保留可用的 Vulkan 返回码。Messenger 将警告和错误分别写到 core 的 `rhi.validation.warning`、`rhi.validation.error` 事件。回调在当前串行 Vulkan 调用中执行，不调用 Vulkan，返回 `VK_FALSE`。其他构建配置不主动启用 Validation。
+
+会话独占 volk 的进程级派发表及 loader、instance、messenger 和 device。队列随 device 销毁。释放顺序是 device、messenger、instance、volk、loader。重复关闭复用原结果，部分初始化失败走同一释放路径。公开设备信息仅包含队列族索引和 Validation 启用状态，在会话关闭后不可取。调用方保持诊断会话存活直到 RHI 关闭。
+
 ## GPU与Bindless调试方案（2026-11-06）
 
 用户在讨论GPU/Bindless问题定位后要求记录，并明确沿既定总体架构推进。本节记录后续资源/绑定阶段的长期设计方向。P0查询与诊断的已有实现按对应任务记录，下面GPU工具接入和验证尚待后续切片实施。字段、配额及工具版本在该切片定义。

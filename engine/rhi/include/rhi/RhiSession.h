@@ -22,7 +22,7 @@ makeApiVersion(std::uint32_t major, std::uint32_t minor, std::uint32_t patch = 0
 
 inline constexpr std::uint32_t kApiVersion1_4 = makeApiVersion(1, 4);
 
-// Picks the first device vkEnumeratePhysicalDevices returns, in that order.
+// Picks the first enumerated device for queries, or the first compatible graphics device.
 struct FirstEnumerated {};
 
 // Picks one enumerated index; an out-of-range index is invalid_arguments and never falls back.
@@ -41,6 +41,12 @@ struct QueryConfig {
     // Optional device extensions the caller requires. A missing entry only clears the
     // required_capabilities_supported judgment; product eligibility is runtime's decision.
     std::vector<std::string> requiredDeviceExtensions;
+    bool createGraphicsDevice = false;
+};
+
+struct GraphicsDeviceInfo {
+    std::uint32_t graphicsQueueFamily = 0;
+    bool validationEnabled = false;
 };
 
 // Returned when open cannot produce a session. The report holds whatever was already established
@@ -60,8 +66,8 @@ struct CloseResult {
     std::vector<core::Error> errors;
 };
 
-// Owned Vulkan loader and instance for one query. Single owner thread; P0 runs serially so the
-// process-wide volk state is never used concurrently.
+// Owns the Vulkan loader, instance and optional graphics device. One live session per process;
+// use it on its owner thread and keep diagnostics alive through close().
 class RhiSession {
 public:
     static std::expected<std::unique_ptr<RhiSession>, QueryFailure>
@@ -76,8 +82,9 @@ public:
 
     // Valid until close(); copy first if the report must outlive the session.
     [[nodiscard]] const CapabilityReport& report() const noexcept;
+    [[nodiscard]] std::optional<GraphicsDeviceInfo> graphicsDeviceInfo() const noexcept;
 
-    // First call destroys the instance, finalizes volk and unloads the loader. Repeated calls
+    // First call releases the device, messenger, instance, volk and loader. Repeated calls
     // return the cached result without touching the OS again.
     CloseResult close();
 
