@@ -142,6 +142,14 @@ constexpr bool validationBuild() noexcept {
 #endif
 }
 
+constexpr std::uint32_t compatibilityVersion(std::uint32_t version) noexcept {
+    return VK_MAKE_API_VERSION(
+        VK_API_VERSION_VARIANT(version),
+        VK_API_VERSION_MAJOR(version),
+        VK_API_VERSION_MINOR(version),
+        0);
+}
+
 std::string apiText(std::uint32_t apiVersion) {
     const std::uint32_t major = (apiVersion >> 22) & 0x7Fu;
     const std::uint32_t minor = (apiVersion >> 12) & 0x3FFu;
@@ -186,6 +194,13 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorCategory::InvalidArguments,
             core::ErrorStage::Validation,
             "a graphics device requires a Vulkan API request of at least 1.3");
+    }
+    if (config.enableDescriptorHeap &&
+        (!config.createGraphicsDevice || version < VK_API_VERSION_1_4)) {
+        return makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "Descriptor Heap requires a Vulkan 1.4 graphics device request");
     }
     if (const auto* explicitPath = std::get_if<ExplicitLoaderPath>(&config.loader);
         explicitPath != nullptr && explicitPath->path.empty()) {
@@ -314,7 +329,8 @@ struct RhiSession::Impl {
                 core::ErrorStage::Instance,
                 "the loader reports API variant " + std::to_string(*report.apiVariants.loader)));
         }
-        if (report.loaderApi.has_value() && config.requestedApi > *report.loaderApi) {
+        if (report.loaderApi.has_value() &&
+            compatibilityVersion(config.requestedApi) > compatibilityVersion(*report.loaderApi)) {
             return std::unexpected(makeError(
                 core::ErrorCategory::ApiVersionUnsupported,
                 core::ErrorStage::Instance,
@@ -505,11 +521,13 @@ struct RhiSession::Impl {
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(physical, &properties);
         if (detail::apiVariant(properties.apiVersion) != 0 ||
-            properties.apiVersion < VK_API_VERSION_1_3) {
+            compatibilityVersion(properties.apiVersion) <
+                compatibilityVersion(config.requestedApi)) {
             return std::unexpected(makeError(
                 core::ErrorCategory::ApiVersionUnsupported,
                 core::ErrorStage::Capability,
-                "the physical device does not support Vulkan 1.3"));
+                "the physical device does not support requested Vulkan API " +
+                    apiText(config.requestedApi)));
         }
         VkPhysicalDeviceVulkan13Features core13{};
         core13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
@@ -566,6 +584,78 @@ struct RhiSession::Impl {
         return family;
     }
 
+    void queryVulkan14Features(VkPhysicalDevice physical) {
+        VkPhysicalDeviceVulkan14Features core14{};
+        core14.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES;
+        VkPhysicalDeviceFeatures2 features{};
+        features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features.pNext = &core14;
+        vkGetPhysicalDeviceFeatures2(physical, &features);
+        report.features["maintenance5"] =
+            FeatureInfo{QueryStatus::Success, core14.maintenance5 == VK_TRUE};
+        report.features["maintenance6"] =
+            FeatureInfo{QueryStatus::Success, core14.maintenance6 == VK_TRUE};
+        report.features["dynamicRenderingLocalRead"] =
+            FeatureInfo{QueryStatus::Success, core14.dynamicRenderingLocalRead == VK_TRUE};
+        report.features["hostImageCopy"] =
+            FeatureInfo{QueryStatus::Success, core14.hostImageCopy == VK_TRUE};
+    }
+
+    std::expected<DescriptorHeapLimits, core::Error> queryHeapLimits(VkPhysicalDevice physical) {
+        if (report.descriptorHeap != DescriptorHeapStatus::Supported ||
+            !hasExtension(
+                report.extensions,
+                ExtensionScope::Device,
+                VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME)) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::QueryFailed,
+                core::ErrorStage::Capability,
+                "VK_EXT_descriptor_heap, its descriptorHeap feature, or its shader dependency is "
+                "unavailable"));
+        }
+        if (vkGetPhysicalDeviceProperties2 == nullptr || vkGetDeviceProcAddr == nullptr) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::LoaderSymbolMissing,
+                core::ErrorStage::Capability,
+                "Vulkan Descriptor Heap property or device lookup entry point is unavailable"));
+        }
+
+        VkPhysicalDeviceBufferDeviceAddressFeatures address{};
+        address.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+        VkPhysicalDeviceFeatures2 features{};
+        features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features.pNext = &address;
+        vkGetPhysicalDeviceFeatures2(physical, &features);
+        if (address.bufferDeviceAddress != VK_TRUE) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::QueryFailed,
+                core::ErrorStage::Capability,
+                "Descriptor Heap requires bufferDeviceAddress"));
+        }
+
+        VkPhysicalDeviceDescriptorHeapPropertiesEXT heap{};
+        heap.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT;
+        VkPhysicalDeviceProperties2 properties{};
+        properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        properties.pNext = &heap;
+        vkGetPhysicalDeviceProperties2(physical, &properties);
+        if (heap.samplerHeapAlignment == 0 || heap.resourceHeapAlignment == 0 ||
+            heap.maxSamplerHeapSize <= heap.minSamplerHeapReservedRange ||
+            heap.maxResourceHeapSize <= heap.minResourceHeapReservedRange) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::QueryFailed,
+                core::ErrorStage::Capability,
+                "Vulkan reports unusable Descriptor Heap limits"));
+        }
+        return DescriptorHeapLimits{
+            heap.samplerHeapAlignment,
+            heap.resourceHeapAlignment,
+            heap.maxSamplerHeapSize,
+            heap.maxResourceHeapSize,
+            heap.minSamplerHeapReservedRange,
+            heap.minResourceHeapReservedRange};
+    }
+
     std::expected<void, core::Error> createDevice(VkPhysicalDevice physical, std::uint32_t family) {
         if (vkCreateDevice == nullptr || vkDestroyDevice == nullptr ||
             vkGetDeviceQueue == nullptr) {
@@ -589,6 +679,26 @@ struct RhiSession::Impl {
         info.pNext = &core13;
         info.queueCreateInfoCount = 1;
         info.pQueueCreateInfos = &queue;
+
+        std::optional<DescriptorHeapLimits> heapLimits;
+        VkPhysicalDeviceBufferDeviceAddressFeatures address{};
+        VkPhysicalDeviceDescriptorHeapFeaturesEXT heap{};
+        constexpr const char* heapExtension = VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME;
+        if (config.enableDescriptorHeap) {
+            auto limits = queryHeapLimits(physical);
+            if (!limits) {
+                return std::unexpected(std::move(limits.error()));
+            }
+            heapLimits = *limits;
+            address.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+            address.bufferDeviceAddress = VK_TRUE;
+            heap.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT;
+            heap.descriptorHeap = VK_TRUE;
+            core13.pNext = &address;
+            address.pNext = &heap;
+            info.enabledExtensionCount = 1;
+            info.ppEnabledExtensionNames = &heapExtension;
+        }
         const VkResult result = vkCreateDevice(physical, &info, nullptr, &graphicsDevice);
         if (result != VK_SUCCESS) {
             graphicsDevice = VK_NULL_HANDLE;
@@ -605,7 +715,27 @@ struct RhiSession::Impl {
                 core::ErrorStage::Capability,
                 "vkGetDeviceQueue did not return the graphics queue"));
         }
-        graphicsInfo = GraphicsDeviceInfo{family, debugMessenger != VK_NULL_HANDLE};
+        if (heapLimits) {
+            for (const char* command :
+                 {"vkWriteResourceDescriptorsEXT",
+                  "vkWriteSamplerDescriptorsEXT",
+                  "vkCmdBindResourceHeapEXT",
+                  "vkCmdBindSamplerHeapEXT"}) {
+                if (vkGetDeviceProcAddr(graphicsDevice, command) == nullptr) {
+                    return std::unexpected(makeError(
+                        core::ErrorCategory::LoaderSymbolMissing,
+                        core::ErrorStage::Capability,
+                        std::string("enabled Descriptor Heap has no device entry point: ") +
+                            command));
+                }
+            }
+            emitEvent(
+                *diagnostics,
+                core::LogLevel::Info,
+                "rhi.device.descriptor-heap.enabled",
+                "VK_EXT_descriptor_heap enabled and write/bind device entry points resolved");
+        }
+        graphicsInfo = GraphicsDeviceInfo{family, debugMessenger != VK_NULL_HANDLE, heapLimits};
         return {};
     }
 
@@ -882,6 +1012,9 @@ struct RhiSession::Impl {
                 "the device extension list could not be queried"));
         }
         if (family) {
+            if (config.requestedApi >= VK_API_VERSION_1_4) {
+                queryVulkan14Features(*device);
+            }
             if (auto created = createDevice(*device, *family); !created) {
                 return created;
             }

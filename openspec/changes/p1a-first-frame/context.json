@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "objective": "P1a 首个画面。T01 接入 GLFW 窗口，T02 接入 Vulkan 逻辑设备和 Validation。",
-  "non_goals": ["T02 不接入 surface、呈现和渲染", "P1a 不扩展到输入映射和编辑器"],
+  "objective": "P1a 首个画面。T08 保留 Vulkan 1.3 基线，验收 Vulkan 1.4 与 Heap 的设备启用路径。",
+  "non_goals": ["T08 不接入 surface、呈现和渲染", "Heap 写入绑定和 Shader 读回待 P2 资源完成后另验", "P1a 不扩展到输入映射和编辑器"],
   "tags": ["native"],
   "documents": [
     {"path": "TASK.md", "purpose": "requirements", "status": "confirmed", "basis": "P1a 各切片的范围和验收"},
@@ -16,6 +16,6 @@
     "engine/platform/**", "CMakeLists.txt", "vcpkg.json",
     "tests/CMakeLists.txt", "tests/platform/**", "tests/public_headers/header_platform_window.cpp",
     "tests/check_public_headers.py", "workflow/p0-checks.json",
-    "docs/modules/rhi/README.md", "engine/rhi/**", "tests/rhi/**", "tests/support/rhi_fixture/**"
+    "docs/modules/rhi/README.md", "docs/实施路线与阶段计划.md", "engine/rhi/**", "tests/rhi/**", "tests/support/rhi_fixture/**"
   ]
 }

@@ -1,4 +1,4 @@
-<!-- Generated from proposal.md; source-sha256: b7263afeb1ce4c968672d16d0cbd734a3d9605ce71a8ba64f1f3d747a28791a7. Do not edit. -->
+<!-- Generated from proposal.md; source-sha256: 388094271c1575557f1f2cc58847cc83d3527be4b6e93ebd81338e1c0f3fba20. Do not edit. -->
 
 ## Purpose
 
@@ -25,6 +25,14 @@ RHI SHALL 在显式请求时创建支持 Vulkan 1.3 Dynamic Rendering、Synchron
 #### Scenario: 设备创建与拒绝
 - **WHEN** 执行 `rhi-device-create`、`rhi-device-missing-feature` 与 `rhi-device-selection`
 - **THEN** 本机设备可创建和释放，Debug 零 Validation 错误；fixture 验证缺特性时拒绝、可用设备选择和 Debug 诊断转发
+
+### Requirement: Vulkan 1.4 与 Descriptor Heap 设备验收
+
+RHI SHALL 保留 Vulkan 1.3 路径，并支持显式请求 Vulkan 1.4 图形设备。1.4 路径 SHALL 报告 Maintenance 5/6、Dynamic Rendering Local Read 和 Host Image Copy 的查询结果。显式请求 Heap 时 SHALL 实际启用特性并核对限制及关键设备入口，缺能力时返回错误。
+
+#### Scenario: 显式启用 Heap
+- **WHEN** 执行 `rhi-device-vulkan14-heap` 和 `rhi-device-enhanced-unavailable`
+- **THEN** 支持设备可创建和关闭，Debug 零 Validation 错误；fixture 确认缺 API 或扩展时明确拒绝。Heap 资源写入、绑定和读回待 P2 资源完成后另验
 
 ### Requirement: 最小 Vulkan 绘制
 

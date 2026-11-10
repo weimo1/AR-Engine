@@ -42,11 +42,24 @@ struct QueryConfig {
     // required_capabilities_supported judgment; product eligibility is runtime's decision.
     std::vector<std::string> requiredDeviceExtensions;
     bool createGraphicsDevice = false;
+    // Opt-in for a Vulkan 1.4 graphics device. Unsupported requests fail explicitly.
+    bool enableDescriptorHeap = false;
+};
+
+struct DescriptorHeapLimits {
+    std::uint64_t samplerHeapAlignment = 0;
+    std::uint64_t resourceHeapAlignment = 0;
+    std::uint64_t maxSamplerHeapSize = 0;
+    std::uint64_t maxResourceHeapSize = 0;
+    std::uint64_t minSamplerHeapReservedRange = 0;
+    std::uint64_t minResourceHeapReservedRange = 0;
 };
 
 struct GraphicsDeviceInfo {
     std::uint32_t graphicsQueueFamily = 0;
     bool validationEnabled = false;
+    // Populated only after enabling the extension and resolving the required device commands.
+    std::optional<DescriptorHeapLimits> descriptorHeap;
 };
 
 // Returned when open cannot produce a session. The report holds whatever was already established

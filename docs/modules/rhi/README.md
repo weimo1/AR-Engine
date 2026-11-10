@@ -6,7 +6,15 @@
 
 Debug 创建设备时，instance 启用 `VK_LAYER_KHRONOS_validation` 和 `VK_EXT_debug_utils`。缺少层、扩展或 messenger 入口时启动失败，错误保留可用的 Vulkan 返回码。Messenger 将警告和错误分别写到 core 的 `rhi.validation.warning`、`rhi.validation.error` 事件。回调在当前串行 Vulkan 调用中执行，不调用 Vulkan，返回 `VK_FALSE`。其他构建配置不主动启用 Validation。
 
-会话独占 volk 的进程级派发表及 loader、instance、messenger 和 device。队列随 device 销毁。释放顺序是 device、messenger、instance、volk、loader。重复关闭复用原结果，部分初始化失败走同一释放路径。公开设备信息仅包含队列族索引和 Validation 启用状态，在会话关闭后不可取。调用方保持诊断会话存活直到 RHI 关闭。
+会话独占 volk 的进程级派发表及 loader、instance、messenger 和 device。队列随 device 销毁。释放顺序是 device、messenger、instance、volk、loader。重复关闭复用原结果，部分初始化失败走同一释放路径。公开设备信息包含队列族索引、Validation 启用状态及按需获得的 Heap 限制，在会话关闭后不可取。调用方保持诊断会话存活直到 RHI 关闭。
+
+### Vulkan 1.4 与 Descriptor Heap
+
+图形设备按请求的 API 版本选卡。loader 和设备预检比较 variant、主版本与次版本，补丁号保留在报告中。1.3 保持既有必需特性；显式请求 1.4 时记录 Maintenance 5/6、Dynamic Rendering Local Read、Host Image Copy 的支持状态，等对应调用方接入时才启用其功能。
+
+`QueryConfig::enableDescriptorHeap` 要求创建 Vulkan 1.4 图形设备。检查所选设备上的 `VK_EXT_descriptor_heap`、`descriptorHeap`、Buffer Device Address 及扩展依赖。成功时设备实际启用 Heap 特性，核对写入及绑定的设备入口，并在会话内返回两类 Heap 的对齐、最大大小和最小保留区。缺能力按错误返回，调用方可单独请求 1.3 路径。缺失设备入口时走同一回滚顺序。
+
+设备启用验收止于上述检查。P2 用 VMA 管理 Buffer/Image 分配与回收。资源路径就绪后，P5 以 VMA 分配带设备地址的 Heap buffer，按查询到的大小、对齐和保留区写入描述符，绑定后让 Shader 读写已知数据并验证读回。优先复用 set/binding 映射，与 Descriptor Set 路径对照；在途引用完成前保留其槽位和内存。规范见 [Descriptor Heap](https://docs.vulkan.org/refpages/latest/refpages/source/VK_EXT_descriptor_heap.html)。
 
 ## GPU与Bindless调试方案（2026-11-06）
 

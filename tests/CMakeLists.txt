@@ -66,6 +66,8 @@ set(AR_REQUIRED_RHI_CASES
     rhi-loader-symbol-missing
     rhi-device-none
     rhi-device-create
+    rhi-device-vulkan14-heap
+    rhi-device-enhanced-unavailable
     rhi-device-missing-feature
     rhi-device-selection
     rhi-device-index-out-of-range
@@ -116,7 +118,7 @@ foreach(case IN LISTS AR_REQUIRED_RHI_CASES)
     )
 endforeach()
 
-set_tests_properties(rhi-device-create PROPERTIES LABELS gpu TIMEOUT 30)
+set_tests_properties(rhi-device-create rhi-device-vulkan14-heap PROPERTIES LABELS gpu TIMEOUT 30)
 
 set(AR_REQUIRED_RUNTIME_CASES
     runtime-rollback

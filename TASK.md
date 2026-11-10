@@ -16,6 +16,9 @@
 - [x] T02 rhi 逻辑设备与 Validation：真实设备创建与释放、缺特性拒绝、选卡及 Validation 转发通过；双配置各 54/54、零编译警告，Debug 零 Validation 错误，独立评审无阻断项。
   - 目标：在现有 instance 之上创建 surface 无关的逻辑 device：按 1.3 特性（dynamicRendering、synchronization2）选择物理设备，graphics 队列；Debug 配置启用 Validation 层和 debug messenger，消息转入 core 诊断。缺能力时返回明确错误，不强行运行。
   - 验收：CTest `rhi-device-create`、`rhi-device-missing-feature`（fixture）；真实 GPU 用例加 CTest 标签 `gpu`；Validation 零错误；门禁全绿。
+- [x] T08 Vulkan 1.4 与 Descriptor Heap 设备验收：真机实际启用 Heap，限制和设备入口可用；保留 1.3 路径，双配置各 56/56、零编译告警，Debug 零 Validation 错误，独立复核通过。
+  - 目标：保留 Vulkan 1.3 路径。支持显式创建 Vulkan 1.4 设备，记录 Maintenance 5/6、Dynamic Rendering Local Read、Host Image Copy 的支持状态；显式启用 Descriptor Heap，核对对齐、大小、保留区和关键设备入口。
+  - 验收：`rhi-device-vulkan14-heap` 真机创建设备、启用扩展、读限制、关闭，Debug 零 Validation 错误；`rhi-device-enhanced-unavailable` fixture 验证缺 API 或扩展时明确拒绝。完整门禁与独立评审通过。Heap 写入、绑定与 Shader 读回在 P2 VMA 资源就绪后另验。
 - [ ] T03 swapchain、帧循环与清屏示例
   - 目标：surface、present 队列、swapchain；帧上下文（2 帧在途，fence/semaphore，不每帧 waitIdle）；新增可执行 `examples/triangle`（先只清屏），支持 `--frames N` 跑完退出。runtime 负责组合 platform + rhi。
   - 验收：CTest `sample-clear-frames`（标签 `gpu`，跑 60 帧 exit 0，诊断里 Validation 错误数为 0）；门禁全绿。

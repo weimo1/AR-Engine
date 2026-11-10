@@ -260,6 +260,7 @@ TEST_CASE("a real Vulkan 1.3 graphics device starts and closes", "[rhi-device-cr
     CHECK_FALSE(session.report().capabilitySource.simulated);
     const auto device = session.graphicsDeviceInfo();
     REQUIRE(device.has_value());
+    CHECK_FALSE(device->descriptorHeap.has_value());
 #ifdef _DEBUG
     CHECK(device->validationEnabled);
 #else
@@ -269,6 +270,89 @@ TEST_CASE("a real Vulkan 1.3 graphics device starts and closes", "[rhi-device-cr
     CHECK_FALSE(session.graphicsDeviceInfo().has_value());
     finishSession(*diagnostics, runId);
     CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
+}
+
+TEST_CASE(
+    "a real Vulkan 1.4 graphics device enables the heap on supported hardware",
+    "[rhi-device-vulkan14-heap]") {
+    const std::string runId = "rhi-device-vulkan14-heap";
+    const auto directory = freshRunDirectory(runId);
+    auto diagnostics = makeSession(directory, runId);
+    rhi::QueryConfig config;
+    config.requestedApi = rhi::makeApiVersion(1, 3);
+    config.device = rhi::ExplicitDeviceIndex{0};
+    auto probed = rhi::RhiSession::open(config, *diagnostics);
+    REQUIRE(probed.has_value());
+    const auto& report = (*probed)->report();
+    const bool supportsHeap = report.loaderApi >= rhi::kApiVersion1_4 &&
+                              report.deviceApi >= rhi::kApiVersion1_4 &&
+                              report.descriptorHeap == rhi::DescriptorHeapStatus::Supported;
+    REQUIRE((*probed)->close().resourcesReleased);
+    config.requestedApi = rhi::kApiVersion1_4;
+    config.createGraphicsDevice = true;
+    config.enableDescriptorHeap = true;
+    auto opened = rhi::RhiSession::open(config, *diagnostics);
+    if (supportsHeap) {
+        INFO((opened ? "" : opened.error().error.message));
+        REQUIRE(opened.has_value());
+        auto& session = **opened;
+        CHECK(session.report().effectiveApi == rhi::kApiVersion1_4);
+        for (const char* feature :
+             {"maintenance5", "maintenance6", "dynamicRenderingLocalRead", "hostImageCopy"}) {
+            const auto& facts = session.report().features;
+            const auto found = facts.find(feature);
+            REQUIRE(found != facts.end());
+            CHECK(found->second.status == rhi::QueryStatus::Success);
+            CHECK(found->second.supported.has_value());
+        }
+        const auto info = session.graphicsDeviceInfo();
+        REQUIRE(info.has_value());
+#ifdef _DEBUG
+        CHECK(info->validationEnabled);
+#endif
+        REQUIRE(info->descriptorHeap.has_value());
+        CHECK(info->descriptorHeap->resourceHeapAlignment > 0);
+        CHECK(info->descriptorHeap->samplerHeapAlignment > 0);
+        CHECK(
+            info->descriptorHeap->maxResourceHeapSize >
+            info->descriptorHeap->minResourceHeapReservedRange);
+        CHECK(
+            info->descriptorHeap->maxSamplerHeapSize >
+            info->descriptorHeap->minSamplerHeapReservedRange);
+        CHECK(session.close().resourcesReleased);
+    } else {
+        REQUIRE_FALSE(opened.has_value());
+        const auto category = opened.error().error.category;
+        CHECK(
+            (category == core::ErrorCategory::ApiVersionUnsupported ||
+             category == core::ErrorCategory::QueryFailed));
+        CHECK(opened.error().residualResources.empty());
+    }
+    finishSession(*diagnostics, runId);
+    CHECK(containsEvent(directory, runId, "rhi.device.descriptor-heap.enabled") == supportsHeap);
+    CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
+}
+
+TEST_CASE(
+    "enhanced device requests reject unsupported API or heap",
+    "[rhi-device-enhanced-unavailable]") {
+    const std::string runId = "rhi-device-enhanced-unavailable";
+    auto diagnostics = makeSession(freshRunDirectory(runId), runId);
+    auto config = fixtureConfig("device=1.3");
+    config.createGraphicsDevice = true;
+    config.enableDescriptorHeap = true;
+    auto oldApi = rhi::RhiSession::open(config, *diagnostics);
+    REQUIRE_FALSE(oldApi.has_value());
+    CHECK(oldApi.error().error.category == core::ErrorCategory::ApiVersionUnsupported);
+    CHECK(oldApi.error().residualResources.empty());
+    config = fixtureConfig("device=1.4");
+    config.createGraphicsDevice = true;
+    config.enableDescriptorHeap = true;
+    auto noHeap = rhi::RhiSession::open(config, *diagnostics);
+    REQUIRE_FALSE(noHeap.has_value());
+    CHECK(noHeap.error().error.message.find("VK_EXT_descriptor_heap") != std::string::npos);
+    CHECK(noHeap.error().residualResources.empty());
+    finishSession(*diagnostics, runId);
 }
 
 TEST_CASE("a missing Vulkan 1.3 feature prevents device creation", "[rhi-device-missing-feature]") {
@@ -292,8 +376,15 @@ TEST_CASE(
     const std::string runId = "rhi-device-selection";
     const auto directory = freshRunDirectory(runId);
     auto diagnostics = makeSession(directory, runId);
-    auto config = fixtureConfig("device=1.3;devices=2;dynamic=first-missing");
-    config.requestedApi = rhi::makeApiVersion(1, 3);
+    rhi::QueryConfig config;
+    SECTION("the loader and adapter have older patches") {
+        config = fixtureConfig("loader=1.3;device=1.3;devices=2;dynamic=first-missing");
+    }
+    SECTION("only the adapter has an older patch") {
+        config = fixtureConfig("loader=1.4;device=1.3;devices=2;dynamic=first-missing");
+    }
+    // A patch number does not change Vulkan API compatibility.
+    config.requestedApi = rhi::makeApiVersion(1, 3, 280);
     config.createGraphicsDevice = true;
 
     config.device = rhi::ExplicitDeviceIndex{0};
