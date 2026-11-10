@@ -6,8 +6,10 @@
 #include <windows.h>
 
 #include <volk.h>
+#include <vulkan/vulkan_win32.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <filesystem>
 #include <optional>
@@ -16,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include "Presentation.h"
 #include "TestingHooks.h"
 #include "VulkanResult.h"
 
@@ -202,6 +205,14 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorStage::Validation,
             "Descriptor Heap requires a Vulkan 1.4 graphics device request");
     }
+    if (config.presentation &&
+        (!config.createGraphicsDevice || !config.presentation->windowHandle ||
+         config.presentation->width == 0 || config.presentation->height == 0)) {
+        return makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "presentation requires a graphics device and a nonempty window");
+    }
     if (const auto* explicitPath = std::get_if<ExplicitLoaderPath>(&config.loader);
         explicitPath != nullptr && explicitPath->path.empty()) {
         return makeError(
@@ -227,6 +238,11 @@ bool hasExtension(
     });
 }
 
+struct QueueFamilies {
+    std::uint32_t graphics;
+    std::uint32_t present;
+};
+
 } // namespace
 
 struct RhiSession::Impl {
@@ -242,8 +258,10 @@ struct RhiSession::Impl {
     PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
     VkInstance instance = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
     VkDevice graphicsDevice = VK_NULL_HANDLE;
     VkQueue graphicsQueue = VK_NULL_HANDLE;
+    std::optional<detail::Presentation> presenter;
     std::optional<GraphicsDeviceInfo> graphicsInfo;
     bool ownsProcess = false;
     bool volkInitialized = false;
@@ -357,7 +375,14 @@ struct RhiSession::Impl {
         createInfo.pApplicationInfo = &applicationInfo;
 
         constexpr const char* validationLayer = "VK_LAYER_KHRONOS_validation";
-        constexpr const char* debugExtension = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+        std::vector<const char*> extensions;
+        if (config.presentation) {
+            for (const auto& name : config.presentation->instanceExtensions) {
+                extensions.push_back(name.c_str());
+            }
+            extensions.push_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+            extensions.push_back(VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
+        }
         VkDebugUtilsMessengerCreateInfoEXT debugInfo{};
         const bool enableValidation = config.createGraphicsDevice && validationBuild();
         if (enableValidation) {
@@ -372,9 +397,14 @@ struct RhiSession::Impl {
             createInfo.pNext = &debugInfo;
             createInfo.enabledLayerCount = 1;
             createInfo.ppEnabledLayerNames = &validationLayer;
-            createInfo.enabledExtensionCount = 1;
-            createInfo.ppEnabledExtensionNames = &debugExtension;
+            extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
+        std::ranges::sort(extensions, {}, [](const char* name) { return std::string_view(name); });
+        const auto duplicates = std::ranges::unique(
+            extensions, {}, [](const char* name) { return std::string_view(name); });
+        extensions.erase(duplicates.begin(), duplicates.end());
+        createInfo.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
+        createInfo.ppEnabledExtensionNames = extensions.data();
 
         report.instanceCreate.requested = config.requestedApi;
 #ifdef AR_ENABLE_TEST_HOOKS
@@ -394,6 +424,9 @@ struct RhiSession::Impl {
                     ? "the loader rejected the requested API version"
                     : (enableValidation && result == VK_ERROR_LAYER_NOT_PRESENT
                            ? "VK_LAYER_KHRONOS_validation is required for Debug device creation"
+                       : config.presentation && result == VK_ERROR_EXTENSION_NOT_PRESENT
+                           ? "a required Win32 presentation or diagnostic instance extension is "
+                             "unavailable"
                        : enableValidation && result == VK_ERROR_EXTENSION_NOT_PRESENT
                            ? "VK_EXT_debug_utils is required for Debug device creation"
                            : "vkCreateInstance failed"),
@@ -419,6 +452,46 @@ struct RhiSession::Impl {
                     "vkCreateDebugUtilsMessengerEXT failed",
                     vulkanOrigin(debugResult)));
             }
+            if (config.presentation) {
+                emitEvent(
+                    *diagnostics,
+                    core::LogLevel::Info,
+                    "rhi.validation.enabled",
+                    "Vulkan Validation messenger enabled");
+            }
+        }
+        return {};
+    }
+
+    std::expected<void, core::Error> createSurface() {
+        const auto createWin32Surface = reinterpret_cast<PFN_vkCreateWin32SurfaceKHR>(
+            getInstanceProcAddr(instance, "vkCreateWin32SurfaceKHR"));
+        if (!createWin32Surface || !vkDestroySurfaceKHR || !vkGetPhysicalDeviceSurfaceSupportKHR) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::LoaderSymbolMissing,
+                core::ErrorStage::Instance,
+                "Win32 surface entry points are unavailable"));
+        }
+        const auto window = static_cast<HWND>(config.presentation->windowHandle);
+        VkWin32SurfaceCreateInfoKHR info{};
+        info.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+        info.hwnd = window;
+        info.hinstance = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(window, GWLP_HINSTANCE));
+        if (!info.hinstance) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::InitializationFailed,
+                core::ErrorStage::Instance,
+                "could not obtain the window's HINSTANCE",
+                osOrigin()));
+        }
+        const VkResult result = createWin32Surface(instance, &info, nullptr, &surface);
+        if (result != VK_SUCCESS) {
+            surface = VK_NULL_HANDLE;
+            return std::unexpected(makeError(
+                core::ErrorCategory::InitializationFailed,
+                core::ErrorStage::Instance,
+                "vkCreateWin32SurfaceKHR failed",
+                vulkanOrigin(result)));
         }
         return {};
     }
@@ -517,7 +590,51 @@ struct RhiSession::Impl {
         return devices.front();
     }
 
-    std::expected<std::uint32_t, core::Error> graphicsFamily(VkPhysicalDevice physical) {
+    std::expected<void, core::Error> checkPresentationSupport(VkPhysicalDevice physical) {
+        std::uint32_t count = 0;
+        VkResult result = vkEnumerateDeviceExtensionProperties(physical, nullptr, &count, nullptr);
+        if (result == VK_SUCCESS && count > 0) {
+            std::vector<VkExtensionProperties> extensions(count);
+            result =
+                vkEnumerateDeviceExtensionProperties(physical, nullptr, &count, extensions.data());
+            if (result == VK_SUCCESS) {
+                extensions.resize(count);
+                for (const char* name :
+                     {VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+                      VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME}) {
+                    if (std::ranges::none_of(extensions, [name](const auto& extension) {
+                            return std::string_view(extension.extensionName) == name;
+                        })) {
+                        return std::unexpected(makeError(
+                            core::ErrorCategory::QueryFailed,
+                            core::ErrorStage::Capability,
+                            std::string("presentation requires ") + name));
+                    }
+                }
+                VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR maintenance{};
+                maintenance.sType =
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR;
+                VkPhysicalDeviceFeatures2 features{};
+                features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+                features.pNext = &maintenance;
+                vkGetPhysicalDeviceFeatures2(physical, &features);
+                if (maintenance.swapchainMaintenance1 == VK_TRUE) {
+                    return {};
+                }
+                return std::unexpected(makeError(
+                    core::ErrorCategory::QueryFailed,
+                    core::ErrorStage::Capability,
+                    "the device cannot enable swapchainMaintenance1 presentation fences"));
+            }
+        }
+        return std::unexpected(makeError(
+            core::ErrorCategory::QueryFailed,
+            core::ErrorStage::Capability,
+            "could not enumerate device extensions for presentation",
+            vulkanOrigin(result)));
+    }
+
+    std::expected<QueueFamilies, core::Error> graphicsFamilies(VkPhysicalDevice physical) {
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(physical, &properties);
         if (detail::apiVariant(properties.apiVersion) != 0 ||
@@ -543,6 +660,11 @@ struct RhiSession::Impl {
                 core::ErrorStage::Capability,
                 std::string("missing required Vulkan 1.3 feature: ") + missing));
         }
+        if (surface != VK_NULL_HANDLE) {
+            if (auto support = checkPresentationSupport(physical); !support) {
+                return std::unexpected(std::move(support.error()));
+            }
+        }
 
         std::uint32_t count = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, nullptr);
@@ -550,33 +672,67 @@ struct RhiSession::Impl {
         if (!queues.empty()) {
             vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, queues.data());
         }
+        std::optional<std::uint32_t> graphics;
+        std::optional<std::uint32_t> present;
         for (std::uint32_t family = 0; family < count; ++family) {
-            if (queues[family].queueCount != 0 &&
-                (queues[family].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
-                return family;
+            if (queues[family].queueCount == 0) {
+                continue;
             }
+            const bool canDraw = (queues[family].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0;
+            if (canDraw && !graphics) {
+                graphics = family;
+            }
+            if (surface == VK_NULL_HANDLE) {
+                if (canDraw) {
+                    return QueueFamilies{family, family};
+                }
+                continue;
+            }
+            VkBool32 canPresent = VK_FALSE;
+            const VkResult result =
+                vkGetPhysicalDeviceSurfaceSupportKHR(physical, family, surface, &canPresent);
+            if (result != VK_SUCCESS) {
+                return std::unexpected(makeError(
+                    core::ErrorCategory::QueryFailed,
+                    core::ErrorStage::Capability,
+                    "vkGetPhysicalDeviceSurfaceSupportKHR failed",
+                    vulkanOrigin(result)));
+            }
+            if (canPresent == VK_TRUE) {
+                if (canDraw) {
+                    return QueueFamilies{family, family};
+                }
+                if (!present) {
+                    present = family;
+                }
+            }
+        }
+        if (graphics && present) {
+            return QueueFamilies{*graphics, *present};
         }
         return std::unexpected(makeError(
             core::ErrorCategory::QueryFailed,
             core::ErrorStage::Capability,
-            "the physical device exposes no graphics queue"));
+            graphics ? "the physical device exposes no queue for this surface"
+                     : "the physical device exposes no graphics queue"));
     }
 
-    std::expected<std::uint32_t, core::Error>
+    std::expected<QueueFamilies, core::Error>
     selectGraphicsDevice(const std::vector<VkPhysicalDevice>& devices, VkPhysicalDevice& selected) {
         if (vkGetPhysicalDeviceProperties == nullptr || vkGetPhysicalDeviceFeatures2 == nullptr ||
-            vkGetPhysicalDeviceQueueFamilyProperties == nullptr) {
+            vkGetPhysicalDeviceQueueFamilyProperties == nullptr ||
+            (surface != VK_NULL_HANDLE && vkEnumerateDeviceExtensionProperties == nullptr)) {
             return std::unexpected(makeError(
                 core::ErrorCategory::LoaderSymbolMissing,
                 core::ErrorStage::Capability,
                 "Vulkan graphics device discovery entry points are unavailable"));
         }
-        auto family = graphicsFamily(selected);
+        auto family = graphicsFamilies(selected);
         if (family || std::holds_alternative<ExplicitDeviceIndex>(config.device)) {
             return family;
         }
         for (std::size_t index = 1; index < devices.size(); ++index) {
-            if (auto alternative = graphicsFamily(devices[index]); alternative) {
+            if (auto alternative = graphicsFamilies(devices[index]); alternative) {
                 selected = devices[index];
                 return alternative;
             }
@@ -656,7 +812,8 @@ struct RhiSession::Impl {
             heap.minResourceHeapReservedRange};
     }
 
-    std::expected<void, core::Error> createDevice(VkPhysicalDevice physical, std::uint32_t family) {
+    std::expected<void, core::Error>
+    createDevice(VkPhysicalDevice physical, QueueFamilies families) {
         if (vkCreateDevice == nullptr || vkDestroyDevice == nullptr ||
             vkGetDeviceQueue == nullptr) {
             return std::unexpected(makeError(
@@ -667,9 +824,11 @@ struct RhiSession::Impl {
         constexpr float priority = 1.0F;
         VkDeviceQueueCreateInfo queue{};
         queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        queue.queueFamilyIndex = family;
+        queue.queueFamilyIndex = families.graphics;
         queue.queueCount = 1;
         queue.pQueuePriorities = &priority;
+        std::array queues{queue, queue};
+        queues[1].queueFamilyIndex = families.present;
         VkPhysicalDeviceVulkan13Features core13{};
         core13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
         core13.dynamicRendering = VK_TRUE;
@@ -677,13 +836,13 @@ struct RhiSession::Impl {
         VkDeviceCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         info.pNext = &core13;
-        info.queueCreateInfoCount = 1;
-        info.pQueueCreateInfos = &queue;
+        info.queueCreateInfoCount = families.graphics == families.present ? 1u : 2u;
+        info.pQueueCreateInfos = queues.data();
 
+        std::vector<const char*> extensions;
         std::optional<DescriptorHeapLimits> heapLimits;
         VkPhysicalDeviceBufferDeviceAddressFeatures address{};
         VkPhysicalDeviceDescriptorHeapFeaturesEXT heap{};
-        constexpr const char* heapExtension = VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME;
         if (config.enableDescriptorHeap) {
             auto limits = queryHeapLimits(physical);
             if (!limits) {
@@ -696,9 +855,20 @@ struct RhiSession::Impl {
             heap.descriptorHeap = VK_TRUE;
             core13.pNext = &address;
             address.pNext = &heap;
-            info.enabledExtensionCount = 1;
-            info.ppEnabledExtensionNames = &heapExtension;
+            extensions.push_back(VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME);
         }
+        VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR maintenance{};
+        if (surface != VK_NULL_HANDLE) {
+            maintenance.sType =
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR;
+            maintenance.swapchainMaintenance1 = VK_TRUE;
+            maintenance.pNext = core13.pNext;
+            core13.pNext = &maintenance;
+            extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+            extensions.push_back(VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+        }
+        info.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
+        info.ppEnabledExtensionNames = extensions.data();
         const VkResult result = vkCreateDevice(physical, &info, nullptr, &graphicsDevice);
         if (result != VK_SUCCESS) {
             graphicsDevice = VK_NULL_HANDLE;
@@ -708,7 +878,7 @@ struct RhiSession::Impl {
                 "vkCreateDevice failed",
                 vulkanOrigin(result)));
         }
-        vkGetDeviceQueue(graphicsDevice, family, 0, &graphicsQueue);
+        vkGetDeviceQueue(graphicsDevice, families.graphics, 0, &graphicsQueue);
         if (graphicsQueue == VK_NULL_HANDLE) {
             return std::unexpected(makeError(
                 core::ErrorCategory::InitializationFailed,
@@ -735,7 +905,34 @@ struct RhiSession::Impl {
                 "rhi.device.descriptor-heap.enabled",
                 "VK_EXT_descriptor_heap enabled and write/bind device entry points resolved");
         }
-        graphicsInfo = GraphicsDeviceInfo{family, debugMessenger != VK_NULL_HANDLE, heapLimits};
+        graphicsInfo =
+            GraphicsDeviceInfo{families.graphics, debugMessenger != VK_NULL_HANDLE, heapLimits};
+        if (surface != VK_NULL_HANDLE) {
+            VkQueue presentQueue = VK_NULL_HANDLE;
+            vkGetDeviceQueue(graphicsDevice, families.present, 0, &presentQueue);
+            if (!presentQueue) {
+                return std::unexpected(makeError(
+                    core::ErrorCategory::InitializationFailed,
+                    core::ErrorStage::Capability,
+                    "vkGetDeviceQueue did not return the present queue"));
+            }
+            presenter.emplace(graphicsDevice, graphicsQueue, presentQueue);
+            if (auto opened = presenter->open(
+                    physical,
+                    surface,
+                    families.graphics,
+                    families.present,
+                    {config.presentation->width, config.presentation->height});
+                !opened) {
+                return opened;
+            }
+            emitEvent(
+                *diagnostics,
+                core::LogLevel::Info,
+                "rhi.presentation.ready",
+                "Vulkan swapchain ready with " + std::to_string(presenter->imageCount()) +
+                    " images and two frame contexts");
+        }
         return {};
     }
 
@@ -852,14 +1049,26 @@ struct RhiSession::Impl {
         if (!std::exchange(ownsProcess, false)) {
             return;
         }
-        if (graphicsDevice != VK_NULL_HANDLE) {
+        bool retainPresentation = false;
+        if (presenter) {
+            if (auto error = presenter->close()) {
+                noteCleanup(std::move(*error));
+            }
+            retainPresentation = presenter->hasSwapchain();
+            presenter.reset();
+        }
+        graphicsInfo.reset();
+        if (graphicsDevice != VK_NULL_HANDLE && !retainPresentation) {
 #ifdef AR_ENABLE_TEST_HOOKS
             g_process.shutdownOrder.push_back(4);
 #endif
             vkDestroyDevice(graphicsDevice, nullptr);
             graphicsDevice = VK_NULL_HANDLE;
             graphicsQueue = VK_NULL_HANDLE;
-            graphicsInfo.reset();
+        }
+        if (surface != VK_NULL_HANDLE && !retainPresentation) {
+            vkDestroySurfaceKHR(instance, surface, nullptr);
+            surface = VK_NULL_HANDLE;
         }
         if (debugMessenger != VK_NULL_HANDLE) {
 #ifdef AR_ENABLE_TEST_HOOKS
@@ -867,6 +1076,14 @@ struct RhiSession::Impl {
 #endif
             vkDestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
             debugMessenger = VK_NULL_HANDLE;
+        }
+        if (retainPresentation) {
+            retain(core::ResourceKind::Presentation);
+            retain(core::ResourceKind::Instance);
+            retain(core::ResourceKind::OsModule);
+            g_process.quarantined = true;
+            g_process.active = false;
+            return;
         }
         if (instance != VK_NULL_HANDLE) {
 #ifdef AR_ENABLE_TEST_HOOKS
@@ -983,6 +1200,11 @@ struct RhiSession::Impl {
         if (auto created = createInstance(); !created) {
             return created;
         }
+        if (config.presentation) {
+            if (auto created = createSurface(); !created) {
+                return created;
+            }
+        }
         if (auto instanceExtensions = queryInstanceExtensions(); !instanceExtensions) {
             return instanceExtensions;
         }
@@ -994,7 +1216,7 @@ struct RhiSession::Impl {
         if (!device) {
             return std::unexpected(std::move(device.error()));
         }
-        std::optional<std::uint32_t> family;
+        std::optional<QueueFamilies> family;
         if (config.createGraphicsDevice) {
             auto selected = selectGraphicsDevice(*devices, *device);
             if (!selected) {
@@ -1138,6 +1360,16 @@ CloseResult RhiSession::close() {
 
 std::optional<GraphicsDeviceInfo> RhiSession::graphicsDeviceInfo() const noexcept {
     return m_impl->graphicsInfo;
+}
+
+std::expected<void, core::Error> RhiSession::presentClearFrame() {
+    if (!m_impl->presenter) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "this RHI session has no active swapchain"));
+    }
+    return m_impl->presenter->presentClearFrame();
 }
 
 #ifdef AR_ENABLE_TEST_HOOKS

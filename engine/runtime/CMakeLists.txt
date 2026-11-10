@@ -17,6 +17,7 @@ target_include_directories(ar_runtime
 target_link_libraries(ar_runtime
     PUBLIC
         ar_core
+        ar_platform
         ar_rhi
         ar_cxx23
         ar_cxx_flags

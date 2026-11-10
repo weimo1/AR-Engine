@@ -173,6 +173,14 @@ foreach(case IN ITEMS platform-window-create platform-window-vulkan-extensions)
 endforeach()
 set_tests_properties(platform-window-vulkan-extensions PROPERTIES LABELS gpu)
 
+add_test(NAME sample-clear-frames
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_clear_frames.py"
+        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>"
+)
+set_tests_properties(sample-clear-frames PROPERTIES
+    LABELS gpu TIMEOUT 50 ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1"
+)
+
 # F5 launches the executable directly, so CTest's ENVIRONMENT property does not apply.
 foreach(test_target IN ITEMS ar_core_tests ar_rhi_tests ar_runtime_tests)
     set_target_properties(${test_target} PROPERTIES

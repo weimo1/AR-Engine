@@ -46,6 +46,10 @@ inline std::string vkResultName(VkResult result) {
         return "VK_ERROR_FORMAT_NOT_SUPPORTED";
     case VK_ERROR_FRAGMENTED_POOL:
         return "VK_ERROR_FRAGMENTED_POOL";
+    case VK_ERROR_SURFACE_LOST_KHR:
+        return "VK_ERROR_SURFACE_LOST_KHR";
+    case VK_ERROR_OUT_OF_DATE_KHR:
+        return "VK_ERROR_OUT_OF_DATE_KHR";
     case VK_ERROR_UNKNOWN:
         return "VK_ERROR_UNKNOWN";
     default:

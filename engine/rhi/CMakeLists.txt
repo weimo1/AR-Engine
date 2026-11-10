@@ -1,6 +1,7 @@
 find_package(volk CONFIG REQUIRED)
 
 add_library(ar_rhi STATIC
+    src/vulkan/Presentation.cpp
     src/vulkan/RhiSession.cpp
 )
 

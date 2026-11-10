@@ -19,7 +19,7 @@
 - [x] T08 Vulkan 1.4 与 Descriptor Heap 设备验收：真机实际启用 Heap，限制和设备入口可用；保留 1.3 路径，双配置各 56/56、零编译告警，Debug 零 Validation 错误，独立复核通过。
   - 目标：保留 Vulkan 1.3 路径。支持显式创建 Vulkan 1.4 设备，记录 Maintenance 5/6、Dynamic Rendering Local Read、Host Image Copy 的支持状态；显式启用 Descriptor Heap，核对对齐、大小、保留区和关键设备入口。
   - 验收：`rhi-device-vulkan14-heap` 真机创建设备、启用扩展、读限制、关闭，Debug 零 Validation 错误；`rhi-device-enhanced-unavailable` fixture 验证缺 API 或扩展时明确拒绝。完整门禁与独立评审通过。Heap 写入、绑定与 Shader 读回在 P2 VMA 资源就绪后另验。
-- [ ] T03 swapchain、帧循环与清屏示例
+- [x] T03 swapchain、帧循环与清屏示例：Vulkan 1.3 窗口路径以呈现 fence 回收两套帧上下文，真机清屏 60 帧；双配置各 57/57、零编译告警，Debug 同步检查零 Validation 错误，独立复审通过。
   - 目标：surface、present 队列、swapchain；帧上下文（2 帧在途，fence/semaphore，不每帧 waitIdle）；新增可执行 `examples/triangle`（先只清屏），支持 `--frames N` 跑完退出。runtime 负责组合 platform + rhi。
   - 验收：CTest `sample-clear-frames`（标签 `gpu`，跑 60 帧 exit 0，诊断里 Validation 错误数为 0）；门禁全绿。
 - [ ] T04 Shader 构建与三角形

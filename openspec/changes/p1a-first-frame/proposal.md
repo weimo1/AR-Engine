@@ -47,11 +47,15 @@ RHI SHALL 保留 Vulkan 1.3 路径，并支持显式请求 Vulkan 1.4 图形设�
 
 ### Requirement: 最小 Vulkan 绘制
 
-示例 SHALL 使用 Vulkan 1.3 Dynamic Rendering 与 Synchronization2 绘制三角形，并支持有限帧退出。能力不足 SHALL 明确失败。
+示例 SHALL 使用 Vulkan 1.3 Dynamic Rendering 与 Synchronization2 绘制三角形，并支持有限帧退出。窗口呈现 SHALL 使用呈现 fence 确认资源可以回收。缺少呈现能力时 SHALL 明确失败。
 
-#### Scenario: 设备及画面验证
-- **WHEN** 执行清屏及三角形用例
-- **THEN** `sample-clear-frames`、`shader-build`、`sample-triangle-frames` 满足对应任务的判定
+#### Scenario: 有限帧清屏
+- **WHEN** `sample-clear-frames` 运行隐藏窗口示例
+- **THEN** 成功提交并呈现 60 帧后以 0 退出，诊断完整且 Debug 的 Validation 错误数为 0
+
+#### Scenario: 三角形验证
+- **WHEN** 执行三角形用例
+- **THEN** `shader-build`、`sample-triangle-frames` 满足对应任务的判定
 
 ### Requirement: 截图与窗口变化
 

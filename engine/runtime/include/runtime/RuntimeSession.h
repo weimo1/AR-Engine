@@ -24,7 +24,7 @@ struct StartFailure {
     bool diagnosticsAvailable = false;
 };
 
-// Owns one diagnostic session and one rhi session for a single P0 query.
+// Owns diagnostics, an optional platform window and one RHI session.
 // Single owner thread, not copyable and not movable, so the address stays stable for rhi.
 class RuntimeSession {
 public:
@@ -41,6 +41,9 @@ public:
     // Runtime-owned snapshot: readable after close and unchanged by it. The reference dies with
     // the session, so copy before destroying it.
     [[nodiscard]] const rhi::CapabilityReport& report() const noexcept;
+
+    // True after accepting one presentation, false when the window was closed.
+    [[nodiscard]] std::expected<bool, core::Error> presentClearFrame();
 
     // First call closes rhi, then finishes the diagnostic run. Repeated calls return the cached
     // result without cleaning again or writing a second summary.

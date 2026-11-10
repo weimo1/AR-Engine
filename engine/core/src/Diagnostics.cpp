@@ -193,6 +193,8 @@ const char* resourceKindName(ResourceKind kind) {
         return "dispatch_state";
     case ResourceKind::OsModule:
         return "os_module";
+    case ResourceKind::Presentation:
+        return "presentation";
     }
     return "instance";
 }

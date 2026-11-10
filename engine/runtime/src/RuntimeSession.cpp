@@ -1,5 +1,6 @@
 #include "runtime/RuntimeSession.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -41,6 +42,13 @@ core::Error makeError(core::ErrorCategory category, core::ErrorStage stage, std:
 // loader or writes a diagnostic run.
 std::optional<core::Error> validateModeRequest(const RuntimeConfig& config) {
     const std::uint32_t requested = config.query.requestedApi;
+    if (config.query.presentation || (config.window && (!config.query.createGraphicsDevice ||
+                                                        config.mode != QueryMode::Development))) {
+        return makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "runtime presentation requires a runtime window and a development graphics device");
+    }
     switch (config.mode) {
     case QueryMode::Inspect:
         if (requested != kApiVersion1_3 && requested != rhi::kApiVersion1_4) {
@@ -92,18 +100,61 @@ core::RunSummaryIdentity identityFor(const core::BuildInfo& build) {
 struct RuntimeSession::Impl {
     RuntimeConfig config;
     std::unique_ptr<core::DiagnosticSession> diagnostics;
+    std::unique_ptr<platform::Window> window;
     std::unique_ptr<rhi::RhiSession> rhi;
     // Runtime-owned snapshot: survives close and never aliases the rhi report.
     rhi::CapabilityReport report;
+    std::optional<core::Error> frameError;
     bool closed = false;
     core::EndResult cachedClose;
+
+    std::expected<void, core::Error> openWindow(rhi::QueryConfig& query) {
+        if (!config.window) {
+            return {};
+        }
+        auto opened = platform::Window::open(*config.window);
+        if (!opened) {
+            return std::unexpected(std::move(opened.error()));
+        }
+        window = std::move(*opened);
+        auto extensions = window->requiredInstanceExtensions();
+        if (!extensions) {
+            return std::unexpected(std::move(extensions.error()));
+        }
+        const auto size = window->framebufferSize();
+        if (size.width <= 0 || size.height <= 0) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::InitializationFailed,
+                core::ErrorStage::Capability,
+                "window has no drawable framebuffer"));
+        }
+        query.presentation = rhi::Win32Presentation{
+            window->nativeWin32Handle(),
+            std::move(*extensions),
+            static_cast<std::uint32_t>(size.width),
+            static_cast<std::uint32_t>(size.height)};
+        return {};
+    }
+
+    void closeWindow(const std::vector<core::ResidualResource>& retained) noexcept {
+        if (std::ranges::any_of(retained, [](const auto& resource) {
+                return resource.kind == core::ResourceKind::Presentation;
+            })) {
+            // The surface still uses the HWND. The quarantined process keeps it until exit.
+            (void)window.release();
+        } else {
+            window.reset();
+        }
+    }
 };
 
 RuntimeSession::RuntimeSession(std::unique_ptr<Impl> impl) noexcept : m_impl(std::move(impl)) {}
 
 RuntimeSession::~RuntimeSession() {
-    // Only a fallback release: rhi is destroyed before the diagnostic session, and no summary is
-    // written, so an abandoned process is never reported as a clean run.
+    // Fallback release keeps window and diagnostics alive until RHI is destroyed.
+    if (m_impl->window && m_impl->rhi) {
+        m_impl->closeWindow(m_impl->rhi->close().residualResources);
+    }
 }
 
 std::expected<std::unique_ptr<RuntimeSession>, StartFailure>
@@ -131,7 +182,16 @@ RuntimeSession::start(const RuntimeConfig& config) {
     session->config = config;
     session->diagnostics = std::move(*diagnostics);
 
-    auto rhi = rhi::RhiSession::open(config.query, *session->diagnostics);
+    auto query = config.query;
+    auto rhi = [&]() -> std::expected<std::unique_ptr<rhi::RhiSession>, rhi::QueryFailure> {
+        if (auto opened = session->openWindow(query); !opened) {
+            rhi::QueryFailure failure;
+            failure.error = std::move(opened.error());
+            failure.report.result = resultKindFor(failure.error.category);
+            return std::unexpected(std::move(failure));
+        }
+        return rhi::RhiSession::open(query, *session->diagnostics);
+    }();
     if (!rhi.has_value()) {
         const rhi::QueryFailure& failure = rhi.error();
         core::RunSummaryInput summary;
@@ -145,6 +205,7 @@ RuntimeSession::start(const RuntimeConfig& config) {
         // the failed start looks released while the process is quarantined.
         summary.residualResources = failure.residualResources;
         session->report = failure.report;
+        session->closeWindow(failure.residualResources);
         session->closed = true;
 
         StartFailure startFailure;
@@ -196,6 +257,36 @@ const rhi::CapabilityReport& RuntimeSession::report() const noexcept {
     return m_impl->report;
 }
 
+std::expected<bool, core::Error> RuntimeSession::presentClearFrame() {
+    if (m_impl->closed || !m_impl->window) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "this runtime session has no active window"));
+    }
+    if (m_impl->frameError) {
+        return std::unexpected(*m_impl->frameError);
+    }
+    auto& window = *m_impl->window;
+    window.pollEvents();
+    if (window.shouldClose()) {
+        return false;
+    }
+    const auto size = window.framebufferSize();
+    if (window.isMinimized() || size.width <= 0 || size.height <= 0) {
+        m_impl->frameError = makeError(
+            core::ErrorCategory::InitializationFailed,
+            core::ErrorStage::Capability,
+            "the window no longer has a drawable framebuffer");
+    } else if (auto presented = m_impl->rhi->presentClearFrame(); !presented) {
+        m_impl->frameError = std::move(presented.error());
+    }
+    if (m_impl->frameError) {
+        return std::unexpected(*m_impl->frameError);
+    }
+    return true;
+}
+
 core::EndResult RuntimeSession::close() {
     if (m_impl->closed) {
         return m_impl->cachedClose;
@@ -206,15 +297,15 @@ core::EndResult RuntimeSession::close() {
         closeResult = m_impl->rhi->close();
         m_impl->rhi.reset();
     }
+    m_impl->closeWindow(closeResult.residualResources);
 
     const core::BuildInfo& build = core::buildInfo();
     core::RunSummaryInput summary;
     summary.runId = m_impl->config.diagnostics.runId;
     summary.identity = identityFor(build);
-    // The query completed, so the business result of this session is a success: whether the
-    // product target is met is a capability verdict carried by the report, not a start failure.
-    summary.primaryResult = core::ResultKind::Success;
-    summary.primaryError = std::nullopt;
+    summary.primaryError = m_impl->frameError;
+    summary.primaryResult = summary.primaryError ? resultKindFor(summary.primaryError->category)
+                                                 : core::ResultKind::Success;
     summary.cleanupErrors = closeResult.errors;
     summary.resourcesReleased = closeResult.resourcesReleased;
     summary.residualResources = closeResult.residualResources;

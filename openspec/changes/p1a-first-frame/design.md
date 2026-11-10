@@ -10,7 +10,7 @@
 
 ## 实现与取舍
 
-T01 按 [platform 模块技术方案](../../../docs/modules/platform/README.md) 接入 GLFW 窗口。T02 按 [RHI 模块技术方案](../../../docs/modules/rhi/README.md#p1a-逻辑设备与-validation) 接入逻辑设备和 Validation。T08 按 [RHI 的 1.4 与 Heap 方案](../../../docs/modules/rhi/README.md#vulkan-14-与-descriptor-heap) 验证显式启用路径。后续任务按阶段依赖接入 surface、呈现及 Shader。
+T01 按 [platform 模块技术方案](../../../docs/modules/platform/README.md) 接入 GLFW 窗口。T02 按 [RHI 模块技术方案](../../../docs/modules/rhi/README.md#p1a-逻辑设备与-validation) 接入逻辑设备和 Validation。T08 按 [RHI 的 1.4 与 Heap 方案](../../../docs/modules/rhi/README.md#vulkan-14-与-descriptor-heap) 验证显式启用路径。T03 按 [RHI 呈现方案](../../../docs/modules/rhi/README.md#surface交换链与帧循环) 与 [runtime 组合方案](../../../docs/modules/runtime/README.md#窗口与呈现) 接入 surface、交换链和清屏。Shader、读回和交换链重建各自后续验收。
 
 ## 任务上下文与协作
 

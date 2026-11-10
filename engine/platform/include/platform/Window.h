@@ -36,6 +36,8 @@ public:
     [[nodiscard]] bool shouldClose() const noexcept;
     [[nodiscard]] FramebufferSize framebufferSize() const noexcept;
     [[nodiscard]] bool isMinimized() const noexcept;
+    // Borrowed HWND, valid only while this window is alive on the main thread.
+    [[nodiscard]] void* nativeWin32Handle() const noexcept;
     [[nodiscard]] std::expected<std::vector<std::string>, core::Error>
     requiredInstanceExtensions() const;
 

@@ -16,4 +16,4 @@ platform 管理窗口和平台事件，向 runtime 提供窗口状态与呈现�
 
 P1a 支持一个活动窗口。`Window` 负责 GLFW 初始化、窗口销毁和终止 GLFW，整个生命周期均在主线程。无效尺寸和重复打开在调用 GLFW 前返回错误。初始化成功后若创建失败，本次打开操作释放 GLFW 会话。关闭请求只设置标志，实际销毁由所有者析构触发。GLFW 失败会保留描述和原始错误码。
 
-输入映射与 surface 接入分别随输入、呈现切片定义。当前阶段的范围和验收见 [P1a](../../../openspec/changes/p1a-first-frame/proposal.md)。
+呈现接入通过 `nativeWin32Handle()` 借出窗口句柄，由 runtime 传给 RHI。句柄随窗口失效，platform 不创建 Vulkan surface。当前阶段的范围和验收见 [P1a](../../../openspec/changes/p1a-first-frame/proposal.md)。

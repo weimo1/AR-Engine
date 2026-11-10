@@ -8,6 +8,14 @@ Debug 创建设备时，instance 启用 `VK_LAYER_KHRONOS_validation` 和 `VK_EX
 
 会话独占 volk 的进程级派发表及 loader、instance、messenger 和 device。队列随 device 销毁。释放顺序是 device、messenger、instance、volk、loader。重复关闭复用原结果，部分初始化失败走同一释放路径。公开设备信息包含队列族索引、Validation 启用状态及按需获得的 Heap 限制，在会话关闭后不可取。调用方保持诊断会话存活直到 RHI 关闭。
 
+### Surface、交换链与帧循环
+
+有窗口时，RHI 用 platform 借出的 Win32 窗口和扩展名创建 surface。在设备选择时检查 surface 呈现能力、`VK_KHR_swapchain` 以及用于释放的 `swapchainMaintenance1`。窗口路径使用 `VK_KHR_swapchain_maintenance1` 及其 instance 依赖。缺能力时启动失败，无窗口设备仍沿用 Vulkan 1.3 基线。优先用同族 graphics/present 队列，分族时交换链使用 concurrent sharing。交换链使用 FIFO，优先 sRGB，按 surface 限制选择尺寸和图像数量。图像由交换链拥有，RHI 负责图像视图。窗口存活到 surface 销毁后。
+
+两套帧上下文各自持有命令池、命令缓冲、acquire 和 render-finished semaphore，以及 acquire、提交和呈现 fence。复用时等该帧仍在途的操作，获取图像成功后记录 Dynamic Rendering 清屏，使用 Synchronization2 切换颜色附件和呈现布局。呈现 fence 证明 render-finished semaphore 可以复用，acquire fence 同时覆盖 acquire 后提交前失败的回收。正常帧循环没有全设备等待。[Khronos 呈现 fence 规范](https://docs.vulkan.org/refpages/latest/refpages/source/VkSwapchainPresentFenceInfoKHR.html)
+
+单交换链切片遇到失效或零尺寸时停止当前运行，携带可用的 Vulkan 错误码。退出先停提交，再等待两套上下文中可能在途的 acquire、提交和呈现 fence。设备丢失也执行这一步，fence 等待返回设备丢失时按规范结束其在途状态。若无法确认在途状态已结束，保留资源链直到进程退出并拒绝再次打开会话。正常释放顺序为帧资源、交换链、设备、surface、instance 及 loader。关闭与部分启动失败共用释放路径。运行中的交换链重建在 T06 处理。
+
 ### Vulkan 1.4 与 Descriptor Heap
 
 图形设备按请求的 API 版本选卡。loader 和设备预检比较 variant、主版本与次版本，补丁号保留在报告中。1.3 保持既有必需特性；显式请求 1.4 时记录 Maintenance 5/6、Dynamic Rendering Local Read、Host Image Copy 的支持状态，等对应调用方接入时才启用其功能。

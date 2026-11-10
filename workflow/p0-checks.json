@@ -256,6 +256,7 @@
         "rhi-device-none",
         "rhi-device-create",
         "rhi-device-vulkan14-heap",
+        "sample-clear-frames",
         "rhi-device-enhanced-unavailable",
         "rhi-device-missing-feature",
         "rhi-device-selection",
@@ -292,6 +293,7 @@
       "gpu_cases": [
         "rhi-device-create",
         "rhi-device-vulkan14-heap",
+        "sample-clear-frames",
         "platform-window-vulkan-extensions",
         "runtime-system-development",
         "runtime-system-inspect"
@@ -523,6 +525,7 @@
         "rhi-device-none",
         "rhi-device-create",
         "rhi-device-vulkan14-heap",
+        "sample-clear-frames",
         "rhi-device-enhanced-unavailable",
         "rhi-device-missing-feature",
         "rhi-device-selection",
@@ -559,6 +562,7 @@
       "gpu_cases": [
         "rhi-device-create",
         "rhi-device-vulkan14-heap",
+        "sample-clear-frames",
         "platform-window-vulkan-extensions",
         "runtime-system-development",
         "runtime-system-inspect"

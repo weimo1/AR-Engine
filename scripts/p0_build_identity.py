@@ -39,6 +39,7 @@ INCLUDE_GLOBS = (
     "vcpkg-configuration.json",
     "cmake/**/*",
     "engine/**/*",
+    "examples/**/*",
     "tests/**/*",
     "scripts/p0_build_identity.py",
     "scripts/build_checks.py",

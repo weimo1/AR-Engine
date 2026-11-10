@@ -32,6 +32,15 @@ struct ExplicitDeviceIndex {
 
 using DeviceSelection = std::variant<FirstEnumerated, ExplicitDeviceIndex>;
 
+struct Win32Presentation {
+    // Borrowed HWND. Keep the window alive through close, or until process exit if
+    // close reports a retained Presentation.
+    void* windowHandle = nullptr;
+    std::vector<std::string> instanceExtensions;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+
 // Everything open needs. Query mode (inspect / require-product / development) is runtime policy
 // and deliberately absent here.
 struct QueryConfig {
@@ -44,6 +53,7 @@ struct QueryConfig {
     bool createGraphicsDevice = false;
     // Opt-in for a Vulkan 1.4 graphics device. Unsupported requests fail explicitly.
     bool enableDescriptorHeap = false;
+    std::optional<Win32Presentation> presentation;
 };
 
 struct DescriptorHeapLimits {
@@ -97,8 +107,12 @@ public:
     [[nodiscard]] const CapabilityReport& report() const noexcept;
     [[nodiscard]] std::optional<GraphicsDeviceInfo> graphicsDeviceInfo() const noexcept;
 
-    // First call releases the device, messenger, instance, volk and loader. Repeated calls
-    // return the cached result without touching the OS again.
+    // Success counts one submitted and accepted presentation, including VK_SUBOPTIMAL_KHR.
+    // A failed frame stops further submissions until the session is closed.
+    [[nodiscard]] std::expected<void, core::Error> presentClearFrame();
+
+    // First call closes presentation, device, surface, messenger, instance, volk and loader.
+    // Repeated calls return the cached result without touching the OS again.
     CloseResult close();
 
 private:

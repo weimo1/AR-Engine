@@ -1,6 +1,9 @@
 #pragma once
 
+#include <optional>
+
 #include "core/Diagnostics.h"
+#include "platform/Window.h"
 #include "rhi/RhiSession.h"
 
 namespace ar::runtime {
@@ -15,11 +18,12 @@ enum class QueryMode {
     Development,
 };
 
-// Everything a start needs. No window, scene or frame parameters exist in P0.
+// Leaving window unset keeps the surface-free query and device paths.
 struct RuntimeConfig {
     QueryMode mode = QueryMode::Inspect;
     core::DiagnosticConfig diagnostics;
     rhi::QueryConfig query;
+    std::optional<platform::WindowConfig> window;
 };
 
 } // namespace ar::runtime

@@ -6,6 +6,8 @@
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
 
 namespace ar::platform {
 namespace {
@@ -108,6 +110,10 @@ FramebufferSize Window::framebufferSize() const noexcept {
 
 bool Window::isMinimized() const noexcept {
     return glfwGetWindowAttrib(m_impl->handle, GLFW_ICONIFIED) == GLFW_TRUE;
+}
+
+void* Window::nativeWin32Handle() const noexcept {
+    return glfwGetWin32Window(m_impl->handle);
 }
 
 std::expected<std::vector<std::string>, core::Error> Window::requiredInstanceExtensions() const {

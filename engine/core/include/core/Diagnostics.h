@@ -53,6 +53,7 @@ enum class ResourceKind {
     Instance,
     DispatchState,
     OsModule,
+    Presentation,
 };
 
 enum class ResourceState {

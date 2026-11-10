@@ -90,6 +90,7 @@ add_subdirectory(engine/core)
 add_subdirectory(engine/platform)
 add_subdirectory(engine/rhi)
 add_subdirectory(engine/runtime)
+add_subdirectory(examples/triangle)
 
 if(AR_BUILD_TESTS)
     enable_testing()
