@@ -5,12 +5,18 @@ context accumulates. State lives only in TASK.md and Git. The gate is run by thi
 trusted from the agent's report. Stops at a task marked [人工], on a red gate after the retry
 budget, on a blocking review that survives one fix round, or when the queue is empty.
 
-    python scripts/autorun.py --agent codex --tester claude --reviewer claude
+Every role takes a comma-separated fallback list. When an agent exits because its usage limit is
+reached, the next one in the list takes over the same task from the working tree as it stands.
+If every agent is out, the run stops with the tree left as is; continue later with --resume.
+
+    python scripts/autorun.py --agent claude,codex --tester claude,codex --reviewer codex,claude
+    python scripts/autorun.py --agent codex --resume
     python scripts/autorun.py --dry-run
 """
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -23,17 +29,36 @@ GATE = [sys.executable, '-B', 'scripts/build_checks.py']
 GATE_RETRIES = 3
 
 # Headless commands. The prompt is passed on stdin. Edit here if a CLI changes its flags.
+# --ephemeral keeps Codex from leaving a session file under ~/.codex/sessions for every task.
+CODEX = ['codex', 'exec', '--ephemeral', '-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort=medium']
 AGENTS = {
     'codex': {
-        'write': ['codex', 'exec', '--sandbox', 'workspace-write', '-'],
-        'read': ['codex', 'exec', '--sandbox', 'read-only', '-'],
+        # The Windows sandbox blocks vcpkg and MSBuild's SDK lookup, so a sandboxed Codex can
+        # edit but cannot build. --trust switches the writing roles to 'trusted'.
+        'write': [*CODEX, '--sandbox', 'workspace-write', '-'],
+        'trusted': [*CODEX, '--dangerously-bypass-approvals-and-sandbox', '-'],
+        'read': [*CODEX, '--sandbox', 'read-only', '-'],
     },
     'claude': {
         'write': ['claude', '-p', '--permission-mode', 'acceptEdits',
                   '--allowedTools', 'Bash,Read,Edit,Write,Glob,Grep'],
+        'trusted': ['claude', '-p', '--dangerously-skip-permissions'],
         'read': ['claude', '-p', '--allowedTools', 'Read,Glob,Grep,Bash(git diff:*),Bash(git log:*)'],
     },
 }
+
+# An agent counts as out of quota when it exits non-zero and the end of its log matches this.
+# Extend it with the exact wording when a CLI reports its limit differently.
+LIMIT_HINT = re.compile(
+    r'usage limit|rate limit|limit reached|hit your .{0,30}limit|quota|too many requests'
+    r'|\b429\b|credit balance|额度|限额', re.IGNORECASE)
+API_KEY_VARS = ('ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CODEX_API_KEY')
+OUT_OF_QUOTA ='every listed agent is out of quota; rerun with --resume once one is available'
+
+TAKEOVER = """
+工作区里可能有上一位 Agent 未完成的改动。先用 `git status --short` 和 `git diff HEAD` 了解进度
+（新文件直接读），在此基础上继续，不要推倒重来；已有内容确实有错再改。
+"""
 
 TEST_PROMPT = """你是 AR Engine 的测试工程师，工作区 {root}。先读 AGENTS.md 并遵守。
 只为 TASK.md 里的这一项任务写验收测试，不实现功能：
@@ -46,7 +71,7 @@ TEST_PROMPT = """你是 AR Engine 的测试工程师，工作区 {root}。先读
 2. 断言写可观察行为，覆盖主路径和真实会遇到的失败，不堆穷举矩阵。
 3. 不修改 engine/ 下的实现；需要的公开接口按任务目标和相邻模块的约定假定，写在测试里。
 4. 此时编译失败是预期的，不要运行门禁，不要提交。
-"""
+{takeover}"""
 
 TESTS_READY = """
 验收测试已由测试角色写好（见 git status）。实现到它们通过；接口形状不合适可以调整测试的
@@ -64,7 +89,7 @@ DEV_PROMPT = """你是 AR Engine 的开发者，工作区 {root}。先读 AGENTS
 2. 全绿后在 TASK.md 把该任务勾选为 [x]，并在标题行末尾补一句结果。
 3. 把提交信息（按 docs/standards/Git提交信息规范.md，含 Why/What/Tests/Refs）写入 {msg}。
 4. 不要执行 git commit 或 git push，提交由外层脚本完成。不要新建记录过程的脚本、JSON 或文档。
-{extra}"""
+{extra}{takeover}"""
 
 REVIEW_PROMPT = """你是独立代码评审，只读。工作区 {root}。评审任务 {task_id} 的未提交改动：
 运行 `git status --short` 与 `git diff HEAD`（新文件直接读）。任务内容：
@@ -91,12 +116,27 @@ def next_task() -> tuple[str, str, str] | None:
     return None
 
 
-def run(command: list[str], log: Path, prompt: str | None = None) -> int:
+def subscription_env() -> dict[str, str]:
+    """Agents run on the subscription login only. With a pay-per-token key in the environment a
+    CLI would keep working past the plan's 5-hour and weekly limits and bill the key instead."""
+    env = {key: value for key, value in os.environ.items() if key not in API_KEY_VARS}
+    # Claude Code on Windows needs to be told where Git Bash is when started from a plain shell.
+    git_exe = shutil.which('git')
+    if os.name == 'nt' and git_exe and 'CLAUDE_CODE_GIT_BASH_PATH' not in env:
+        for folder in Path(git_exe).resolve().parents[1:3]:  # Git/cmd or Git/mingw64/bin
+            if (folder / 'bin' / 'bash.exe').is_file():
+                env['CLAUDE_CODE_GIT_BASH_PATH'] = str(folder / 'bin' / 'bash.exe')
+                break
+    return env
+
+
+def run(command: list[str], log: Path, prompt: str | None = None,
+        env: dict[str, str] | None = None) -> int:
     executable = shutil.which(command[0])
     if not executable:
         raise SystemExit(f'autorun: {command[0]} not found on PATH')
     with log.open('w', encoding='utf-8', errors='replace') as handle:
-        result = subprocess.run([executable, *command[1:]], cwd=ROOT, input=prompt,
+        result = subprocess.run([executable, *command[1:]], cwd=ROOT, input=prompt, env=env,
                                 stdout=handle, stderr=subprocess.STDOUT, encoding='utf-8',
                                 errors='replace')
     print(f'  [{"ok" if result.returncode == 0 else "exit " + str(result.returncode)}] '
@@ -132,18 +172,47 @@ def format_changed() -> None:
         subprocess.run([tool, '-i', *files], cwd=ROOT, check=False)
 
 
-def run_task(task_id: str, task: str, agent: str, tester: str, reviewer: str) -> str | None:
+trust = False  # set by --trust: writing roles run without their sandbox
+exhausted: set[str] = set()  # agents that hit their limit; skipped for the rest of this run
+
+
+def run_agent(names: list[str], mode: str, log: Path, template: str, fields: dict) -> str | None:
+    """Runs the first listed agent that still has quota. Returns its name, or None when all are
+    out. A write agent that takes over is told to continue from the tree instead of restarting."""
+    for name in names:
+        if name in exhausted:
+            continue
+        agent_log = log.with_name(f'{log.stem}-{name}.log')
+        command = AGENTS[name]['trusted' if trust and mode == 'write' else mode]
+        code = run(command, agent_log, template.format(**fields), subscription_env())
+        said = next((line.strip() for line in reversed(tail(agent_log, 15).splitlines())
+                     if LIMIT_HINT.search(line)), None)
+        if code == 0 or not said:
+            return name
+        exhausted.add(name)
+        # The CLI's own line says which limit (5-hour or weekly) and when it resets.
+        print(f'  {name} is out of quota: {said[:200]}', flush=True)
+        if mode == 'write':
+            fields['takeover'] = TAKEOVER
+    return None
+
+
+def run_task(task_id: str, task: str, agents: list[str], testers: list[str],
+             reviewers: list[str], resumed: bool) -> str | None:
     """Returns None when the task was committed, otherwise the reason to stop."""
     out = ROOT / 'build' / 'temp' / 'autorun' / task_id
     out.mkdir(parents=True, exist_ok=True)
     msg = out / 'commit-msg.txt'
-    msg.unlink(missing_ok=True)
-    fields = {'root': ROOT, 'task': task, 'task_id': task_id, 'msg': msg}
+    if not resumed:
+        msg.unlink(missing_ok=True)
+    fields = {'root': ROOT, 'task': task, 'task_id': task_id, 'msg': msg, 'extra': '',
+              'takeover': TAKEOVER if resumed else ''}
 
     def develop_until_green(extra: str, label: str) -> str | None:
         for attempt in range(1, GATE_RETRIES + 1):
-            run(AGENTS[agent]['write'], out / f'{label}-{attempt}.log',
-                DEV_PROMPT.format(extra=extra, **fields))
+            fields['extra'] = extra
+            if not run_agent(agents, 'write', out / f'{label}-{attempt}.log', DEV_PROMPT, fields):
+                return OUT_OF_QUOTA
             format_changed()
             gate_log = out / f'{label}-gate-{attempt}.log'
             if run(GATE, gate_log) == 0:
@@ -152,17 +221,22 @@ def run_task(task_id: str, task: str, agent: str, tester: str, reviewer: str) ->
         return f'gate still red after {GATE_RETRIES} attempts, see {out}'
 
     first = ''
-    if tester != 'none':
-        run(AGENTS[tester]['write'], out / 'test.log', TEST_PROMPT.format(**fields))
+    if testers:
+        if not run_agent(testers, 'write', out / 'test.log', TEST_PROMPT, fields):
+            return OUT_OF_QUOTA
         first = TESTS_READY
     failure = develop_until_green(first, 'dev')
     if failure:
         return failure
 
-    if reviewer != 'none':
-        review_log = out / 'review.log'
-        run(AGENTS[reviewer]['read'], review_log, REVIEW_PROMPT.format(**fields))
+    if reviewers:
+        name = run_agent(reviewers, 'read', out / 'review.log', REVIEW_PROMPT, fields)
+        if not name:
+            return OUT_OF_QUOTA
+        review_log = out / f'review-{name}.log'
         review = review_log.read_text(encoding='utf-8', errors='replace')
+        if 'VERDICT: BLOCK' not in review and 'VERDICT: PASS' not in review:
+            return f'review ended without a verdict, see {review_log}'
         if 'VERDICT: PASS' not in review:
             failure = develop_until_green(
                 f'\n评审提出了阻断问题，只修这些，不做其他改动：\n{tail(review_log, 80)}\n', 'fix')
@@ -183,17 +257,36 @@ def run_task(task_id: str, task: str, agent: str, tester: str, reviewer: str) ->
     return None
 
 
+def agent_list(text: str) -> list[str]:
+    names = [] if text == 'none' else [name.strip() for name in text.split(',')]
+    for name in names:
+        if name not in AGENTS:
+            raise argparse.ArgumentTypeError(f'unknown agent {name!r}; choose from {sorted(AGENTS)}')
+    return names
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--agent', choices=sorted(AGENTS), default='codex')
-    parser.add_argument('--tester', choices=[*sorted(AGENTS), 'none'], default='none',
-                        help='write the acceptance tests first with a separate agent')
-    parser.add_argument('--reviewer', choices=[*sorted(AGENTS), 'none'], default='none')
+    parser.add_argument('--agent', type=agent_list, default=['codex'],
+                        help='developer, in fallback order, e.g. claude,codex')
+    parser.add_argument('--tester', type=agent_list, default=[],
+                        help='write the acceptance tests first with a separate agent; '
+                             'fallback list or none')
+    parser.add_argument('--reviewer', type=agent_list, default=[], help='fallback list or none')
+    parser.add_argument('--resume', action='store_true',
+                        help='continue the first task from an unclean working tree')
+    parser.add_argument('--trust', action='store_true',
+                        help='run the writing roles without their sandbox so they can build')
     parser.add_argument('--max-tasks', type=int, default=20)
     parser.add_argument('--dry-run', action='store_true', help='print the next task and exit')
     args = parser.parse_args()
 
+    if not args.agent:
+        parser.error('--agent needs at least one agent')
+    global trust
+    trust = args.trust
+    resumed = args.resume
     for _ in range(args.max_tasks):
         found = next_task()
         if not found:
@@ -207,10 +300,12 @@ def main() -> int:
         if args.dry_run:
             print(task)
             return 0
-        if git('status', '--porcelain').stdout.strip():
-            print('autorun: working tree is not clean; commit or stash first', file=sys.stderr)
+        if not resumed and git('status', '--porcelain').stdout.strip():
+            print('autorun: working tree is not clean; commit or stash first, or pass --resume '
+                  'to continue the interrupted task', file=sys.stderr)
             return 1
-        reason = run_task(task_id, task, args.agent, args.tester, args.reviewer)
+        reason = run_task(task_id, task, args.agent, args.tester, args.reviewer, resumed)
+        resumed = False
         if reason:
             print(f'autorun: stopped at {task_id}: {reason}', file=sys.stderr)
             return 1
