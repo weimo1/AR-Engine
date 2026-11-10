@@ -17,7 +17,7 @@ C++23 / Vulkan 1.4 独立渲染引擎（毕设）。渲染优先，编辑器后�
    python scripts/build_checks.py
    ```
 
-   完整门禁是：两配置（Debug / RelWithDebInfo）干净重编零警告、CTest 全过。新增用例要登记到 `workflow/p0-checks.json` 的 `expected_cases`。本机依赖路径脚本会自动从 `CMakeUserPresets.json` 读取。
+   完整门禁是：两配置（Debug / RelWithDebInfo）干净重编零警告、CTest 全过。新增用例要登记到 `workflow/p0-checks.json` 的 `expected_cases`；需要真实 Vulkan 加载器或显卡的用例另加 CTest 标签 `gpu` 并列入同一处的 `gpu_cases`，云端用 `--no-gpu` 跳过它们。本机依赖路径脚本会自动从 `CMakeUserPresets.json` 读取。
 5. 门禁通过后：在 TASK.md 勾选该任务并用一行写结果，按 [提交规范](docs/standards/Git提交信息规范.md) 提交（`type(scope): 摘要` + Why/What/Tests/Refs）。只提交本任务的文件，不用 `--no-verify`。
 6. 继续下一项。遇到标 `[人工]` 的任务停下，等用户。
 

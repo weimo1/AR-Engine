@@ -281,6 +281,10 @@
         "runtime-summary-output-failure",
         "runtime-system-development",
         "runtime-system-inspect"
+      ],
+      "gpu_cases": [
+        "runtime-system-development",
+        "runtime-system-inspect"
       ]
     },
     {
@@ -532,6 +536,10 @@
         "runtime-rollback",
         "runtime-summary-capability",
         "runtime-summary-output-failure",
+        "runtime-system-development",
+        "runtime-system-inspect"
+      ],
+      "gpu_cases": [
         "runtime-system-development",
         "runtime-system-inspect"
       ]

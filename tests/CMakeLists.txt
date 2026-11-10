@@ -153,6 +153,10 @@ foreach(case IN LISTS AR_REQUIRED_RUNTIME_CASES)
         ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
     )
 endforeach()
+# These two open the machine's real Vulkan loader. The label lets a machine without one (the
+# hosted CI runner) leave them out with `ctest -LE gpu`; keep it in step with gpu_cases in
+# workflow/p0-checks.json.
+set_tests_properties(runtime-system-inspect runtime-system-development PROPERTIES LABELS gpu)
 
 # F5 launches the executable directly, so CTest's ENVIRONMENT property does not apply.
 foreach(test_target IN ITEMS ar_core_tests ar_rhi_tests ar_runtime_tests)

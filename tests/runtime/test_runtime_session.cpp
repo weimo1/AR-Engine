@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <expected>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -129,6 +130,25 @@ int runChildCase(const char* tag, DWORD timeoutMs = 120000) {
     ::CloseHandle(process.hProcess);
     REQUIRE(wait != WAIT_TIMEOUT);
     return static_cast<int>(exitCode);
+}
+
+// Shown only when the assertion after it fails, so a machine whose real loader refuses to start
+// says why (missing vulkan-1.dll, no device, ...) instead of a bare "false".
+std::string describeStart(
+    const std::expected<std::unique_ptr<runtime::RuntimeSession>, runtime::StartFailure>& started) {
+    if (started.has_value()) {
+        return "started";
+    }
+    if (!started.error().endResult.primaryError.has_value()) {
+        return "start failed without a primary error";
+    }
+    const core::Error& error = *started.error().endResult.primaryError;
+    std::string text = std::string("start failed: ") + core::toString(error.category) + " at " +
+                       core::toString(error.stage) + ": " + error.message;
+    if (error.origin.has_value()) {
+        text += " (" + error.origin->domain + " " + std::to_string(error.origin->code) + ")";
+    }
+    return text;
 }
 
 } // namespace
@@ -450,6 +470,7 @@ TEST_CASE(
     config.query.requestedApi = rhi::kApiVersion1_4;
 
     auto started = runtime::RuntimeSession::start(config);
+    INFO(describeStart(started));
     REQUIRE(started.has_value());
     runtime::RuntimeSession& session = **started;
     const rhi::CapabilityReport& report = session.report();
@@ -477,6 +498,7 @@ TEST_CASE(
     config.query.requestedApi = rhi::makeApiVersion(1, 3);
 
     auto started = runtime::RuntimeSession::start(config);
+    INFO(describeStart(started));
     REQUIRE(started.has_value());
     runtime::RuntimeSession& session = **started;
     const rhi::CapabilityReport& report = session.report();

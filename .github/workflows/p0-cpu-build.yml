@@ -77,7 +77,8 @@ jobs:
       # first round so the real restore cost is measured instead of hidden.
       - name: Restore dependencies, build both configurations and run CTest
         shell: pwsh
-        run: python scripts/build_checks.py
+        # The hosted runner has no Vulkan loader, so the cases labelled gpu stay local.
+        run: python scripts/build_checks.py --no-gpu
 
       - name: Write the run summary
         if: always()

@@ -43,6 +43,7 @@ CAPABILITY_SOURCES = ("system_loader", "fixture_loader", "fixture_vulkan_api", N
 COMMAND_FIELDS = {
     "id", "argv", "cwd", "timeout_seconds", "wrapper_exit", "child_exit", "parser_id",
     "required", "output_dir", "expected_capability_source", "depends_on", "expected_cases",
+    "gpu_cases",
 }
 TABLE_FIELDS = {
     "schema_version", "change", "output_root", "output_root_exception", "snapshot",
@@ -169,6 +170,13 @@ def validate_command(command: object, index: int, seen: dict[str, int]) -> None:
     elif parser_id == "ctest-junit":
         raise TableError(
             f"command {command_id}: ctest-junit requires the expected_cases it must cover")
+    # Cases carrying the CTest label `gpu`: they need a real Vulkan loader or device, so a
+    # machine without one (the hosted CI runner) leaves them out with build_checks --no-gpu.
+    gpu_cases = command.get("gpu_cases", [])
+    if (not isinstance(gpu_cases, list) or len(set(gpu_cases)) != len(gpu_cases)
+            or not set(gpu_cases) < set(expected_cases or [None])):
+        raise TableError(
+            f"command {command_id}: gpu_cases must be a strict subset of expected_cases")
 
 
 def substitutions(repo_root: Path, output_root: Path, environment: dict[str, str]) -> dict[str, str]:

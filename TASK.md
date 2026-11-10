@@ -33,8 +33,7 @@
 
 ## 人工待办（不阻塞队列）
 
-- 在 GitHub Actions 页面手动运行一次 “Engine CPU build and test”（本机没有 `gh`）。首跑大概率因工具链精确版本不符失败；把结果贴给 Agent，再决定放宽版本检查并改成推送触发 + vcpkg 缓存。
-- `ce17449` 之后的本地提交尚未推送；确认后 `git push`。
+- 云端 “Engine CPU build and test” 首跑（2026-11-10，run 42821435014，`49b5633`，4 分 52 秒）：工具链检查、依赖恢复、两配置编译通过，Debug CTest 47/49；失败的 `runtime-system-inspect`、`runtime-system-development` 需要真实 Vulkan 加载器。两项已标 `gpu`，云端改用 `build_checks.py --no-gpu`；推送后用 `gh workflow run` 再跑一次确认，绿了再决定是否改成推送触发 + vcpkg 缓存。
 
 - 首次使用自动循环前：修正 Codex CLI 的默认模型（见 [自动运行](docs/workflow/自动运行.md) 的注意事项），设置 `CLAUDE_CODE_GIT_BASH_PATH`，然后用 `--max-tasks 1` 试跑 T01。
 

@@ -37,6 +37,16 @@ def fast_commands(table: dict) -> list[str]:
             and not command['id'].startswith(('clcmd-', 'verify-inputs-'))]
 
 
+def without_gpu(table: dict) -> None:
+    """Leave out the cases labelled `gpu` on a machine with no Vulkan loader or device."""
+    for command in table['commands']:
+        if command['parser_id'] == 'ctest-junit':
+            skipped = set(command.get('gpu_cases', []))
+            command['argv'] = [*command['argv'], '-LE', 'gpu']
+            command['expected_cases'] = [name for name in command['expected_cases']
+                                         if name not in skipped]
+
+
 def load_local_paths(repo_root: Path) -> None:
     """Take VCPKG_ROOT / AR_P0_DEPS from the ignored CMakeUserPresets.json when unset."""
     presets = repo_root / 'CMakeUserPresets.json'
@@ -60,6 +70,8 @@ def main(argv: list[str]) -> int:
     mode.add_argument("--only", nargs="+", default=None, help="run only the named command ids")
     parser.add_argument('--test-file', action='append', type=Path, default=[],
                         help='affected test source under tests/ (repeat for multiple files)')
+    parser.add_argument('--no-gpu', action='store_true',
+                        help='skip the CTest cases labelled gpu (no Vulkan loader or device here)')
     args = parser.parse_args(argv)
     if args.phase == 'test' and not args.test_file:
         parser.error('--phase test requires at least one --test-file')
@@ -78,6 +90,8 @@ def main(argv: list[str]) -> int:
             if not path.is_relative_to(tests_root) or not path.is_file():
                 raise ValueError(f'Test file missing or outside tests/: {name}')
         table = p0.load_table(table_path)
+        if args.no_gpu:
+            without_gpu(table)
         only = build_commands(table) if args.phase == 'build' else args.only
         if args.fast:
             only = fast_commands(table)
