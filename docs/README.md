@@ -11,9 +11,10 @@
 | 按什么顺序设计和实现 | [实施路线与阶段计划](实施路线与阶段计划.md)：P0—P7 纵切路线；当前执行顺序和任务见 [项目总任务](../TASK.md) |
 | 已确定的技术选择 | [ADR 目录](adr/) |
 | 如何开始开发、检查和审查 | [SDD 与 Code Review 指南](workflow/SDD与CodeReview接入指南.md) |
-| 多 Agent 如何分工和交接 | [协作与上下文](workflow/多Agent协作与上下文.md)：用户安排单人写入、直接指令执行，无强制权限登记或流程 gate |
+| 怎样让 Agent 自动连续执行 | [自动运行](workflow/自动运行.md)：任务队列 + 门禁 + 无头 CLI 循环，不靠人工转发 |
+| 多 Agent 如何分工和交接（旧，手工模式） | [协作与上下文](workflow/多Agent协作与上下文.md)：用户安排单人写入、直接指令执行，无强制权限登记或流程 gate |
 | 新对话如何开始 | [各角色开场提示词](workflow/多Agent对话启动提示词.md)：公共开场加具体任务说明，按直接指令执行；自动化快照按需使用 |
-| P0 基础工程方案 | [技术方案](../openspec/changes/bootstrap-engine-p0/design.md)、[范围与验收](../openspec/changes/bootstrap-engine-p0/proposal.md)：静态模块、固定C++23preview和动态CRT沿用；由 CTest 调用静态库公共入口；Core 首批已实现，RHI 部分完成，Runtime 待实现 |
+| P0 基础工程方案 | [技术方案](../openspec/changes/bootstrap-engine-p0/design.md)、[范围与验收](../openspec/changes/bootstrap-engine-p0/proposal.md)：静态模块、固定C++23preview和动态CRT沿用；由 CTest 调用静态库公共入口；core/rhi/runtime 已本地完成，当前进入 P1 |
 | 当前进展和缺口 | [项目总任务](../TASK.md) |
 | 如何维护文档和确认边界 | [文档体系与确认机制](workflow/文档体系与确认机制.md) |
 | 按模块查设计和功能任务 | [模块文档](modules/README.md)、[模块与变更索引](workflow/模块与变更索引.md)：模块、change、步骤和角色包分层定位 |

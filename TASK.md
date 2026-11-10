@@ -1,53 +1,47 @@
 # 项目总任务
 
-本页记录项目整体进度。统筹从这里看当前阶段、下一步和对应的 SDD 文档。阶段或下一步变化时更新本页，实施细项和实际结果记在对应变更的 `tasks.md`。
+唯一的进度页。Agent 从“任务队列”取第一项未勾选的任务，做完勾选并在同一行后面补一句结果。规则见 [AGENTS.md](AGENTS.md)，阶段路线见 [实施路线](docs/实施路线与阶段计划.md)。
 
-全项目各阶段的先后顺序见 [实施路线与阶段计划](docs/实施路线与阶段计划.md)。统筹按路线和任务依赖确定本批模块与任务编号，并明确目标、方案依据和验收条件。开发从本页接单，按对应任务实施和自检，把结果写回任务清单；统筹再据此更新本页和安排下一批。
+格式约定（`scripts/autorun.py` 按此解析）：`- [ ] T编号 标题`，下面缩进写目标和验收；标题带 `[人工]` 的任务需要用户处理，自动循环到此停止。
 
-| 阶段 | 统筹判断 |
-| --- | --- |
-| 选任务、核对方案 | 统筹按路线和依赖选出本批任务，核对已确认方案是否说清模块与接口边界、关键行为、失败处理和验收。方案足够就交开发。缺关键设计或要改变已确认的取舍时，把具体缺口交给架构，补到对应 SDD 文档，经用户确认受影响的决定后再开发。 |
-| 开发 | 接到本批任务后，运行 `python scripts/workflow.py context <change-id>`，查看 `skills`，打开适用技能的 `.agents/skills/<名称>/SKILL.md` 再实施。若本批涉及外部 API、性能或集成测试等具体场景，再按技能说明选用相关技能。 |
-| 写测试、编译和自检 | 开发按 `test-plan.md` 同步新增或修改受影响的测试。修缺陷时优先补能复现问题的用例。用仓库统一入口构建并跑测试，记录命令、结果和未覆盖项。失败项回开发处理。 |
-| 代码评审 | 自检完成后，对本批暂存差异运行评审准备脚本。它调用 OCR 筛选并打印交接提示，由用户把结果带到现有评审对话。开发修复后重跑受影响的检查，再交回更新后的差异。 |
-| 交付 | 本批验收满足后，按用户授权提交或推送，并记录实际 CI 结果。再判断下一项。 |
+## 当前阶段
 
-方案有关键争议时，架构维护同一份 `design.md`，另一位 Agent 提出具体反例和备选方案，由架构处理并把仍需取舍的事项交用户决定。方案明确后转开发。方案质询按需安排。
+**P1a 首个画面**：窗口 → device → swapchain → 三角形 → 截图。开发机驱动暂为 Vulkan 1.3，P1/P2 以 1.3 为开发基线（Dynamic Rendering、Synchronization2），产品目标 1.4 与 Descriptor Heap 另行验收。
 
-## 当前任务
+## 任务队列
 
-- 2026-11-06 用户确认按既定总体架构和任务依赖推进，学校进度暂不要求额外压缩范围或调整顺序。GPU/Bindless诊断随对应功能建设，长期职责见 [RHI调试方案](docs/modules/rhi/README.md#gpu与bindless调试方案2026-11-06) 和 [render验证方案](docs/modules/render/README.md#bindless与gpu效果验证2026-11-06)。各阶段具体接口和验收仍按对应方案确认范围执行。
-- 当前阶段为 **P0-code 开发**，正在实现 P0 基础工程。
-- **2.1 runtime 组合已于 2026-11-06 完成**：三模式、失败回滚、close 幂等、capability_json 交 core 写摘要；runtime 级用例 16 个（含评审后补的 require_product、mode-mismatch、diagnostic-create-failure），两配置各 49/49。
-- 当前阶段为 **3.1 验收缺口已补，待复验**：独立验收提出的三项缺口已补齐——摘要失败矩阵（core-capability-combinations/core-summary-conflicts/runtime-summary-output-failure）、隔离连续拒绝与既有隔离下诊断创建失败、cleanup-failure 与析构场景移入独占子进程并检查 WaitForSingleObject/超时回收；补齐过程中修复 core 对非 UTF-8 事件消息抛异常穿过 emit/finish 的真实缺陷（sanitizeUtf8 + emit 转 output_failed，配 core-event-encoding-failure）。复跑 16/16 命令、两配置各 49/49；本批尚未提交/推送，待独立复验。
-- **2.3 RHI 已于 2026-11-06 完成**：隔离标志与 quarantine-reopen、`report()` 关闭后失效的计数验证、`Impl::closed` 缺失修复，两配置各 30/30。
+- [ ] T01 platform 模块与 GLFW 窗口
+  - 目标：vcpkg 加入 glfw3；新增 `engine/platform` 静态库（`ar_platform`），提供 Window：创建/销毁、事件轮询、关闭请求、帧缓冲尺寸、是否最小化、所需 instance 扩展列表。不含输入映射。
+  - 验收：CTest `platform-window-create`（创建隐藏窗口、轮询若干次、读取尺寸、销毁）；公开头检查通过；门禁全绿。
+- [ ] T02 rhi 逻辑设备与 Validation
+  - 目标：在现有 instance 之上创建 surface 无关的逻辑 device：按 1.3 特性（dynamicRendering、synchronization2）选择物理设备，graphics 队列；Debug 配置启用 Validation 层和 debug messenger，消息转入 core 诊断。缺能力时返回明确错误，不强行运行。
+  - 验收：CTest `rhi-device-create`、`rhi-device-missing-feature`（fixture）；真实 GPU 用例加 CTest 标签 `gpu`；Validation 零错误；门禁全绿。
+- [ ] T03 swapchain、帧循环与清屏示例
+  - 目标：surface、present 队列、swapchain；帧上下文（2 帧在途，fence/semaphore，不每帧 waitIdle）；新增可执行 `examples/triangle`（先只清屏），支持 `--frames N` 跑完退出。runtime 负责组合 platform + rhi。
+  - 验收：CTest `sample-clear-frames`（标签 `gpu`，跑 60 帧 exit 0，诊断里 Validation 错误数为 0）；门禁全绿。
+- [ ] T04 Shader 构建与三角形
+  - 目标：CMake 用 glslc 把 `shaders/*.vert|frag` 编成 SPIR-V 并跑 spirv-val，产物进 `build/`；graphics pipeline（Dynamic Rendering）画一个顶点色三角形。
+  - 验收：CTest `shader-build`（产物存在且通过 spirv-val）、`sample-triangle-frames`（标签 `gpu`）；门禁全绿。
+- [ ] T05 截图与像素验证
+  - 目标：`--screenshot <path>` 在最后一帧回读 swapchain 图像写 PNG（stb_image_write）。
+  - 验收：CTest `sample-triangle-screenshot`（标签 `gpu`）：中心像素落在三角形内且非清屏色，四角为清屏色；门禁全绿。
+- [ ] T06 resize、最小化与关闭
+  - 目标：swapchain 过期/尺寸变化时重建；最小化时暂停渲染不忙等；关闭时等待在途帧后按序释放。
+  - 验收：CTest `sample-resize`（标签 `gpu`，程序内改变窗口尺寸、最小化再恢复、继续出帧，Validation 零错误）；门禁全绿。
+- [ ] T07 [人工] P1 里程碑验收
+  - 用户运行 `examples/triangle` 看画面、拖动窗口；确认后在本页写出 P2a（Buffer/Image/VMA/上传）的任务。
 
-## 本批交付记录（2026-11-06）
+## 人工待办（不阻塞队列）
 
-- 工作流切片 `b87938b`、RHI 2.3 收口切片 `5c85ef8` 已提交并推送到 origin/main；RHI 的 18 个已评审文件与提交 blob 逐一核对一致。
-- `5c85ef8` 的 [GitHub Workflow checks #42070320194](https://github.com/weimo1/AR-Engine/actions/runs/42070320194) 已完成，workflow-checks 作业 success。本地工作流 95 项测试通过；RHI 沿用同一代码输入的 16/16 命令、两配置各 30/30 证据。
-- P0 CPU 工作流仍为手动触发，本轮未触发；GPU 未运行。3.3 与整体交付 3.4 仍未完成，不将工作流 CI 通过视为引擎云端构建通过。
-- 2.1 runtime 组合与其 3.1 用例已实施并自检通过（16/16 命令、两配置各 49/49）；9 条评审意见已修复（实例残留不卸库、回滚残留上送、descriptor_heap 对象化、三条新用例、被拒启动 result、次序与卸库断言、拼写），并重跑同一批检查；下一步把刷新后的评审包交独立评审，未覆盖项如实保留：真实 GPU、云端 CI、取消/超时路径、2.2 其余 JSON 组合。
+- 在 GitHub Actions 页面手动运行一次 “Engine CPU build and test”（本机没有 `gh`）。首跑大概率因工具链精确版本不符失败；把结果贴给 Agent，再决定放宽版本检查并改成推送触发 + vcpkg 缓存。
+- `ce17449` 之后的 3 个本地提交尚未推送；确认后 `git push`。
 
-## 开发检查命令
+## 待办池（建议级，不阻塞）
 
-以下以本批 runtime 切片为例。测试源码路径按本批任务替换，多份文件可重复传 `--test-file`。
+- CMake 目前必须先由脚本生成 build identity 才能配置；P1 有可执行程序后评估给缺省值，方便直接在 VS 打开。
+- 工具链检查由精确版本改为最低版本。
+- `openspec/changes/bootstrap-engine-p0/tasks.md` 是 25KB 流水日志，P0 归档时压成勾选清单。
 
-```powershell
-python scripts/build_checks.py --phase build
-python scripts/build_checks.py --phase test --test-file tests/runtime/test_runtime_session.cpp
-python scripts/prepare_review.py
-```
+## 已完成
 
-编译模式执行命令表中的构建及其依赖。测试模式先检查指定源码文件存在，再按同一命令表构建、跑 CTest 并核对必跑用例。测试模式包含编译，开发可直接运行它完成整批自检。评审准备在本批差异暂存后运行，使用 OCR 整理输入并打印评审提示。
-
-## P0 的 SDD 文档
-
-统筹可在仓库根运行 `python scripts/workflow.py context bootstrap-engine-p0`，查看该变更配置的架构、模块方案和 SDD 文档。按本批模块打开对应文档，再核对方案是否覆盖任务和验收条件。脚本列出依据，方案是否足够由统筹判断。
-
-| 文档 | 记录内容 |
-| --- | --- |
-| [proposal.md](openspec/changes/bootstrap-engine-p0/proposal.md) | 范围、行为和验收条件 |
-| [design.md](openspec/changes/bootstrap-engine-p0/design.md) | 实现方案和模块边界 |
-| [test-plan.md](openspec/changes/bootstrap-engine-p0/test-plan.md) | 验证方法和测试覆盖 |
-| [tasks.md](openspec/changes/bootstrap-engine-p0/tasks.md) | P0 实施细项、进度和实际结果 |
+- **P0 基础工程（2026-11-06 本地完成）**：core 诊断/错误、rhi 加载与能力查询、runtime 组合与回滚；49 个用例，两配置各 49/49。方案与历史记录见 [P0 change](openspec/changes/bootstrap-engine-p0/tasks.md)。未做：云端 CPU 构建首跑、真实 1.4/Heap 验收。

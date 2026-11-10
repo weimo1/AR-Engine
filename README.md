@@ -14,11 +14,7 @@ C++23、Vulkan1.4、Windows/VS2026；CMake/MSBuild/CTest和vcpkg。Vulkan内存�
 
 ## 当前进度
 
-- 本地AI工作流收尾版本已交付，具备任务上下文、DSH接入、测试、独立审查、gate及Git/CI检查。
-- P0目录和模块职责已确认，公开头使用include/<module>/，不增加ar路径层。
-- P0仅准备目录骨架和方案；链接产物、标准模式和CRT仍待确认，尚无引擎实现或渲染画面验收。
-
-P0的 [技术方案](openspec/changes/bootstrap-engine-p0/design.md)、[验收计划](openspec/changes/bootstrap-engine-p0/test-plan.md) 和 [项目总任务](TASK.md) 分别维护，不把规划完成当实现完成。
+P0 基础工程（core 诊断、rhi 能力查询、runtime 组合）已本地完成并有 49 个测试；尚无窗口和画面。当前进入 P1 首个画面，实时进度见 [项目总任务](TASK.md)。
 
 ## 代码组织
 
