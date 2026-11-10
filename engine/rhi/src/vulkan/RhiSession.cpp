@@ -166,14 +166,13 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
 CapabilitySource sourceFor(const QueryConfig& config) {
     if (const auto* explicitPath = std::get_if<ExplicitLoaderPath>(&config.loader);
         explicitPath != nullptr) {
-        return CapabilitySource{
-            "fixture_loader", explicitPath->path.filename().string(), true};
+        return CapabilitySource{"fixture_loader", explicitPath->path.filename().string(), true};
     }
     return CapabilitySource{"system_loader", std::string{}, false};
 }
 
-bool hasExtension(const std::vector<ExtensionInfo>& extensions, ExtensionScope scope,
-    std::string_view name) {
+bool hasExtension(
+    const std::vector<ExtensionInfo>& extensions, ExtensionScope scope, std::string_view name) {
     return std::any_of(extensions.begin(), extensions.end(), [&](const ExtensionInfo& extension) {
         return extension.scope == scope && extension.name == name;
     });
@@ -252,8 +251,10 @@ struct RhiSession::Impl {
             const VkResult result = vkEnumerateInstanceVersion(&loaderVersion);
             if (result != VK_SUCCESS) {
                 report.errors.push_back(
-                    ReportError{core::ErrorStage::Loader,
-                        core::ErrorCategory::QueryFailed, describe(result)});
+                    ReportError{
+                        core::ErrorStage::Loader,
+                        core::ErrorCategory::QueryFailed,
+                        describe(result)});
                 return std::unexpected(makeError(
                     core::ErrorCategory::QueryFailed,
                     core::ErrorStage::Loader,
@@ -272,15 +273,14 @@ struct RhiSession::Impl {
             return std::unexpected(makeError(
                 core::ErrorCategory::ApiVariantUnsupported,
                 core::ErrorStage::Instance,
-                "the loader reports API variant "
-                    + std::to_string(*report.apiVariants.loader)));
+                "the loader reports API variant " + std::to_string(*report.apiVariants.loader)));
         }
         if (report.loaderApi.has_value() && config.requestedApi > *report.loaderApi) {
             return std::unexpected(makeError(
                 core::ErrorCategory::ApiVersionUnsupported,
                 core::ErrorStage::Instance,
-                "the loader supports " + apiText(*report.loaderApi) + " but "
-                    + apiText(config.requestedApi) + " was requested"));
+                "the loader supports " + apiText(*report.loaderApi) + " but " +
+                    apiText(config.requestedApi) + " was requested"));
         }
         if (vkCreateInstance == nullptr) {
             return std::unexpected(makeError(
@@ -353,7 +353,8 @@ struct RhiSession::Impl {
         report.instanceExtensionQuery.status = QueryStatus::Success;
         for (const VkExtensionProperties& property : properties) {
             report.extensions.push_back(
-                ExtensionInfo{ExtensionScope::Instance, property.extensionName, property.specVersion});
+                ExtensionInfo{
+                    ExtensionScope::Instance, property.extensionName, property.specVersion});
         }
         return {};
     }
@@ -394,8 +395,8 @@ struct RhiSession::Impl {
             vulkanOrigin(VK_INCOMPLETE)));
     }
 
-    std::expected<VkPhysicalDevice, core::Error> selectDevice(
-        const std::vector<VkPhysicalDevice>& devices) {
+    std::expected<VkPhysicalDevice, core::Error>
+    selectDevice(const std::vector<VkPhysicalDevice>& devices) {
         if (devices.empty()) {
             return std::unexpected(makeError(
                 core::ErrorCategory::DeviceNotFound,
@@ -408,8 +409,9 @@ struct RhiSession::Impl {
                 return std::unexpected(makeError(
                     core::ErrorCategory::InvalidArguments,
                     core::ErrorStage::Enumeration,
-                    "explicit device index " + std::to_string(explicitIndex->index) + " is out of range ("
-                        + std::to_string(devices.size()) + " device(s) enumerated)"));
+                    "explicit device index " + std::to_string(explicitIndex->index) +
+                        " is out of range (" + std::to_string(devices.size()) +
+                        " device(s) enumerated)"));
             }
             return devices[explicitIndex->index];
         }
@@ -429,18 +431,25 @@ struct RhiSession::Impl {
         if (result != VK_SUCCESS) {
             report.deviceExtensionQuery.status = QueryStatus::Failed;
             report.deviceExtensionQuery.vkResult = describe(result);
-            report.errors.push_back(ReportError{
-                core::ErrorStage::Capability, core::ErrorCategory::QueryFailed, describe(result)});
+            report.errors.push_back(
+                ReportError{
+                    core::ErrorStage::Capability,
+                    core::ErrorCategory::QueryFailed,
+                    describe(result)});
             return;
         }
         std::vector<VkExtensionProperties> propertiesList(count);
         if (count > 0) {
-            result = vkEnumerateDeviceExtensionProperties(device, nullptr, &count, propertiesList.data());
+            result = vkEnumerateDeviceExtensionProperties(
+                device, nullptr, &count, propertiesList.data());
             if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
                 report.deviceExtensionQuery.status = QueryStatus::Failed;
                 report.deviceExtensionQuery.vkResult = describe(result);
-                report.errors.push_back(ReportError{
-                    core::ErrorStage::Capability, core::ErrorCategory::QueryFailed, describe(result)});
+                report.errors.push_back(
+                    ReportError{
+                        core::ErrorStage::Capability,
+                        core::ErrorCategory::QueryFailed,
+                        describe(result)});
                 return;
             }
             propertiesList.resize(std::min<std::size_t>(propertiesList.size(), count));
@@ -448,7 +457,8 @@ struct RhiSession::Impl {
         report.deviceExtensionQuery.status = QueryStatus::Success;
         for (const VkExtensionProperties& property : propertiesList) {
             report.extensions.push_back(
-                ExtensionInfo{ExtensionScope::Device, property.extensionName, property.specVersion});
+                ExtensionInfo{
+                    ExtensionScope::Device, property.extensionName, property.specVersion});
         }
         queryDescriptorHeap(device);
     }
@@ -485,20 +495,22 @@ struct RhiSession::Impl {
         // Resolve the variant question first: the version judgment below depends on it.
         if (report.variantSupported == VariantSupport::Unknown) {
             if (report.apiVariants.loader.has_value() && report.apiVariants.device.has_value()) {
-                report.variantSupported = (*report.apiVariants.loader == 0
-                                              && *report.apiVariants.device == 0)
-                    ? VariantSupport::True
-                    : VariantSupport::False;
+                report.variantSupported =
+                    (*report.apiVariants.loader == 0 && *report.apiVariants.device == 0)
+                        ? VariantSupport::True
+                        : VariantSupport::False;
             }
         }
 
-        const bool loaderEnough = report.loaderApi.has_value() && *report.loaderApi >= kApiVersion1_4;
-        const bool deviceEnough = report.deviceApi.has_value() && *report.deviceApi >= kApiVersion1_4;
+        const bool loaderEnough =
+            report.loaderApi.has_value() && *report.loaderApi >= kApiVersion1_4;
+        const bool deviceEnough =
+            report.deviceApi.has_value() && *report.deviceApi >= kApiVersion1_4;
         const bool requestedEnough = config.requestedApi >= kApiVersion1_4;
         const bool created = report.instanceCreate.status == InstanceCreateStatus::Success;
-        report.judgments.apiVersionSupported =
-            loaderEnough && deviceEnough && requestedEnough && created
-            && report.variantSupported == VariantSupport::True;
+        report.judgments.apiVersionSupported = loaderEnough && deviceEnough && requestedEnough &&
+                                               created &&
+                                               report.variantSupported == VariantSupport::True;
 
         const bool requiredPresent = std::all_of(
             config.requiredDeviceExtensions.begin(),
@@ -509,7 +521,8 @@ struct RhiSession::Impl {
         report.judgments.requiredCapabilitiesSupported = requiredPresent;
 
         if (report.loaderApi.has_value() && report.deviceApi.has_value()) {
-            report.effectiveApi = std::min({*report.loaderApi, *report.deviceApi, config.requestedApi});
+            report.effectiveApi =
+                std::min({*report.loaderApi, *report.deviceApi, config.requestedApi});
         }
     }
 
@@ -591,8 +604,9 @@ struct RhiSession::Impl {
         if (g_process.quarantined) {
             report.productTargetSupported = false;
             report.result = core::ResultKind::InitializationFailed;
-            report.errors.push_back(ReportError{
-                core::ErrorStage::Cleanup, core::ErrorCategory::CleanupFailed, std::nullopt});
+            report.errors.push_back(
+                ReportError{
+                    core::ErrorStage::Cleanup, core::ErrorCategory::CleanupFailed, std::nullopt});
             return std::unexpected(makeError(
                 core::ErrorCategory::CleanupFailed,
                 core::ErrorStage::Cleanup,
@@ -603,7 +617,10 @@ struct RhiSession::Impl {
             return std::unexpected(std::move(*error));
         }
 
-        emitEvent(*diagnostics, core::LogLevel::Info, "rhi.query.start",
+        emitEvent(
+            *diagnostics,
+            core::LogLevel::Info,
+            "rhi.query.start",
             "querying Vulkan capabilities for API " + apiText(config.requestedApi),
             core::ErrorStage::Validation);
 
@@ -642,11 +659,14 @@ struct RhiSession::Impl {
         report.result = report.judgments.apiVersionSupported ? core::ResultKind::Success
                                                              : core::ResultKind::Unsupported;
 
-        emitEvent(*diagnostics, core::LogLevel::Info, "rhi.query.complete",
-            "device '" + report.deviceName + "' reports API " + apiText(*report.deviceApi)
-                + ", descriptor heap "
-                + (report.descriptorHeap == DescriptorHeapStatus::Supported ? "supported"
-                                                                            : "not supported"),
+        emitEvent(
+            *diagnostics,
+            core::LogLevel::Info,
+            "rhi.query.complete",
+            "device '" + report.deviceName + "' reports API " + apiText(*report.deviceApi) +
+                ", descriptor heap " +
+                (report.descriptorHeap == DescriptorHeapStatus::Supported ? "supported"
+                                                                          : "not supported"),
             core::ErrorStage::Capability);
         return {};
     }
@@ -656,13 +676,21 @@ struct RhiSession::Impl {
         report.productTargetSupported = false;
         report.result = resultKindFor(error.category);
         report.errors.push_back(
-            ReportError{error.stage, error.category, error.origin.has_value() && error.origin->domain == "vulkan"
+            ReportError{
+                error.stage,
+                error.category,
+                error.origin.has_value() && error.origin->domain == "vulkan"
                     ? std::optional<VulkanResultInfo>(VulkanResultInfo{
                           static_cast<std::int32_t>(error.origin->code),
                           detail::vkResultName(static_cast<VkResult>(error.origin->code))})
                     : std::nullopt});
-        emitEvent(*diagnostics, core::LogLevel::Error, "rhi.query.failed", error.message,
-            error.stage, error.origin);
+        emitEvent(
+            *diagnostics,
+            core::LogLevel::Error,
+            "rhi.query.failed",
+            error.message,
+            error.stage,
+            error.origin);
         QueryFailure result;
         result.error = std::move(error);
         result.cleanupErrors = cleanupErrors;
@@ -674,8 +702,12 @@ struct RhiSession::Impl {
     }
 
     CloseResult doClose() {
-        emitEvent(*diagnostics, core::LogLevel::Info, "rhi.close.start",
-            "releasing the Vulkan instance and loader", core::ErrorStage::Cleanup);
+        emitEvent(
+            *diagnostics,
+            core::LogLevel::Info,
+            "rhi.close.start",
+            "releasing the Vulkan instance and loader",
+            core::ErrorStage::Cleanup);
         shutdown();
         // Terminal for this session: a second close() returns the cached result, and a destructor
         // after an explicit close no longer retries the failed steps.
@@ -684,7 +716,8 @@ struct RhiSession::Impl {
         closeResult.errors = cleanupErrors;
         closeResult.residualResources = residualResources;
         closeResult.resourcesReleased = residualResources.empty();
-        emitEvent(*diagnostics,
+        emitEvent(
+            *diagnostics,
             closeResult.resourcesReleased ? core::LogLevel::Info : core::LogLevel::Error,
             "rhi.close.complete",
             closeResult.resourcesReleased ? "all Vulkan resources were released"
@@ -706,9 +739,8 @@ RhiSession::~RhiSession() {
     }
 }
 
-std::expected<std::unique_ptr<RhiSession>, QueryFailure> RhiSession::open(
-    const QueryConfig& config,
-    core::DiagnosticSession& diagnostics) {
+std::expected<std::unique_ptr<RhiSession>, QueryFailure>
+RhiSession::open(const QueryConfig& config, core::DiagnosticSession& diagnostics) {
     auto impl = std::make_unique<Impl>(diagnostics);
     impl->config = config;
     if (auto queried = impl->query(); !queried) {
@@ -749,9 +781,14 @@ void clearProcessQuarantine() noexcept {
 }
 
 ProcessCounters processCounters() noexcept {
-    return ProcessCounters{g_process.loadCalls, g_process.volkInitializeCalls,
-        g_process.instanceCreateCalls, g_process.destroyInstanceCalls,
-        g_process.volkFinalizeCalls, g_process.unloadCalls, g_process.reportCallsAfterClose,
+    return ProcessCounters{
+        g_process.loadCalls,
+        g_process.volkInitializeCalls,
+        g_process.instanceCreateCalls,
+        g_process.destroyInstanceCalls,
+        g_process.volkFinalizeCalls,
+        g_process.unloadCalls,
+        g_process.reportCallsAfterClose,
         g_process.quarantineChecks};
 }
 

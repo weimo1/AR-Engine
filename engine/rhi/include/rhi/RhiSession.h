@@ -15,10 +15,8 @@
 
 namespace ar::rhi {
 
-inline constexpr std::uint32_t makeApiVersion(
-    std::uint32_t major,
-    std::uint32_t minor,
-    std::uint32_t patch = 0) noexcept {
+inline constexpr std::uint32_t
+makeApiVersion(std::uint32_t major, std::uint32_t minor, std::uint32_t patch = 0) noexcept {
     return (major << 22) | (minor << 12) | patch;
 }
 
@@ -66,9 +64,8 @@ struct CloseResult {
 // process-wide volk state is never used concurrently.
 class RhiSession {
 public:
-    static std::expected<std::unique_ptr<RhiSession>, QueryFailure> open(
-        const QueryConfig& config,
-        core::DiagnosticSession& diagnostics);
+    static std::expected<std::unique_ptr<RhiSession>, QueryFailure>
+    open(const QueryConfig& config, core::DiagnosticSession& diagnostics);
 
     ~RhiSession();
 

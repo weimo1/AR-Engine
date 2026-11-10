@@ -106,7 +106,8 @@ Json extensionQueryJson(const rhi::ExtensionQuery& query) {
 
 } // namespace
 
-EncodedCapability encodeCapability(const rhi::CapabilityReport& report,
+EncodedCapability encodeCapability(
+    const rhi::CapabilityReport& report,
     QueryMode mode,
     const std::string& runId,
     const core::BuildInfo& build) {
@@ -137,19 +138,19 @@ EncodedCapability encodeCapability(const rhi::CapabilityReport& report,
         profile["scope"] = "query_only";
         capability["requirement_profile"] = std::move(profile);
 
-        capability["loader_api"] = report.loaderApi.has_value() ? Json(*report.loaderApi)
-                                                                : Json(nullptr);
-        capability["device_api"] = report.deviceApi.has_value() ? Json(*report.deviceApi)
-                                                                : Json(nullptr);
+        capability["loader_api"] =
+            report.loaderApi.has_value() ? Json(*report.loaderApi) : Json(nullptr);
+        capability["device_api"] =
+            report.deviceApi.has_value() ? Json(*report.deviceApi) : Json(nullptr);
 
         Json variants = Json::object();
         variants["loader"] = report.apiVariants.loader.has_value()
-            ? Json(*report.apiVariants.loader)
-            : Json(nullptr);
+                                 ? Json(*report.apiVariants.loader)
+                                 : Json(nullptr);
         variants["requested"] = report.apiVariants.requested;
         variants["device"] = report.apiVariants.device.has_value()
-            ? Json(*report.apiVariants.device)
-            : Json(nullptr);
+                                 ? Json(*report.apiVariants.device)
+                                 : Json(nullptr);
         capability["api_variants"] = std::move(variants);
 
         Json create = Json::object();
@@ -166,8 +167,8 @@ EncodedCapability encodeCapability(const rhi::CapabilityReport& report,
         Json extensions = Json::array();
         for (const rhi::ExtensionInfo& extension : report.extensions) {
             Json entry = Json::object();
-            entry["scope"] = extension.scope == rhi::ExtensionScope::Instance ? "instance"
-                                                                              : "device";
+            entry["scope"] =
+                extension.scope == rhi::ExtensionScope::Instance ? "instance" : "device";
             entry["name"] = extension.name;
             entry["spec_version"] = extension.specVersion;
             extensions.push_back(std::move(entry));
@@ -177,8 +178,8 @@ EncodedCapability encodeCapability(const rhi::CapabilityReport& report,
         Json features = Json::object();
         for (const auto& [name, feature] : report.features) {
             Json entry = Json::object();
-            entry["value"] = feature.supported.has_value() ? Json(*feature.supported)
-                                                           : Json(nullptr);
+            entry["value"] =
+                feature.supported.has_value() ? Json(*feature.supported) : Json(nullptr);
             entry["query_status"] = queryStatusName(feature.status);
             features[name] = std::move(entry);
         }
@@ -186,15 +187,14 @@ EncodedCapability encodeCapability(const rhi::CapabilityReport& report,
 
         Json capabilitySource = Json::object();
         capabilitySource["kind"] = report.capabilitySource.kind;
-        capabilitySource["id"] = report.capabilitySource.id.empty()
-            ? Json(nullptr)
-            : Json(report.capabilitySource.id);
+        capabilitySource["id"] =
+            report.capabilitySource.id.empty() ? Json(nullptr) : Json(report.capabilitySource.id);
         capabilitySource["simulated"] = report.capabilitySource.simulated;
         capability["capability_source"] = std::move(capabilitySource);
 
         capability["variant_supported"] = variantName(report.variantSupported);
-        capability["effective_api"] = report.effectiveApi.has_value() ? Json(*report.effectiveApi)
-                                                                      : Json(nullptr);
+        capability["effective_api"] =
+            report.effectiveApi.has_value() ? Json(*report.effectiveApi) : Json(nullptr);
 
         Json judgments = Json::object();
         judgments["api_version_supported"] = report.judgments.apiVersionSupported;
@@ -203,11 +203,10 @@ EncodedCapability encodeCapability(const rhi::CapabilityReport& report,
         capability["judgments"] = std::move(judgments);
 
         capability["product_target_supported"] = report.productTargetSupported;
-        capability["device_name"] = report.deviceName.empty() ? Json(nullptr)
-                                                              : Json(report.deviceName);
-        capability["driver_version"] = report.driverVersion.has_value()
-            ? Json(*report.driverVersion)
-            : Json(nullptr);
+        capability["device_name"] =
+            report.deviceName.empty() ? Json(nullptr) : Json(report.deviceName);
+        capability["driver_version"] =
+            report.driverVersion.has_value() ? Json(*report.driverVersion) : Json(nullptr);
         Json descriptorHeap = Json::object();
         descriptorHeap["status"] = descriptorHeapName(report.descriptorHeap);
         capability["descriptor_heap"] = std::move(descriptorHeap);
@@ -231,7 +230,8 @@ EncodedCapability encodeCapability(const rhi::CapabilityReport& report,
         // Only an encoding failure reaches here; an empty object or a truncated text must never
         // stand in for a capability product.
         EncodedCapability encoded;
-        encoded.error = core::Error{core::ErrorCategory::OutputFailed,
+        encoded.error = core::Error{
+            core::ErrorCategory::OutputFailed,
             core::ErrorStage::Summary,
             std::string("capability_json could not be encoded: ") + ex.what(),
             std::nullopt};

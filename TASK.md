@@ -34,7 +34,7 @@
 ## 人工待办（不阻塞队列）
 
 - 在 GitHub Actions 页面手动运行一次 “Engine CPU build and test”（本机没有 `gh`）。首跑大概率因工具链精确版本不符失败；把结果贴给 Agent，再决定放宽版本检查并改成推送触发 + vcpkg 缓存。
-- `ce17449` 之后的 3 个本地提交尚未推送；确认后 `git push`。
+- `ce17449` 之后的本地提交尚未推送；确认后 `git push`。
 
 - 首次使用自动循环前：修正 Codex CLI 的默认模型（见 [自动运行](docs/workflow/自动运行.md) 的注意事项），设置 `CLAUDE_CODE_GIT_BASH_PATH`，然后用 `--max-tasks 1` 试跑 T01。
 

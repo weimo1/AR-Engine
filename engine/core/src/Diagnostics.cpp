@@ -28,28 +28,23 @@ namespace detail {
 namespace {
 std::atomic<std::size_t> g_flushFaults{0};
 std::atomic<std::size_t> g_flushWarnings{0};
-}
-void setFlushFaultsForTesting(std::size_t count) noexcept
-{
+} // namespace
+void setFlushFaultsForTesting(std::size_t count) noexcept {
     g_flushFaults.store(count, std::memory_order_relaxed);
 }
-bool consumeFlushFaultForTesting() noexcept
-{
+bool consumeFlushFaultForTesting() noexcept {
     std::size_t current = g_flushFaults.load(std::memory_order_relaxed);
     while (current != 0) {
-        if (g_flushFaults.compare_exchange_weak(current, current - 1,
-                                                std::memory_order_relaxed)) {
+        if (g_flushFaults.compare_exchange_weak(current, current - 1, std::memory_order_relaxed)) {
             return true;
         }
     }
     return false;
 }
-std::size_t flushWarningCountForTesting() noexcept
-{
+std::size_t flushWarningCountForTesting() noexcept {
     return g_flushWarnings.load(std::memory_order_relaxed);
 }
-void countFlushWarningForTesting() noexcept
-{
+void countFlushWarningForTesting() noexcept {
     g_flushWarnings.fetch_add(1, std::memory_order_relaxed);
 }
 #endif // AR_ENABLE_TEST_HOOKS
@@ -63,8 +58,7 @@ constexpr std::size_t kTruncatedMessageBytes = 512;
 
 using Json = nlohmann::json;
 
-std::string timestampNow()
-{
+std::string timestampNow() {
     const auto now = std::chrono::system_clock::now();
     const auto millis =
         std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() %
@@ -78,20 +72,25 @@ std::string timestampNow()
 #endif
     char buffer[32];
     std::snprintf(
-        buffer, sizeof(buffer), "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", utc.tm_year + 1900,
-        utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min, utc.tm_sec,
+        buffer,
+        sizeof(buffer),
+        "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
+        utc.tm_year + 1900,
+        utc.tm_mon + 1,
+        utc.tm_mday,
+        utc.tm_hour,
+        utc.tm_min,
+        utc.tm_sec,
         static_cast<int>(millis));
     return buffer;
 }
 
-std::string threadIdText()
-{
-    return std::to_string(static_cast<unsigned long long>(std::hash<std::thread::id>{}(
-        std::this_thread::get_id())));
+std::string threadIdText() {
+    return std::to_string(
+        static_cast<unsigned long long>(std::hash<std::thread::id>{}(std::this_thread::get_id())));
 }
 
-bool isRunIdValid(std::string_view runId)
-{
+bool isRunIdValid(std::string_view runId) {
     if (runId.empty() || runId.size() > 64) {
         return false;
     }
@@ -106,8 +105,7 @@ bool isRunIdValid(std::string_view runId)
     return true;
 }
 
-Error makeError(ErrorCategory category, ErrorStage stage, std::string message)
-{
+Error makeError(ErrorCategory category, ErrorStage stage, std::string message) {
     return Error{category, stage, std::move(message), std::nullopt};
 }
 
@@ -148,7 +146,7 @@ std::string sanitizeUtf8(const std::string& text) {
             codePoint = (codePoint << 6) | (continuation & 0x3F);
         }
         if (valid && (codePoint < kMinimumCodePoint[length] || codePoint > 0x10FFFF ||
-                         (codePoint >= 0xD800 && codePoint <= 0xDFFF))) {
+                      (codePoint >= 0xD800 && codePoint <= 0xDFFF))) {
             valid = false;
         }
         if (!valid) {
@@ -162,8 +160,7 @@ std::string sanitizeUtf8(const std::string& text) {
     return sanitized;
 }
 
-Json encodeError(const Error& error)
-{
+Json encodeError(const Error& error) {
     Json encoded;
     encoded["category"] = toString(error.category);
     encoded["stage"] = toString(error.stage);
@@ -178,8 +175,7 @@ Json encodeError(const Error& error)
 
 // Encodes an error for a budget-constrained summary: the stable identity of the error is kept
 // while the free text is capped, so a truncated summary still explains what failed.
-Json encodeErrorCapped(const Error& error, std::size_t messageLimit)
-{
+Json encodeErrorCapped(const Error& error, std::size_t messageLimit) {
     if (error.message.size() <= messageLimit) {
         return encodeError(error);
     }
@@ -189,8 +185,7 @@ Json encodeErrorCapped(const Error& error, std::size_t messageLimit)
     return encodeError(capped);
 }
 
-const char* resourceKindName(ResourceKind kind)
-{
+const char* resourceKindName(ResourceKind kind) {
     switch (kind) {
     case ResourceKind::Instance:
         return "instance";
@@ -202,8 +197,7 @@ const char* resourceKindName(ResourceKind kind)
     return "instance";
 }
 
-const char* resourceStateName(ResourceState state)
-{
+const char* resourceStateName(ResourceState state) {
     switch (state) {
     case ResourceState::Retained:
         return "retained";
@@ -213,8 +207,7 @@ const char* resourceStateName(ResourceState state)
     return "unknown";
 }
 
-Json encodeSource(const SourceStamp& source)
-{
+Json encodeSource(const SourceStamp& source) {
     Json encoded;
     encoded["revision"] = source.revision.has_value() ? Json(*source.revision) : Json(nullptr);
     if (source.dirty.has_value()) {
@@ -227,24 +220,20 @@ Json encodeSource(const SourceStamp& source)
 
 } // namespace
 
-bool SourceStamp::operator==(const SourceStamp& other) const
-{
+bool SourceStamp::operator==(const SourceStamp& other) const {
     return revision == other.revision && dirty == other.dirty;
 }
 
-bool ResidualResource::operator==(const ResidualResource& other) const
-{
+bool ResidualResource::operator==(const ResidualResource& other) const {
     return kind == other.kind && state == other.state;
 }
 
-bool RunSummaryIdentity::operator==(const RunSummaryIdentity& other) const
-{
+bool RunSummaryIdentity::operator==(const RunSummaryIdentity& other) const {
     return buildId == other.buildId && inputHash == other.inputHash &&
            configuration == other.configuration && source == other.source;
 }
 
-bool EndResult::operator==(const EndResult& other) const
-{
+bool EndResult::operator==(const EndResult& other) const {
     return result == other.result && primaryResult == other.primaryResult &&
            primaryError == other.primaryError && diagnosticErrors == other.diagnosticErrors &&
            cleanupErrors == other.cleanupErrors &&
@@ -253,8 +242,7 @@ bool EndResult::operator==(const EndResult& other) const
            residualResources == other.residualResources;
 }
 
-const char* toString(LogLevel level)
-{
+const char* toString(LogLevel level) {
     switch (level) {
     case LogLevel::Trace:
         return "trace";
@@ -300,8 +288,7 @@ struct DiagnosticSession::Impl {
     std::map<std::pair<ErrorStage, ErrorCategory>, std::pair<Error, std::size_t>> aggregated;
     std::optional<EndResult> cachedResult;
 
-    void recordDiagnostic(const Error& error)
-    {
+    void recordDiagnostic(const Error& error) {
         incomplete = true;
         auto& slot = aggregated[{error.stage, error.category}];
         if (slot.second == 0) {
@@ -310,8 +297,7 @@ struct DiagnosticSession::Impl {
         ++slot.second;
     }
 
-    std::vector<Error> diagnosticErrors() const
-    {
+    std::vector<Error> diagnosticErrors() const {
         std::vector<Error> errors;
         errors.reserve(aggregated.size());
         for (const auto& [key, value] : aggregated) {
@@ -334,12 +320,12 @@ struct DiagnosticSession::Impl {
         std::uint64_t& used,
         std::uint64_t budget,
         bool& stopped,
-        const char* sinkName)
-    {
+        const char* sinkName) {
         if (stopped) {
-            return std::unexpected(
-                makeError(ErrorCategory::OutputFailed, ErrorStage::Output,
-                          std::string("sink stopped after reaching its byte budget: ") + sinkName));
+            return std::unexpected(makeError(
+                ErrorCategory::OutputFailed,
+                ErrorStage::Output,
+                std::string("sink stopped after reaching its byte budget: ") + sinkName));
         }
         const std::uint64_t cost = static_cast<std::uint64_t>(line.size()) + 1;
         if (used + cost > budget) {
@@ -352,17 +338,20 @@ struct DiagnosticSession::Impl {
                     sinkName);
             }
             recordDiagnostic(makeError(
-                ErrorCategory::OutputFailed, ErrorStage::Output,
+                ErrorCategory::OutputFailed,
+                ErrorStage::Output,
                 std::string("byte budget exhausted for sink: ") + sinkName));
             return std::unexpected(makeError(
-                ErrorCategory::OutputFailed, ErrorStage::Output,
+                ErrorCategory::OutputFailed,
+                ErrorStage::Output,
                 std::string("byte budget exhausted for sink: ") + sinkName));
         }
         try {
             logger.log(spdlog::level::trace, "{}", line);
         } catch (const spdlog::spdlog_ex& ex) {
             const Error error = makeError(
-                ErrorCategory::OutputFailed, ErrorStage::Output,
+                ErrorCategory::OutputFailed,
+                ErrorStage::Output,
                 std::string("write failed for sink ") + sinkName + ": " + ex.what());
             stickyError = error;
             recordDiagnostic(error);
@@ -372,8 +361,7 @@ struct DiagnosticSession::Impl {
         return {};
     }
 
-    bool flushSinks()
-    {
+    bool flushSinks() {
         bool ok = true;
         for (auto* logger : {textLogger.get(), jsonlLogger.get()}) {
             if (logger == nullptr) {
@@ -392,13 +380,16 @@ struct DiagnosticSession::Impl {
 #if defined(AR_ENABLE_TEST_HOOKS)
                     detail::countFlushWarningForTesting();
 #endif
-                    std::fprintf(stderr,
-                                 "ar_core: flushing diagnostics failed for run '%s'; the run "
-                                 "evidence may be incomplete\n",
-                                 config.runId.c_str());
+                    std::fprintf(
+                        stderr,
+                        "ar_core: flushing diagnostics failed for run '%s'; the run "
+                        "evidence may be incomplete\n",
+                        config.runId.c_str());
                 }
-                const Error error = makeError(ErrorCategory::OutputFailed, ErrorStage::Output,
-                                              std::string("flush failed: ") + ex.what());
+                const Error error = makeError(
+                    ErrorCategory::OutputFailed,
+                    ErrorStage::Output,
+                    std::string("flush failed: ") + ex.what());
                 stickyError = error;
                 recordDiagnostic(error);
                 ok = false;
@@ -408,12 +399,10 @@ struct DiagnosticSession::Impl {
     }
 };
 
-DiagnosticSession::DiagnosticSession(std::unique_ptr<Impl> impl) noexcept : m_impl(std::move(impl))
-{
-}
+DiagnosticSession::DiagnosticSession(std::unique_ptr<Impl> impl) noexcept
+    : m_impl(std::move(impl)) {}
 
-DiagnosticSession::~DiagnosticSession()
-{
+DiagnosticSession::~DiagnosticSession() {
     if (m_impl == nullptr) {
         return;
     }
@@ -425,24 +414,25 @@ DiagnosticSession::~DiagnosticSession()
             m_impl->config.runId.c_str());
         try {
             m_impl->flushSinks();
-        } catch (...) {
-        }
+        } catch (...) {}
     }
     m_impl->textLogger.reset();
     m_impl->jsonlLogger.reset();
 }
 
-std::expected<std::unique_ptr<DiagnosticSession>, Error> DiagnosticSession::create(
-    DiagnosticConfig config,
-    RunSummaryIdentity identity)
-{
+std::expected<std::unique_ptr<DiagnosticSession>, Error>
+DiagnosticSession::create(DiagnosticConfig config, RunSummaryIdentity identity) {
     auto invalid = [](std::string message) {
         return std::unexpected(
             makeError(ErrorCategory::InvalidArguments, ErrorStage::Validation, std::move(message)));
     };
     auto openFailed = [](std::string message, std::optional<ErrorOrigin> origin = std::nullopt) {
-        return std::unexpected(Error{ErrorCategory::OutputFailed, ErrorStage::Output,
-                                     std::move(message), std::move(origin)});
+        return std::unexpected(
+            Error{
+                ErrorCategory::OutputFailed,
+                ErrorStage::Output,
+                std::move(message),
+                std::move(origin)});
     };
 
     if (!isRunIdValid(config.runId)) {
@@ -472,8 +462,9 @@ std::expected<std::unique_ptr<DiagnosticSession>, Error> DiagnosticSession::crea
     }
     if (!std::filesystem::is_directory(root, ec)) {
         const int code = ec ? ec.value() : static_cast<int>(std::errc::not_a_directory);
-        return openFailed("diagnostic output root is not a directory: " + root.string(),
-                          ErrorOrigin{"filesystem", code});
+        return openFailed(
+            "diagnostic output root is not a directory: " + root.string(),
+            ErrorOrigin{"filesystem", code});
     }
 
     const std::filesystem::path runDirectory = root / config.runId;
@@ -511,22 +502,22 @@ std::expected<std::unique_ptr<DiagnosticSession>, Error> DiagnosticSession::crea
     return std::unique_ptr<DiagnosticSession>(new DiagnosticSession(std::move(impl)));
 }
 
-bool DiagnosticSession::enabled(LogLevel level) const noexcept
-{
+bool DiagnosticSession::enabled(LogLevel level) const noexcept {
     return m_impl != nullptr &&
            static_cast<int>(level) >= static_cast<int>(m_impl->config.minLevel);
 }
 
-std::expected<void, Error> DiagnosticSession::emit(const Event& event)
-{
+std::expected<void, Error> DiagnosticSession::emit(const Event& event) {
     if (m_impl == nullptr) {
         return std::unexpected(
             makeError(ErrorCategory::InternalError, ErrorStage::Output, "session is not valid"));
     }
     Impl& impl = *m_impl;
     if (impl.state != Impl::State::Open) {
-        return std::unexpected(makeError(ErrorCategory::InvalidState, ErrorStage::Validation,
-                                         "invalid state: session is not open"));
+        return std::unexpected(makeError(
+            ErrorCategory::InvalidState,
+            ErrorStage::Validation,
+            "invalid state: session is not open"));
     }
     if (impl.stickyError.has_value()) {
         return std::unexpected(*impl.stickyError);
@@ -554,8 +545,10 @@ std::expected<void, Error> DiagnosticSession::emit(const Event& event)
     }
     if (textLine.size() + 1 > impl.config.quota.singleEventBytes) {
         impl.incomplete = true;
-        return std::unexpected(makeError(ErrorCategory::OutputFailed, ErrorStage::Output,
-                                         "event exceeds the single-event byte limit"));
+        return std::unexpected(makeError(
+            ErrorCategory::OutputFailed,
+            ErrorStage::Output,
+            "event exceeds the single-event byte limit"));
     }
 
     Json record;
@@ -567,10 +560,9 @@ std::expected<void, Error> DiagnosticSession::emit(const Event& event)
     record["event_id"] = event.eventId;
     record["stage"] = event.stage.has_value() ? Json(toString(*event.stage)) : Json(nullptr);
     record["message"] = event.message;
-    record["origin"] =
-        event.origin.has_value()
-            ? Json{{"domain", event.origin->domain}, {"code", event.origin->code}}
-            : Json(nullptr);
+    record["origin"] = event.origin.has_value()
+                           ? Json{{"domain", event.origin->domain}, {"code", event.origin->code}}
+                           : Json(nullptr);
     record["timestamp"] = timestamp;
     record["thread_id"] = threadIdText();
     std::string jsonLine;
@@ -580,7 +572,9 @@ std::expected<void, Error> DiagnosticSession::emit(const Event& event)
         // A caller-supplied message that is not valid UTF-8 must surface as an output failure
         // instead of unwinding through the logging path.
         impl.incomplete = true;
-        const Error error = makeError(ErrorCategory::OutputFailed, ErrorStage::Output,
+        const Error error = makeError(
+            ErrorCategory::OutputFailed,
+            ErrorStage::Output,
             std::string("event record could not be encoded as UTF-8 JSON: ") + ex.what());
         impl.stickyError = error;
         impl.recordDiagnostic(error);
@@ -588,23 +582,34 @@ std::expected<void, Error> DiagnosticSession::emit(const Event& event)
     }
     if (jsonLine.size() + 1 > impl.config.quota.singleEventBytes) {
         impl.incomplete = true;
-        return std::unexpected(makeError(ErrorCategory::OutputFailed, ErrorStage::Output,
-                                         "event exceeds the single-event byte limit"));
+        return std::unexpected(makeError(
+            ErrorCategory::OutputFailed,
+            ErrorStage::Output,
+            "event exceeds the single-event byte limit"));
     }
 
     ++impl.sequence;
-    auto textResult = impl.writeLine(*impl.textLogger, textLine, impl.textBytes,
-                                     impl.config.quota.textBytes, impl.textStopped, "text");
-    auto jsonlResult = impl.writeLine(*impl.jsonlLogger, jsonLine, impl.jsonlBytes,
-                                      impl.config.quota.jsonlBytes, impl.jsonlStopped, "jsonl");
+    auto textResult = impl.writeLine(
+        *impl.textLogger,
+        textLine,
+        impl.textBytes,
+        impl.config.quota.textBytes,
+        impl.textStopped,
+        "text");
+    auto jsonlResult = impl.writeLine(
+        *impl.jsonlLogger,
+        jsonLine,
+        impl.jsonlBytes,
+        impl.config.quota.jsonlBytes,
+        impl.jsonlStopped,
+        "jsonl");
     if (!textResult.has_value()) {
         return textResult;
     }
     return jsonlResult;
 }
 
-EndResult DiagnosticSession::finish(const RunSummaryInput& input)
-{
+EndResult DiagnosticSession::finish(const RunSummaryInput& input) {
     if (m_impl == nullptr) {
         EndResult result;
         result.result = ResultKind::OutputFailed;
@@ -625,15 +630,16 @@ EndResult DiagnosticSession::finish(const RunSummaryInput& input)
     result.residualResources = input.residualResources;
 
     bool outputFailed = impl.stickyError.has_value();
-    auto failSummary = [&](std::string message, ErrorCategory category = ErrorCategory::OutputFailed) {
-        impl.recordDiagnostic(
-            makeError(category, ErrorStage::Summary, std::move(message)));
+    auto failSummary = [&](std::string message,
+                           ErrorCategory category = ErrorCategory::OutputFailed) {
+        impl.recordDiagnostic(makeError(category, ErrorStage::Summary, std::move(message)));
         outputFailed = true;
     };
 
     // Echoed identity and resource facts must agree with what the session owns.
     if (input.schemaVersion != kSchemaVersion) {
-        failSummary("summary schema_version does not match the session", ErrorCategory::InternalError);
+        failSummary(
+            "summary schema_version does not match the session", ErrorCategory::InternalError);
     }
     if (input.runId != impl.config.runId) {
         failSummary("summary run_id does not match the session", ErrorCategory::InternalError);
@@ -710,8 +716,8 @@ EndResult DiagnosticSession::finish(const RunSummaryInput& input)
     summary["configuration"] = impl.identity.configuration;
     summary["source"] = encodeSource(impl.identity.source);
     summary["primary_result"] = toString(result.primaryResult);
-    summary["primary_error"] = result.primaryError.has_value() ? encodeError(*result.primaryError)
-                                                              : Json(nullptr);
+    summary["primary_error"] =
+        result.primaryError.has_value() ? encodeError(*result.primaryError) : Json(nullptr);
     summary["cleanup_errors"] = Json::array();
     for (const Error& error : result.cleanupErrors) {
         summary["cleanup_errors"].push_back(encodeError(error));
@@ -726,7 +732,8 @@ EndResult DiagnosticSession::finish(const RunSummaryInput& input)
     summary["residual_resources"] = Json::array();
     for (const ResidualResource& resource : result.residualResources) {
         summary["residual_resources"].push_back(
-            {{"kind", resourceKindName(resource.kind)}, {"state", resourceStateName(resource.state)}});
+            {{"kind", resourceKindName(resource.kind)},
+             {"state", resourceStateName(resource.state)}});
     }
     summary["capability"] = capability.has_value() ? *capability : Json(nullptr);
 
@@ -736,8 +743,8 @@ EndResult DiagnosticSession::finish(const RunSummaryInput& input)
         failSummary("cannot open summary.json for writing");
         result.result = ResultKind::OutputFailed;
         result.diagnosticsComplete = false;
-        std::fprintf(stderr, "ar_core: cannot write summary.json for run '%s'\n",
-                     impl.config.runId.c_str());
+        std::fprintf(
+            stderr, "ar_core: cannot write summary.json for run '%s'\n", impl.config.runId.c_str());
     } else {
         std::string encoded = summary.dump(2);
         bool truncated = false;
@@ -756,9 +763,10 @@ EndResult DiagnosticSession::finish(const RunSummaryInput& input)
             fallback["configuration"] = impl.identity.configuration;
             fallback["source"] = encodeSource(impl.identity.source);
             fallback["primary_result"] = toString(result.primaryResult);
-            fallback["primary_error"] = result.primaryError.has_value()
-                                            ? encodeErrorCapped(*result.primaryError, kTruncatedMessageBytes)
-                                            : Json(nullptr);
+            fallback["primary_error"] =
+                result.primaryError.has_value()
+                    ? encodeErrorCapped(*result.primaryError, kTruncatedMessageBytes)
+                    : Json(nullptr);
             fallback["cleanup_errors"] = Json::array();
             for (const Error& error : result.cleanupErrors) {
                 fallback["cleanup_errors"].push_back(
@@ -781,10 +789,10 @@ EndResult DiagnosticSession::finish(const RunSummaryInput& input)
             if (encoded.size() > impl.config.quota.summaryBytes) {
                 fallback.erase("cleanup_errors");
                 fallback.erase("diagnostic_errors");
-                fallback["cleanup_error_count"] = static_cast<std::uint64_t>(
-                    result.cleanupErrors.size());
-                fallback["diagnostic_error_count"] = static_cast<std::uint64_t>(
-                    result.diagnosticErrors.size());
+                fallback["cleanup_error_count"] =
+                    static_cast<std::uint64_t>(result.cleanupErrors.size());
+                fallback["diagnostic_error_count"] =
+                    static_cast<std::uint64_t>(result.diagnosticErrors.size());
                 fallback["errors_omitted"] = true;
                 encoded = fallback.dump(2);
             }
@@ -794,8 +802,10 @@ EndResult DiagnosticSession::finish(const RunSummaryInput& input)
         stream.flush();
         if (!stream.good()) {
             failSummary("writing summary.json failed");
-            std::fprintf(stderr, "ar_core: writing summary.json failed for run '%s'\n",
-                         impl.config.runId.c_str());
+            std::fprintf(
+                stderr,
+                "ar_core: writing summary.json failed for run '%s'\n",
+                impl.config.runId.c_str());
         }
         stream.close();
         if (truncated) {

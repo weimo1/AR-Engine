@@ -62,7 +62,9 @@ struct Error {
 };
 
 bool operator==(const Error& lhs, const Error& rhs);
-inline bool operator!=(const Error& lhs, const Error& rhs) { return !(lhs == rhs); }
+inline bool operator!=(const Error& lhs, const Error& rhs) {
+    return !(lhs == rhs);
+}
 
 // Stable names used by the text stream and the JSONL stream.
 const char* toString(ErrorCategory category);

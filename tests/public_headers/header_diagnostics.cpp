@@ -3,8 +3,7 @@
 
 namespace ar::test {
 
-bool infoEnabled(const ar::core::DiagnosticSession& session)
-{
+bool infoEnabled(const ar::core::DiagnosticSession& session) {
     return session.enabled(ar::core::LogLevel::Info);
 }
 

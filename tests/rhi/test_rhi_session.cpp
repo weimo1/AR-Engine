@@ -47,9 +47,8 @@ std::filesystem::path freshRunDirectory(const std::string& runId) {
     return directory;
 }
 
-std::unique_ptr<core::DiagnosticSession> makeSession(
-    const std::filesystem::path& directory,
-    const std::string& runId) {
+std::unique_ptr<core::DiagnosticSession>
+makeSession(const std::filesystem::path& directory, const std::string& runId) {
     core::DiagnosticConfig config;
     config.outputRoot = directory;
     config.runId = runId;
@@ -77,8 +76,8 @@ std::filesystem::path systemDirectory() {
 
 } // namespace
 
-TEST_CASE("an API variant request is rejected before any loader is touched",
-    "[rhi-request-validation]") {
+TEST_CASE(
+    "an API variant request is rejected before any loader is touched", "[rhi-request-validation]") {
     const std::string runId = "rhi-request-validation";
     const std::filesystem::path directory = freshRunDirectory(runId);
     auto session = makeSession(directory, runId);
@@ -96,10 +95,13 @@ TEST_CASE("an API variant request is rejected before any loader is touched",
     CHECK(failure.report.result == core::ResultKind::InvalidArguments);
     CHECK(failure.report.instanceCreate.status == rhi::InstanceCreateStatus::NotAttempted);
     CHECK(failure.report.instanceCreate.requested == config.requestedApi);
-    CHECK(failure.report.apiVariants.requested == static_cast<std::int32_t>(config.requestedApi >> 29));
+    CHECK(
+        failure.report.apiVariants.requested ==
+        static_cast<std::int32_t>(config.requestedApi >> 29));
     CHECK(failure.report.capabilitySource.kind == "fixture_loader");
     CHECK(failure.report.capabilitySource.simulated);
-    CHECK(failure.report.capabilitySource.id ==
+    CHECK(
+        failure.report.capabilitySource.id ==
         std::get<rhi::ExplicitLoaderPath>(config.loader).path.filename().string());
     CHECK_FALSE(failure.report.loaderApi.has_value());
     CHECK_FALSE(failure.report.productTargetSupported);
@@ -150,7 +152,8 @@ TEST_CASE("a missing loader file reports loader_unavailable", "[rhi-loader-unava
     finishSession(*session, runId);
 }
 
-TEST_CASE("a module without vkGetInstanceProcAddr reports loader_symbol_missing",
+TEST_CASE(
+    "a module without vkGetInstanceProcAddr reports loader_symbol_missing",
     "[rhi-loader-symbol-missing]") {
     const std::string runId = "rhi-loader-symbol-missing";
     const std::filesystem::path directory = freshRunDirectory(runId);
@@ -185,9 +188,10 @@ TEST_CASE("the system loader can be queried", "[.][rhi-system]") {
         return;
     }
     const rhi::CapabilityReport& report = opened.value()->report();
-    WARN("device: " << report.deviceName << ", deviceApi present: " << report.deviceApi.has_value()
-                    << ", descriptor heap: " << static_cast<int>(report.descriptorHeap)
-                    << ", product supported: " << report.productTargetSupported);
+    WARN(
+        "device: " << report.deviceName << ", deviceApi present: " << report.deviceApi.has_value()
+                   << ", descriptor heap: " << static_cast<int>(report.descriptorHeap)
+                   << ", product supported: " << report.productTargetSupported);
     const rhi::CloseResult closed = opened.value()->close();
     CHECK(closed.closed);
     CHECK(closed.resourcesReleased);
@@ -247,7 +251,8 @@ TEST_CASE("a fixture without physical devices reports device_not_found", "[rhi-d
     finishSession(*session, runId);
 }
 
-TEST_CASE("an explicit device index beyond the enumeration is invalid_arguments",
+TEST_CASE(
+    "an explicit device index beyond the enumeration is invalid_arguments",
     "[rhi-device-index-out-of-range]") {
     const std::string runId = "rhi-device-index-out-of-range";
     auto session = makeSession(freshRunDirectory(runId), runId);
@@ -266,7 +271,8 @@ TEST_CASE("an explicit device index beyond the enumeration is invalid_arguments"
     finishSession(*session, runId);
 }
 
-TEST_CASE("a loader below the requested version fails without creating an instance",
+TEST_CASE(
+    "a loader below the requested version fails without creating an instance",
     "[rhi-api-version-unsupported]") {
     const std::string runId = "rhi-api-version-unsupported";
     auto session = makeSession(freshRunDirectory(runId), runId);
@@ -284,7 +290,8 @@ TEST_CASE("a loader below the requested version fails without creating an instan
     finishSession(*session, runId);
 }
 
-TEST_CASE("a loader API variant is unsupported and leaves the instance uncreated",
+TEST_CASE(
+    "a loader API variant is unsupported and leaves the instance uncreated",
     "[rhi-api-variant-unsupported]") {
     const std::string runId = "rhi-api-variant-unsupported";
     auto session = makeSession(freshRunDirectory(runId), runId);
@@ -302,8 +309,8 @@ TEST_CASE("a loader API variant is unsupported and leaves the instance uncreated
     finishSession(*session, runId);
 }
 
-TEST_CASE("an incompatible driver answer is requested_api_unsupported",
-    "[rhi-instance-incompatible]") {
+TEST_CASE(
+    "an incompatible driver answer is requested_api_unsupported", "[rhi-instance-incompatible]") {
     const std::string runId = "rhi-instance-incompatible";
     auto session = makeSession(freshRunDirectory(runId), runId);
 
@@ -337,7 +344,8 @@ TEST_CASE("a plain instance failure stays initialization_failed", "[rhi-instance
     finishSession(*session, runId);
 }
 
-TEST_CASE("a failing instance extension query keeps the confirmed API facts",
+TEST_CASE(
+    "a failing instance extension query keeps the confirmed API facts",
     "[rhi-extension-query-failed]") {
     const std::string runId = "rhi-extension-query-failed";
     auto session = makeSession(freshRunDirectory(runId), runId);
@@ -357,7 +365,8 @@ TEST_CASE("a failing instance extension query keeps the confirmed API facts",
     finishSession(*session, runId);
 }
 
-TEST_CASE("a device extension query failure is reported as query_failed",
+TEST_CASE(
+    "a device extension query failure is reported as query_failed",
     "[rhi-device-extension-query-failed]") {
     const std::string runId = "rhi-device-extension-query-failed";
     auto session = makeSession(freshRunDirectory(runId), runId);
@@ -377,7 +386,8 @@ TEST_CASE("a device extension query failure is reported as query_failed",
     finishSession(*session, runId);
 }
 
-TEST_CASE("a permanently incomplete enumeration gives up with query_failed",
+TEST_CASE(
+    "a permanently incomplete enumeration gives up with query_failed",
     "[rhi-enumeration-incomplete]") {
     const std::string runId = "rhi-enumeration-incomplete";
     auto session = makeSession(freshRunDirectory(runId), runId);
@@ -394,7 +404,8 @@ TEST_CASE("a permanently incomplete enumeration gives up with query_failed",
     finishSession(*session, runId);
 }
 
-TEST_CASE("a device below the requested version is unsupported but not an error",
+TEST_CASE(
+    "a device below the requested version is unsupported but not an error",
     "[rhi-device-version-insufficient]") {
     const std::string runId = "rhi-device-version-insufficient";
     auto session = makeSession(freshRunDirectory(runId), runId);
@@ -414,7 +425,8 @@ TEST_CASE("a device below the requested version is unsupported but not an error"
     finishSession(*session, runId);
 }
 
-TEST_CASE("a descriptor heap capable fixture supports the product target",
+TEST_CASE(
+    "a descriptor heap capable fixture supports the product target",
     "[rhi-descriptor-heap-present]") {
     const std::string runId = "rhi-descriptor-heap-present";
     auto session = makeSession(freshRunDirectory(runId), runId);
@@ -440,7 +452,8 @@ TEST_CASE("a descriptor heap capable fixture supports the product target",
     finishSession(*session, runId);
 }
 
-TEST_CASE("a retained instance is reported by close instead of being hidden",
+TEST_CASE(
+    "a retained instance is reported by close instead of being hidden",
     "[rhi-cleanup-instance-retained]") {
     const std::string runId = "rhi-cleanup-instance-retained";
     auto session = makeSession(freshRunDirectory(runId), runId);
@@ -541,8 +554,17 @@ bool runQuarantineChild() {
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
-    const BOOL started = ::CreateProcessW(modulePath, commandLine.data(), nullptr, nullptr, FALSE,
-        0, nullptr, nullptr, &startup, &process);
+    const BOOL started = ::CreateProcessW(
+        modulePath,
+        commandLine.data(),
+        nullptr,
+        nullptr,
+        FALSE,
+        0,
+        nullptr,
+        nullptr,
+        &startup,
+        &process);
     REQUIRE(started != FALSE);
     const DWORD wait = ::WaitForSingleObject(process.hProcess, 120000);
     INFO("quarantine child wait result: " << wait << ", timeout=" << (wait == WAIT_TIMEOUT));
@@ -568,8 +590,8 @@ TEST_CASE("a quarantined process refuses to open again", "[rhi-quarantine-reopen
     CHECK(runQuarantineChild());
 }
 
-TEST_CASE("the quarantine child scenarios run in a dedicated process",
-    "[.][rhi-quarantine-child]") {
+TEST_CASE(
+    "the quarantine child scenarios run in a dedicated process", "[.][rhi-quarantine-child]") {
     rhi::detail::clearProcessQuarantine();
     rhi::detail::resetProcessCounters();
 
@@ -600,10 +622,13 @@ TEST_CASE("the quarantine child scenarios run in a dedicated process",
     CHECK(failure.report.result == core::ResultKind::InitializationFailed);
     CHECK(failure.report.instanceCreate.status == rhi::InstanceCreateStatus::NotAttempted);
     CHECK(failure.report.instanceCreate.requested == config.requestedApi);
-    CHECK(failure.report.apiVariants.requested == static_cast<std::int32_t>(config.requestedApi >> 29));
+    CHECK(
+        failure.report.apiVariants.requested ==
+        static_cast<std::int32_t>(config.requestedApi >> 29));
     CHECK(failure.report.capabilitySource.kind == "fixture_loader");
     CHECK(failure.report.capabilitySource.simulated);
-    CHECK(failure.report.capabilitySource.id ==
+    CHECK(
+        failure.report.capabilitySource.id ==
         std::get<rhi::ExplicitLoaderPath>(config.loader).path.filename().string());
     CHECK_FALSE(failure.report.loaderApi.has_value());
     CHECK_FALSE(failure.report.deviceApi.has_value());

@@ -56,7 +56,8 @@ std::filesystem::path fixtureModule() {
     return std::filesystem::path(buffer).parent_path() / "ar_rhi_fixture.dll";
 }
 
-runtime::RuntimeConfig fixtureConfig(const std::string& runId,
+runtime::RuntimeConfig fixtureConfig(
+    const std::string& runId,
     const char* spec,
     runtime::QueryMode mode = runtime::QueryMode::Inspect) {
     REQUIRE(_putenv_s("AR_RHI_FIXTURE_SPEC", spec) == 0);
@@ -77,9 +78,8 @@ Json readJson(const std::filesystem::path& path) {
     return value;
 }
 
-bool hasDiagnosticError(const core::EndResult& result,
-    core::ErrorStage stage,
-    core::ErrorCategory category) {
+bool hasDiagnosticError(
+    const core::EndResult& result, core::ErrorStage stage, core::ErrorCategory category) {
     for (const core::Error& error : result.diagnosticErrors) {
         if (error.stage == stage && error.category == category) {
             return true;
@@ -105,9 +105,18 @@ int runChildCase(const char* tag, DWORD timeoutMs = 120000) {
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
-    REQUIRE(::CreateProcessW(nullptr, mutableCommand.data(), nullptr, nullptr, FALSE, 0, nullptr,
-                nullptr, &startup, &process)
-        != FALSE);
+    REQUIRE(
+        ::CreateProcessW(
+            nullptr,
+            mutableCommand.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            0,
+            nullptr,
+            nullptr,
+            &startup,
+            &process) != FALSE);
 
     const DWORD wait = ::WaitForSingleObject(process.hProcess, timeoutMs);
     if (wait == WAIT_TIMEOUT) {
@@ -145,24 +154,25 @@ TEST_CASE("a failed start rolls every acquired resource back in order", "[runtim
         CHECK(counters.instanceCreateCalls == 0);
         CHECK(counters.destroyInstanceCalls == 0);
         CHECK(counters.volkInitializeCalls == 0);
-        CHECK(::GetFileAttributesW(
-                  (config.diagnostics.outputRoot / config.diagnostics.runId / "summary.json")
-                      .c_str())
-            != INVALID_FILE_ATTRIBUTES);
+        CHECK(
+            ::GetFileAttributesW(
+                (config.diagnostics.outputRoot / config.diagnostics.runId / "summary.json")
+                    .c_str()) != INVALID_FILE_ATTRIBUTES);
     }
 
     SECTION("a missing entry point unloads the module it loaded") {
         runtime::RuntimeConfig config = fixtureConfig("runtime-rollback-symbol", "devices=1");
         wchar_t systemDirectory[MAX_PATH] = {};
         REQUIRE(::GetSystemDirectoryW(systemDirectory, MAX_PATH) > 0);
-        config.query.loader = rhi::ExplicitLoaderPath{
-            std::filesystem::path(systemDirectory) / "kernel32.dll"};
+        config.query.loader =
+            rhi::ExplicitLoaderPath{std::filesystem::path(systemDirectory) / "kernel32.dll"};
         rhi::detail::resetProcessCounters();
 
         auto started = runtime::RuntimeSession::start(config);
         REQUIRE_FALSE(started.has_value());
-        CHECK(started.error().endResult.primaryError->category
-            == core::ErrorCategory::LoaderSymbolMissing);
+        CHECK(
+            started.error().endResult.primaryError->category ==
+            core::ErrorCategory::LoaderSymbolMissing);
         const rhi::detail::ProcessCounters counters = rhi::detail::processCounters();
         CHECK(counters.loadCalls == 1);
         CHECK(counters.volkInitializeCalls == 0);
@@ -173,13 +183,15 @@ TEST_CASE("a failed start rolls every acquired resource back in order", "[runtim
     }
 
     SECTION("an instance creation failure has nothing left to destroy") {
-        runtime::RuntimeConfig config = fixtureConfig("runtime-rollback-create", "create=init-failed");
+        runtime::RuntimeConfig config =
+            fixtureConfig("runtime-rollback-create", "create=init-failed");
         rhi::detail::resetProcessCounters();
 
         auto started = runtime::RuntimeSession::start(config);
         REQUIRE_FALSE(started.has_value());
-        CHECK(started.error().endResult.primaryError->category
-            == core::ErrorCategory::InitializationFailed);
+        CHECK(
+            started.error().endResult.primaryError->category ==
+            core::ErrorCategory::InitializationFailed);
         const rhi::detail::ProcessCounters counters = rhi::detail::processCounters();
         CHECK(counters.loadCalls == 1);
         CHECK(counters.volkInitializeCalls == 1);
@@ -196,7 +208,9 @@ TEST_CASE("a failed start rolls every acquired resource back in order", "[runtim
 
         auto started = runtime::RuntimeSession::start(config);
         REQUIRE_FALSE(started.has_value());
-        CHECK(started.error().endResult.primaryError->category == core::ErrorCategory::DeviceNotFound);
+        CHECK(
+            started.error().endResult.primaryError->category ==
+            core::ErrorCategory::DeviceNotFound);
         const rhi::detail::ProcessCounters counters = rhi::detail::processCounters();
         CHECK(counters.instanceCreateCalls == 1);
         CHECK(counters.destroyInstanceCalls == 1);
@@ -252,7 +266,8 @@ TEST_CASE("an out-of-range device index is invalid_arguments", "[runtime-device-
     CHECK(summary["result"] == "invalid_arguments");
 }
 
-TEST_CASE("an unavailable destroy entry retains the instance in its own process",
+TEST_CASE(
+    "an unavailable destroy entry retains the instance in its own process",
     "[.][runtime-cleanup-destroy-child]") {
     {
         const std::string runId = "runtime-cleanup-failure-destroy";
@@ -298,7 +313,8 @@ TEST_CASE("an unavailable destroy entry retains the instance in its own process"
     }
 }
 
-TEST_CASE("an unload failure retains the OS module in its own process",
+TEST_CASE(
+    "an unload failure retains the OS module in its own process",
     "[.][runtime-cleanup-unload-child]") {
     {
         const std::string runId = "runtime-cleanup-failure-unload";
@@ -325,7 +341,8 @@ TEST_CASE("an unload failure retains the OS module in its own process",
     }
 }
 
-TEST_CASE("a cleanup failure is recorded without replacing the business result",
+TEST_CASE(
+    "a cleanup failure is recorded without replacing the business result",
     "[runtime-cleanup-failure]") {
     SECTION("an unavailable destroy entry retains the instance") {
         CHECK(runChildCase("[.][runtime-cleanup-destroy-child]") == 0);
@@ -338,8 +355,7 @@ TEST_CASE("a cleanup failure is recorded without replacing the business result",
 TEST_CASE("a start without an instance has nothing to clean up", "[runtime-cleanup-empty]") {
     const std::string runId = "runtime-cleanup-empty";
     runtime::RuntimeConfig config = fixtureConfig(runId, "devices=1");
-    config.query.loader = rhi::ExplicitLoaderPath{
-        freshRunDirectory(runId) / "absent-loader.dll"};
+    config.query.loader = rhi::ExplicitLoaderPath{freshRunDirectory(runId) / "absent-loader.dll"};
 
     auto started = runtime::RuntimeSession::start(config);
     REQUIRE_FALSE(started.has_value());
@@ -351,13 +367,14 @@ TEST_CASE("a start without an instance has nothing to clean up", "[runtime-clean
     CHECK(result.primaryError->category == core::ErrorCategory::LoaderUnavailable);
 }
 
-TEST_CASE("a quarantined process refuses a second open in a dedicated process",
+TEST_CASE(
+    "a quarantined process refuses a second open in a dedicated process",
     "[runtime-quarantine-reopen]") {
     CHECK(runChildCase("[.][runtime-quarantine-child]") == 0);
 }
 
-TEST_CASE("repeated close returns the cached result and writes one summary",
-    "[runtime-repeat-close]") {
+TEST_CASE(
+    "repeated close returns the cached result and writes one summary", "[runtime-repeat-close]") {
     const std::string runId = "runtime-repeat-close";
     runtime::RuntimeConfig config = fixtureConfig(runId, "devices=1");
     rhi::detail::resetProcessCounters();
@@ -369,8 +386,8 @@ TEST_CASE("repeated close returns the cached result and writes one summary",
 
     const core::EndResult first = session.close();
     const Json summaryPath = readJson(config.diagnostics.outputRoot / runId / "summary.json");
-    const auto summaryWriteTime = std::filesystem::last_write_time(
-        config.diagnostics.outputRoot / runId / "summary.json");
+    const auto summaryWriteTime =
+        std::filesystem::last_write_time(config.diagnostics.outputRoot / runId / "summary.json");
     const rhi::detail::ProcessCounters afterFirst = rhi::detail::processCounters();
 
     const core::EndResult second = session.close();
@@ -379,8 +396,9 @@ TEST_CASE("repeated close returns the cached result and writes one summary",
     CHECK(third.result == first.result);
     CHECK(second.diagnosticsComplete == first.diagnosticsComplete);
     CHECK(second.cleanupErrors.size() == first.cleanupErrors.size());
-    CHECK(std::filesystem::last_write_time(config.diagnostics.outputRoot / runId / "summary.json")
-        == summaryWriteTime);
+    CHECK(
+        std::filesystem::last_write_time(config.diagnostics.outputRoot / runId / "summary.json") ==
+        summaryWriteTime);
     const rhi::detail::ProcessCounters afterThird = rhi::detail::processCounters();
     CHECK(afterThird.destroyInstanceCalls == afterFirst.destroyInstanceCalls);
     CHECK(afterThird.unloadCalls == afterFirst.unloadCalls);
@@ -389,7 +407,8 @@ TEST_CASE("repeated close returns the cached result and writes one summary",
     CHECK(summaryPath["result"] == "success");
 }
 
-TEST_CASE("the summary embeds the runtime capability snapshot as an object",
+TEST_CASE(
+    "the summary embeds the runtime capability snapshot as an object",
     "[runtime-summary-capability]") {
     const std::string runId = "runtime-summary-capability";
     runtime::RuntimeConfig config = fixtureConfig(runId, "devices=1");
@@ -420,8 +439,8 @@ TEST_CASE("the summary embeds the runtime capability snapshot as an object",
     CHECK(capability["errors"].is_array());
 }
 
-TEST_CASE("a real system loader reports inspect facts without claiming 1.4",
-    "[runtime-system-inspect]") {
+TEST_CASE(
+    "a real system loader reports inspect facts without claiming 1.4", "[runtime-system-inspect]") {
     const std::string runId = "runtime-system-inspect";
     runtime::RuntimeConfig config;
     config.mode = runtime::QueryMode::Inspect;
@@ -446,7 +465,8 @@ TEST_CASE("a real system loader reports inspect facts without claiming 1.4",
     CHECK(closed.result == core::ResultKind::Success);
 }
 
-TEST_CASE("development mode queries an explicit 1.3 API without drawing",
+TEST_CASE(
+    "development mode queries an explicit 1.3 API without drawing",
     "[runtime-system-development]") {
     const std::string runId = "runtime-system-development";
     runtime::RuntimeConfig config;
@@ -472,7 +492,8 @@ TEST_CASE("development mode queries an explicit 1.3 API without drawing",
     CHECK(closed.diagnosticsComplete);
 }
 
-TEST_CASE("require_product rejects a complete query that misses the product target",
+TEST_CASE(
+    "require_product rejects a complete query that misses the product target",
     "[runtime-require-product]") {
     const std::string runId = "runtime-require-product";
     runtime::RuntimeConfig config = fixtureConfig(runId, "devices=1;device=1.3");
@@ -502,7 +523,8 @@ TEST_CASE("require_product rejects a complete query that misses the product targ
     CHECK(summary["capability"]["product_target_supported"] == false);
 }
 
-TEST_CASE("a requested API that contradicts the mode fails before loading Vulkan",
+TEST_CASE(
+    "a requested API that contradicts the mode fails before loading Vulkan",
     "[runtime-mode-mismatch]") {
     struct Case {
         runtime::QueryMode mode;
@@ -511,10 +533,12 @@ TEST_CASE("a requested API that contradicts the mode fails before loading Vulkan
     };
     const Case cases[] = {
         {runtime::QueryMode::Inspect, rhi::makeApiVersion(1, 2), "runtime-mode-mismatch-inspect"},
-        {runtime::QueryMode::RequireProduct, rhi::makeApiVersion(1, 3),
-            "runtime-mode-mismatch-require"},
-        {runtime::QueryMode::Development, rhi::makeApiVersion(1, 4),
-            "runtime-mode-mismatch-development"},
+        {runtime::QueryMode::RequireProduct,
+         rhi::makeApiVersion(1, 3),
+         "runtime-mode-mismatch-require"},
+        {runtime::QueryMode::Development,
+         rhi::makeApiVersion(1, 4),
+         "runtime-mode-mismatch-development"},
     };
 
     for (const Case& item : cases) {
@@ -548,7 +572,8 @@ TEST_CASE("a requested API that contradicts the mode fails before loading Vulkan
     }
 }
 
-TEST_CASE("a diagnostic output failure ends as output_failed without probing quarantine",
+TEST_CASE(
+    "a diagnostic output failure ends as output_failed without probing quarantine",
     "[runtime-diagnostic-create-failure]") {
     const std::string runId = "runtime-diagnostic-create-failure";
     runtime::RuntimeConfig config = fixtureConfig(runId, "devices=1");
@@ -584,7 +609,8 @@ TEST_CASE("a diagnostic output failure ends as output_failed without probing qua
     CHECK_FALSE(rhi::detail::isProcessQuarantined());
 }
 
-TEST_CASE("a summary that cannot be written ends the run as output_failed",
+TEST_CASE(
+    "a summary that cannot be written ends the run as output_failed",
     "[runtime-summary-output-failure]") {
     SECTION("an unwritable summary keeps the business result and the primary error slot empty") {
         const std::string runId = "runtime-summary-unwritable";
@@ -595,7 +621,8 @@ TEST_CASE("a summary that cannot be written ends the run as output_failed",
 
         // The run directory was created by the session, so a directory in the summary slot makes
         // the write fail without disturbing anything the start already reported.
-        const std::filesystem::path summaryPath = config.diagnostics.outputRoot / runId / "summary.json";
+        const std::filesystem::path summaryPath =
+            config.diagnostics.outputRoot / runId / "summary.json";
         std::error_code ec;
         std::filesystem::create_directory(summaryPath, ec);
         REQUIRE_FALSE(ec);
@@ -605,7 +632,8 @@ TEST_CASE("a summary that cannot be written ends the run as output_failed",
         CHECK(closed.primaryResult == core::ResultKind::Success);
         CHECK_FALSE(closed.primaryError.has_value());
         CHECK_FALSE(closed.diagnosticsComplete);
-        CHECK(hasDiagnosticError(closed, core::ErrorStage::Summary, core::ErrorCategory::OutputFailed));
+        CHECK(hasDiagnosticError(
+            closed, core::ErrorStage::Summary, core::ErrorCategory::OutputFailed));
         // The close-time cleanup failure is still reported as its own fact.
         REQUIRE(closed.cleanupErrors.size() == 1);
         CHECK(closed.cleanupErrors.front().category == core::ErrorCategory::CleanupFailed);
@@ -634,7 +662,8 @@ TEST_CASE("a summary that cannot be written ends the run as output_failed",
     }
 }
 
-TEST_CASE("an unencodable capability fails the summary without touching the business result",
+TEST_CASE(
+    "an unencodable capability fails the summary without touching the business result",
     "[runtime-capability-encode-failure]") {
     const std::string runId = "runtime-capability-encode-failure";
     // The fixture device name carries raw 0xC3 0x28, which is not valid UTF-8, so the capability
@@ -659,7 +688,8 @@ TEST_CASE("an unencodable capability fails the summary without touching the busi
     CHECK(snapshot.deviceName == session.report().deviceName);
 }
 
-TEST_CASE("the destructor releases the loader but never finishes the diagnostics",
+TEST_CASE(
+    "the destructor releases the loader but never finishes the diagnostics",
     "[runtime-destructor]") {
     const std::string runId = "runtime-destructor";
     runtime::RuntimeConfig config = fixtureConfig(runId, "devices=1");
@@ -681,8 +711,8 @@ TEST_CASE("the destructor releases the loader but never finishes the diagnostics
     CHECK_FALSE(std::filesystem::exists(config.diagnostics.outputRoot / runId / "summary.json"));
 }
 
-TEST_CASE("a quarantined child asserts the exact runtime rejection",
-    "[.][runtime-quarantine-child]") {
+TEST_CASE(
+    "a quarantined child asserts the exact runtime rejection", "[.][runtime-quarantine-child]") {
     const std::string runId = "runtime-quarantine-child";
     runtime::RuntimeConfig config = fixtureConfig(runId, "devices=1;destroy=missing");
 

@@ -33,9 +33,7 @@ core::ResultKind resultKindFor(core::ErrorCategory category) noexcept {
     }
 }
 
-core::Error makeError(core::ErrorCategory category,
-    core::ErrorStage stage,
-    std::string message) {
+core::Error makeError(core::ErrorCategory category, core::ErrorStage stage, std::string message) {
     return core::Error{category, stage, std::move(message), std::nullopt};
 }
 
@@ -46,29 +44,31 @@ std::optional<core::Error> validateModeRequest(const RuntimeConfig& config) {
     switch (config.mode) {
     case QueryMode::Inspect:
         if (requested != kApiVersion1_3 && requested != rhi::kApiVersion1_4) {
-            return makeError(core::ErrorCategory::InvalidArguments,
+            return makeError(
+                core::ErrorCategory::InvalidArguments,
                 core::ErrorStage::Validation,
                 "inspect mode accepts a requested API of 1.3 or 1.4");
         }
         return std::nullopt;
     case QueryMode::RequireProduct:
         if (requested != rhi::kApiVersion1_4) {
-            return makeError(core::ErrorCategory::InvalidArguments,
+            return makeError(
+                core::ErrorCategory::InvalidArguments,
                 core::ErrorStage::Validation,
                 "require_product mode requires a requested API of 1.4");
         }
         return std::nullopt;
     case QueryMode::Development:
         if (requested != kApiVersion1_3) {
-            return makeError(core::ErrorCategory::InvalidArguments,
+            return makeError(
+                core::ErrorCategory::InvalidArguments,
                 core::ErrorStage::Validation,
                 "development mode requires an explicit requested API of 1.3");
         }
         return std::nullopt;
     }
-    return makeError(core::ErrorCategory::InvalidArguments,
-        core::ErrorStage::Validation,
-        "unknown query mode");
+    return makeError(
+        core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation, "unknown query mode");
 }
 
 core::EndResult rejectedStart(const core::Error& error) {
@@ -83,8 +83,8 @@ core::EndResult rejectedStart(const core::Error& error) {
 }
 
 core::RunSummaryIdentity identityFor(const core::BuildInfo& build) {
-    return core::RunSummaryIdentity{build.buildId, build.inputHash, build.configuration,
-        build.source};
+    return core::RunSummaryIdentity{
+        build.buildId, build.inputHash, build.configuration, build.source};
 }
 
 } // namespace
@@ -106,8 +106,8 @@ RuntimeSession::~RuntimeSession() {
     // written, so an abandoned process is never reported as a clean run.
 }
 
-std::expected<std::unique_ptr<RuntimeSession>, StartFailure> RuntimeSession::start(
-    const RuntimeConfig& config) {
+std::expected<std::unique_ptr<RuntimeSession>, StartFailure>
+RuntimeSession::start(const RuntimeConfig& config) {
     if (const std::optional<core::Error> invalid = validateModeRequest(config);
         invalid.has_value()) {
         StartFailure failure;
@@ -160,7 +160,8 @@ std::expected<std::unique_ptr<RuntimeSession>, StartFailure> RuntimeSession::sta
     // require_product is the only mode that turns a complete but insufficient query into a
     // failed start. inspect and development keep the product verdict inside the report.
     if (config.mode == QueryMode::RequireProduct && !session->report.productTargetSupported) {
-        const core::Error unsupported = makeError(core::ErrorCategory::ApiVersionUnsupported,
+        const core::Error unsupported = makeError(
+            core::ErrorCategory::ApiVersionUnsupported,
             core::ErrorStage::Capability,
             "require_product needs a met 1.4 product target");
 
@@ -177,8 +178,7 @@ std::expected<std::unique_ptr<RuntimeSession>, StartFailure> RuntimeSession::sta
         summary.resourcesReleased = closeResult.resourcesReleased;
         summary.residualResources = closeResult.residualResources;
         const detail::EncodedCapability encoded =
-            detail::encodeCapability(session->report, config.mode, config.diagnostics.runId,
-                build);
+            detail::encodeCapability(session->report, config.mode, config.diagnostics.runId, build);
         summary.capabilityJson = encoded.json;
         summary.capabilityEncodingError = encoded.error;
 
@@ -221,8 +221,8 @@ core::EndResult RuntimeSession::close() {
 
     // A complete query always produces an embedded capability object; an encoding failure is
     // reported explicitly instead of silently passing nullopt.
-    const detail::EncodedCapability encoded = detail::encodeCapability(m_impl->report,
-        m_impl->config.mode, m_impl->config.diagnostics.runId, build);
+    const detail::EncodedCapability encoded = detail::encodeCapability(
+        m_impl->report, m_impl->config.mode, m_impl->config.diagnostics.runId, build);
     summary.capabilityJson = encoded.json;
     summary.capabilityEncodingError = encoded.error;
 

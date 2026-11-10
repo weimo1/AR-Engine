@@ -108,9 +108,8 @@ struct EndResult {
 // Single-owner, single-thread diagnostic session for one run.
 class DiagnosticSession {
 public:
-    static std::expected<std::unique_ptr<DiagnosticSession>, Error> create(
-        DiagnosticConfig config,
-        RunSummaryIdentity identity);
+    static std::expected<std::unique_ptr<DiagnosticSession>, Error>
+    create(DiagnosticConfig config, RunSummaryIdentity identity);
 
     ~DiagnosticSession();
 

@@ -3,8 +3,7 @@
 namespace ar::core {
 namespace {
 
-bool sameOrigin(const std::optional<ErrorOrigin>& lhs, const std::optional<ErrorOrigin>& rhs)
-{
+bool sameOrigin(const std::optional<ErrorOrigin>& lhs, const std::optional<ErrorOrigin>& rhs) {
     if (lhs.has_value() != rhs.has_value()) {
         return false;
     }
@@ -16,14 +15,12 @@ bool sameOrigin(const std::optional<ErrorOrigin>& lhs, const std::optional<Error
 
 } // namespace
 
-bool operator==(const Error& lhs, const Error& rhs)
-{
+bool operator==(const Error& lhs, const Error& rhs) {
     return lhs.category == rhs.category && lhs.stage == rhs.stage && lhs.message == rhs.message &&
            sameOrigin(lhs.origin, rhs.origin);
 }
 
-const char* toString(ErrorCategory category)
-{
+const char* toString(ErrorCategory category) {
     switch (category) {
     case ErrorCategory::InvalidArguments:
         return "invalid_arguments";
@@ -55,8 +52,7 @@ const char* toString(ErrorCategory category)
     return "internal_error";
 }
 
-const char* toString(ErrorStage stage)
-{
+const char* toString(ErrorStage stage) {
     switch (stage) {
     case ErrorStage::Validation:
         return "validation";
@@ -78,8 +74,7 @@ const char* toString(ErrorStage stage)
     return "validation";
 }
 
-const char* toString(ResultKind result)
-{
+const char* toString(ResultKind result) {
     switch (result) {
     case ResultKind::Success:
         return "success";

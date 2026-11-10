@@ -49,8 +49,7 @@ using ar::core::RunSummaryIdentity;
 using ar::core::RunSummaryInput;
 using ar::core::SourceStamp;
 
-fs::path freshRoot(std::string_view caseName)
-{
+fs::path freshRoot(std::string_view caseName) {
 #if defined(_MSC_VER)
     char* raw = nullptr;
     std::size_t size = 0;
@@ -76,15 +75,13 @@ fs::path freshRoot(std::string_view caseName)
     return root;
 }
 
-std::string readAll(const fs::path& path)
-{
+std::string readAll(const fs::path& path) {
     std::ifstream stream(path, std::ios::binary);
     std::string data((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
     return data;
 }
 
-std::vector<std::string> readLines(const fs::path& path)
-{
+std::vector<std::string> readLines(const fs::path& path) {
     std::vector<std::string> lines;
     std::ifstream stream(path, std::ios::binary);
     std::string line;
@@ -99,8 +96,7 @@ std::vector<std::string> readLines(const fs::path& path)
     return lines;
 }
 
-RunSummaryIdentity testIdentity(std::string configuration = "Debug")
-{
+RunSummaryIdentity testIdentity(std::string configuration = "Debug") {
     return RunSummaryIdentity{
         "build-deadbeef",
         "input-0123456789",
@@ -109,8 +105,8 @@ RunSummaryIdentity testIdentity(std::string configuration = "Debug")
     };
 }
 
-DiagnosticConfig testConfig(const fs::path& root, std::string runId, LogLevel level = LogLevel::Debug)
-{
+DiagnosticConfig
+testConfig(const fs::path& root, std::string runId, LogLevel level = LogLevel::Debug) {
     DiagnosticConfig config;
     config.outputRoot = root;
     config.runId = std::move(runId);
@@ -118,8 +114,7 @@ DiagnosticConfig testConfig(const fs::path& root, std::string runId, LogLevel le
     return config;
 }
 
-Event testEvent(LogLevel level, std::string eventId, std::string message)
-{
+Event testEvent(LogLevel level, std::string eventId, std::string message) {
     Event event;
     event.level = level;
     event.module = "core";
@@ -128,15 +123,14 @@ Event testEvent(LogLevel level, std::string eventId, std::string message)
     return event;
 }
 
-nlohmann::json parseJson(const std::string& text)
-{
+nlohmann::json parseJson(const std::string& text) {
     return nlohmann::json::parse(text);
 }
 
-bool hasDiagnosticError(const EndResult& result, ErrorStage stage, ErrorCategory category)
-{
+bool hasDiagnosticError(const EndResult& result, ErrorStage stage, ErrorCategory category) {
     return std::any_of(
-        result.diagnosticErrors.begin(), result.diagnosticErrors.end(),
+        result.diagnosticErrors.begin(),
+        result.diagnosticErrors.end(),
         [stage, category](const Error& error) {
             return error.stage == stage && error.category == category;
         });
@@ -144,8 +138,7 @@ bool hasDiagnosticError(const EndResult& result, ErrorStage stage, ErrorCategory
 
 } // namespace
 
-TEST_CASE("a normal run writes both sinks and a complete summary", "[core-normal-close]")
-{
+TEST_CASE("a normal run writes both sinks and a complete summary", "[core-normal-close]") {
     const fs::path root = freshRoot("core-normal-close");
     const RunSummaryIdentity identity = testIdentity();
 
@@ -220,8 +213,7 @@ TEST_CASE("a normal run writes both sinks and a complete summary", "[core-normal
     CHECK_FALSE(fs::exists(root / "run-1" / "summary.json.tmp"));
 }
 
-TEST_CASE("an unusable output root fails before any run artifact exists", "[core-open-failed]")
-{
+TEST_CASE("an unusable output root fails before any run artifact exists", "[core-open-failed]") {
     const fs::path root = freshRoot("core-open-failed");
     const fs::path blocker = root / "not-a-directory.txt";
     {
@@ -241,8 +233,7 @@ TEST_CASE("an unusable output root fails before any run artifact exists", "[core
     CHECK_FALSE(fs::exists(blocker / "summary.json"));
 }
 
-TEST_CASE("event text is JSON-escaped and survives a round trip", "[core-json-escaping]")
-{
+TEST_CASE("event text is JSON-escaped and survives a round trip", "[core-json-escaping]") {
     const fs::path root = freshRoot("core-json-escaping");
     const RunSummaryIdentity identity = testIdentity();
     auto created = DiagnosticSession::create(testConfig(root, "run-escape"), identity);
@@ -269,21 +260,18 @@ TEST_CASE("event text is JSON-escaped and survives a round trip", "[core-json-es
     CHECK(summary["capability"]["名称"] == "显卡");
 }
 
-TEST_CASE("quota exhaustion stops a sink and fails the run", "[core-quota]")
-{
+TEST_CASE("quota exhaustion stops a sink and fails the run", "[core-quota]") {
     const fs::path root = freshRoot("core-quota");
     const RunSummaryIdentity identity = testIdentity();
 
-    SECTION("single event larger than the per-event limit")
-    {
+    SECTION("single event larger than the per-event limit") {
         DiagnosticConfig config = testConfig(root, "run-oversize");
         config.quota.singleEventBytes = 64;
         auto created = DiagnosticSession::create(config, identity);
         REQUIRE(created.has_value());
         auto session = std::move(*created);
 
-        const auto emitted =
-            session->emit(testEvent(LogLevel::Info, "big", std::string(200, 'x')));
+        const auto emitted = session->emit(testEvent(LogLevel::Info, "big", std::string(200, 'x')));
         REQUIRE_FALSE(emitted.has_value());
         CHECK(emitted.error().category == ErrorCategory::OutputFailed);
         CHECK(emitted.error().stage == ErrorStage::Output);
@@ -299,8 +287,7 @@ TEST_CASE("quota exhaustion stops a sink and fails the run", "[core-quota]")
         CHECK_FALSE(result.diagnosticsComplete);
     }
 
-    SECTION("file budget")
-    {
+    SECTION("file budget") {
         DiagnosticConfig config = testConfig(root, "run-budget");
         config.quota.textBytes = 300;
         config.quota.jsonlBytes = 300;
@@ -310,8 +297,8 @@ TEST_CASE("quota exhaustion stops a sink and fails the run", "[core-quota]")
 
         bool failed = false;
         for (int index = 0; index < 8 && !failed; ++index) {
-            const auto emitted = session->emit(testEvent(
-                LogLevel::Info, "fill", std::string(100, 'y')));
+            const auto emitted =
+                session->emit(testEvent(LogLevel::Info, "fill", std::string(100, 'y')));
             failed = !emitted.has_value();
         }
         CHECK(failed);
@@ -333,8 +320,7 @@ TEST_CASE("quota exhaustion stops a sink and fails the run", "[core-quota]")
     }
 }
 
-TEST_CASE("many small events are not mistaken for one oversized event", "[core-quota-cumulative]")
-{
+TEST_CASE("many small events are not mistaken for one oversized event", "[core-quota-cumulative]") {
     const fs::path root = freshRoot("core-quota-cumulative");
     const RunSummaryIdentity identity = testIdentity();
 
@@ -368,8 +354,7 @@ TEST_CASE("many small events are not mistaken for one oversized event", "[core-q
 }
 
 #if defined(AR_ENABLE_TEST_HOOKS)
-TEST_CASE("a failing flush fails the run and keeps the primary error", "[core-flush-failure]")
-{
+TEST_CASE("a failing flush fails the run and keeps the primary error", "[core-flush-failure]") {
     const fs::path root = freshRoot("core-flush-failure");
     const RunSummaryIdentity identity = testIdentity();
 
@@ -388,8 +373,8 @@ TEST_CASE("a failing flush fails the run and keeps the primary error", "[core-fl
     input.runId = "run-flush";
     input.identity = identity;
     input.primaryResult = ResultKind::InitializationFailed;
-    input.primaryError = Error{ErrorCategory::DeviceNotFound, ErrorStage::Enumeration,
-                               "no suitable device", std::nullopt};
+    input.primaryError = Error{
+        ErrorCategory::DeviceNotFound, ErrorStage::Enumeration, "no suitable device", std::nullopt};
     const EndResult result = session->finish(input);
 
     CHECK(result.result == ResultKind::OutputFailed);
@@ -408,9 +393,9 @@ TEST_CASE("a failing flush fails the run and keeps the primary error", "[core-fl
 }
 #endif // AR_ENABLE_TEST_HOOKS
 
-TEST_CASE("an oversized summary falls back without losing the primary error",
-          "[core-summary-truncated]")
-{
+TEST_CASE(
+    "an oversized summary falls back without losing the primary error",
+    "[core-summary-truncated]") {
     const fs::path root = freshRoot("core-summary-truncated");
     const RunSummaryIdentity identity = testIdentity();
 
@@ -424,13 +409,18 @@ TEST_CASE("an oversized summary falls back without losing the primary error",
     input.runId = "run-truncated";
     input.identity = identity;
     input.primaryResult = ResultKind::InitializationFailed;
-    input.primaryError =
-        Error{ErrorCategory::DeviceNotFound, ErrorStage::Enumeration,
-              std::string(400, 'p'), std::nullopt};
+    input.primaryError = Error{
+        ErrorCategory::DeviceNotFound,
+        ErrorStage::Enumeration,
+        std::string(400, 'p'),
+        std::nullopt};
     for (int index = 0; index < 20; ++index) {
         input.cleanupErrors.push_back(
-            Error{ErrorCategory::CleanupFailed, ErrorStage::Cleanup, std::string(400, 'c'),
-                  ErrorOrigin{"os", index}});
+            Error{
+                ErrorCategory::CleanupFailed,
+                ErrorStage::Cleanup,
+                std::string(400, 'c'),
+                ErrorOrigin{"os", index}});
     }
     const EndResult result = session->finish(input);
 
@@ -452,8 +442,7 @@ TEST_CASE("an oversized summary falls back without losing the primary error",
     CHECK(summary["primary_error"]["message"].get<std::string>().size() <= 512);
 }
 
-TEST_CASE("finish is idempotent and writes the summary once", "[core-repeat-finish]")
-{
+TEST_CASE("finish is idempotent and writes the summary once", "[core-repeat-finish]") {
     const fs::path root = freshRoot("core-repeat-finish");
     const RunSummaryIdentity identity = testIdentity();
     auto created = DiagnosticSession::create(testConfig(root, "run-twice"), identity);
@@ -480,8 +469,7 @@ TEST_CASE("finish is idempotent and writes the summary once", "[core-repeat-fini
     CHECK(readAll(summaryPath) == firstSummary);
 }
 
-TEST_CASE("events after finish are rejected without touching the artifacts", "[core-late-event]")
-{
+TEST_CASE("events after finish are rejected without touching the artifacts", "[core-late-event]") {
     static_assert(!std::is_copy_constructible_v<DiagnosticSession>);
     static_assert(!std::is_move_constructible_v<DiagnosticSession>);
 
@@ -512,8 +500,8 @@ TEST_CASE("events after finish are rejected without touching the artifacts", "[c
     CHECK(readAll(root / "run-late" / "summary.json") == summaryBefore);
 }
 
-TEST_CASE("an unwritable summary fails the run and keeps the primary error", "[report-unwritable]")
-{
+TEST_CASE(
+    "an unwritable summary fails the run and keeps the primary error", "[report-unwritable]") {
     const fs::path root = freshRoot("report-unwritable");
     const RunSummaryIdentity identity = testIdentity();
     auto created = DiagnosticSession::create(testConfig(root, "run-blocked"), identity);
@@ -531,9 +519,11 @@ TEST_CASE("an unwritable summary fails the run and keeps the primary error", "[r
     input.runId = "run-blocked";
     input.identity = identity;
     input.primaryResult = ResultKind::InitializationFailed;
-    input.primaryError =
-        Error{ErrorCategory::InitializationFailed, ErrorStage::Instance, "vkCreateInstance failed",
-              ErrorOrigin{"vulkan", -9}};
+    input.primaryError = Error{
+        ErrorCategory::InitializationFailed,
+        ErrorStage::Instance,
+        "vkCreateInstance failed",
+        ErrorOrigin{"vulkan", -9}};
     input.resourcesReleased = false;
     input.residualResources.push_back(
         ResidualResource{ResourceKind::Instance, ResourceState::Retained});
@@ -549,14 +539,15 @@ TEST_CASE("an unwritable summary fails the run and keeps the primary error", "[r
     CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::OutputFailed));
 }
 
-TEST_CASE("capability inputs are checked against the summary contract",
-          "[core-capability-combinations]")
-{
+TEST_CASE(
+    "capability inputs are checked against the summary contract",
+    "[core-capability-combinations]") {
     const fs::path root = freshRoot("core-capability-combinations");
     const RunSummaryIdentity identity = testIdentity();
 
     // One run per combination: the session refuses to reuse an existing run directory.
-    auto finishWith = [&](const std::string& runId, std::optional<std::string> capability,
+    auto finishWith = [&](const std::string& runId,
+                          std::optional<std::string> capability,
                           std::optional<Error> encodingError) {
         auto created = DiagnosticSession::create(testConfig(root, runId), identity);
         REQUIRE(created.has_value());
@@ -564,8 +555,8 @@ TEST_CASE("capability inputs are checked against the summary contract",
         input.runId = runId;
         input.identity = identity;
         input.primaryResult = ResultKind::InitializationFailed;
-        input.primaryError =
-            Error{ErrorCategory::DeviceNotFound, ErrorStage::Enumeration, "no device", std::nullopt};
+        input.primaryError = Error{
+            ErrorCategory::DeviceNotFound, ErrorStage::Enumeration, "no device", std::nullopt};
         input.capabilityJson = std::move(capability);
         input.capabilityEncodingError = std::move(encodingError);
         EndResult result = (*created)->finish(input);
@@ -573,9 +564,9 @@ TEST_CASE("capability inputs are checked against the summary contract",
             std::move(result), parseJson(readAll(root / runId / "summary.json"))};
     };
 
-    SECTION("a valid object is embedded as an object")
-    {
-        auto [result, summary] = finishWith("run-capability-object", std::string(R"({"probe":"ok"})"), std::nullopt);
+    SECTION("a valid object is embedded as an object") {
+        auto [result, summary] =
+            finishWith("run-capability-object", std::string(R"({"probe":"ok"})"), std::nullopt);
         CHECK(result.result == ResultKind::InitializationFailed);
         CHECK(result.diagnosticsComplete);
         CHECK(summary["capability"].is_object());
@@ -583,9 +574,9 @@ TEST_CASE("capability inputs are checked against the summary contract",
         CHECK_FALSE(summary.contains("capability_json"));
     }
 
-    SECTION("invalid JSON fails the run with a null capability")
-    {
-        auto [result, summary] = finishWith("run-capability-invalid", std::string("{not json"), std::nullopt);
+    SECTION("invalid JSON fails the run with a null capability") {
+        auto [result, summary] =
+            finishWith("run-capability-invalid", std::string("{not json"), std::nullopt);
         CHECK(result.result == ResultKind::OutputFailed);
         CHECK_FALSE(result.diagnosticsComplete);
         CHECK(result.primaryError->category == ErrorCategory::DeviceNotFound);
@@ -594,46 +585,53 @@ TEST_CASE("capability inputs are checked against the summary contract",
         CHECK(summary["primary_error"]["category"] == "device_not_found");
     }
 
-    SECTION("a top-level array is not a capability object")
-    {
-        auto [result, summary] = finishWith("run-capability-array", std::string("[1,2]"), std::nullopt);
+    SECTION("a top-level array is not a capability object") {
+        auto [result, summary] =
+            finishWith("run-capability-array", std::string("[1,2]"), std::nullopt);
         CHECK(result.result == ResultKind::OutputFailed);
         CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::OutputFailed));
         CHECK(summary["capability"].is_null());
     }
 
-    SECTION("a top-level scalar is not a capability object")
-    {
-        auto [result, summary] = finishWith("run-capability-scalar", std::string("42"), std::nullopt);
+    SECTION("a top-level scalar is not a capability object") {
+        auto [result, summary] =
+            finishWith("run-capability-scalar", std::string("42"), std::nullopt);
         CHECK(result.result == ResultKind::OutputFailed);
         CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::OutputFailed));
         CHECK(summary["capability"].is_null());
     }
 
-    SECTION("an empty string is not a capability object")
-    {
+    SECTION("an empty string is not a capability object") {
         auto [result, summary] = finishWith("run-capability-empty", std::string(), std::nullopt);
         CHECK(result.result == ResultKind::OutputFailed);
         CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::OutputFailed));
         CHECK(summary["capability"].is_null());
     }
 
-    SECTION("an encoding error alone is reported without a capability payload")
-    {
-        auto [result, summary] = finishWith("run-capability-error", std::nullopt,
-            Error{ErrorCategory::OutputFailed, ErrorStage::Summary, "capability encode failed",
-                  std::nullopt});
+    SECTION("an encoding error alone is reported without a capability payload") {
+        auto [result, summary] = finishWith(
+            "run-capability-error",
+            std::nullopt,
+            Error{
+                ErrorCategory::OutputFailed,
+                ErrorStage::Summary,
+                "capability encode failed",
+                std::nullopt});
         CHECK(result.result == ResultKind::OutputFailed);
         CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::OutputFailed));
         CHECK(summary["capability"].is_null());
         CHECK(result.primaryError->category == ErrorCategory::DeviceNotFound);
     }
 
-    SECTION("supplying both a payload and an encoding error is a conflict")
-    {
-        auto [result, summary] = finishWith("run-capability-both", std::string(R"({"probe":"ok"})"),
-            Error{ErrorCategory::OutputFailed, ErrorStage::Summary, "capability encode failed",
-                  std::nullopt});
+    SECTION("supplying both a payload and an encoding error is a conflict") {
+        auto [result, summary] = finishWith(
+            "run-capability-both",
+            std::string(R"({"probe":"ok"})"),
+            Error{
+                ErrorCategory::OutputFailed,
+                ErrorStage::Summary,
+                "capability encode failed",
+                std::nullopt});
         CHECK(result.result == ResultKind::OutputFailed);
         CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::InternalError));
         CHECK(summary["capability"].is_null());
@@ -641,29 +639,29 @@ TEST_CASE("capability inputs are checked against the summary contract",
     }
 }
 
-TEST_CASE("summary facts that contradict the session are rejected as internal errors",
-          "[core-summary-conflicts]")
-{
+TEST_CASE(
+    "summary facts that contradict the session are rejected as internal errors",
+    "[core-summary-conflicts]") {
     const fs::path root = freshRoot("core-summary-conflicts");
     const RunSummaryIdentity identity = testIdentity();
 
-    auto finishWith = [&](const std::string& runId, const std::function<void(RunSummaryInput&)>& amend) {
+    auto finishWith = [&](const std::string& runId,
+                          const std::function<void(RunSummaryInput&)>& amend) {
         auto created = DiagnosticSession::create(testConfig(root, runId), identity);
         REQUIRE(created.has_value());
         RunSummaryInput input;
         input.runId = runId;
         input.identity = identity;
         input.primaryResult = ResultKind::InitializationFailed;
-        input.primaryError =
-            Error{ErrorCategory::DeviceNotFound, ErrorStage::Enumeration, "no device", std::nullopt};
+        input.primaryError = Error{
+            ErrorCategory::DeviceNotFound, ErrorStage::Enumeration, "no device", std::nullopt};
         amend(input);
         EndResult result = (*created)->finish(input);
         return std::pair<EndResult, nlohmann::json>{
             std::move(result), parseJson(readAll(root / runId / "summary.json"))};
     };
 
-    SECTION("released resources cannot be reported together with residual ones")
-    {
+    SECTION("released resources cannot be reported together with residual ones") {
         auto [result, summary] = finishWith("run-conflict-residual", [](RunSummaryInput& input) {
             input.resourcesReleased = true;
             input.residualResources.push_back(
@@ -676,8 +674,7 @@ TEST_CASE("summary facts that contradict the session are rejected as internal er
         REQUIRE(summary["residual_resources"].size() == 1);
     }
 
-    SECTION("a mismatched build identity is rejected")
-    {
+    SECTION("a mismatched build identity is rejected") {
         auto [result, summary] = finishWith("run-conflict-identity", [](RunSummaryInput& input) {
             input.identity.buildId = "build-somethingelse";
         });
@@ -686,8 +683,7 @@ TEST_CASE("summary facts that contradict the session are rejected as internal er
         CHECK(summary["build_id"] == identity.buildId);
     }
 
-    SECTION("a mismatched run id is rejected")
-    {
+    SECTION("a mismatched run id is rejected") {
         auto [result, summary] = finishWith("run-conflict-runid", [](RunSummaryInput& input) {
             input.runId = "run-somewhere-else";
         });
@@ -696,12 +692,10 @@ TEST_CASE("summary facts that contradict the session are rejected as internal er
         CHECK(summary["run_id"] == "run-conflict-runid");
     }
 
-    SECTION("an encoding error with the wrong stage and category is a conflict")
-    {
+    SECTION("an encoding error with the wrong stage and category is a conflict") {
         auto [result, summary] = finishWith("run-conflict-encoding", [](RunSummaryInput& input) {
-            input.capabilityEncodingError =
-                Error{ErrorCategory::InternalError, ErrorStage::Validation, "wrong fields",
-                      std::nullopt};
+            input.capabilityEncodingError = Error{
+                ErrorCategory::InternalError, ErrorStage::Validation, "wrong fields", std::nullopt};
         });
         CHECK(result.result == ResultKind::OutputFailed);
         CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::InternalError));
@@ -709,9 +703,9 @@ TEST_CASE("summary facts that contradict the session are rejected as internal er
     }
 }
 
-TEST_CASE("an event message that is not valid UTF-8 fails the output instead of throwing",
-          "[core-event-encoding-failure]")
-{
+TEST_CASE(
+    "an event message that is not valid UTF-8 fails the output instead of throwing",
+    "[core-event-encoding-failure]") {
     const fs::path root = freshRoot("core-event-encoding-failure");
     auto created = DiagnosticSession::create(testConfig(root, "run-event-utf8"), testIdentity());
     REQUIRE(created.has_value());

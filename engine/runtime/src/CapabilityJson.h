@@ -19,7 +19,8 @@ struct EncodedCapability {
 };
 
 // Encodes the D1 report shape. core only re-validates the syntax and the top-level object type.
-EncodedCapability encodeCapability(const rhi::CapabilityReport& report,
+EncodedCapability encodeCapability(
+    const rhi::CapabilityReport& report,
     QueryMode mode,
     const std::string& runId,
     const core::BuildInfo& build);

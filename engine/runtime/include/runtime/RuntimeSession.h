@@ -28,8 +28,8 @@ struct StartFailure {
 // Single owner thread, not copyable and not movable, so the address stays stable for rhi.
 class RuntimeSession {
 public:
-    static std::expected<std::unique_ptr<RuntimeSession>, StartFailure> start(
-        const RuntimeConfig& config);
+    static std::expected<std::unique_ptr<RuntimeSession>, StartFailure>
+    start(const RuntimeConfig& config);
 
     ~RuntimeSession();
 

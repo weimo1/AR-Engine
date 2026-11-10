@@ -20,11 +20,10 @@ static_assert(_MSVC_LANG >= 202302L, "AR: the build must use /std:c++23preview (
 
 namespace {
 
-using nlohmann::json;
 using ar::core::BuildInfo;
+using nlohmann::json;
 
-std::string languageModeName()
-{
+std::string languageModeName() {
 #if _MSVC_LANG >= 202302L
     return "c++23preview";
 #else
@@ -32,19 +31,16 @@ std::string languageModeName()
 #endif
 }
 
-json identityJson()
-{
+json identityJson() {
     const BuildInfo& info = ar::core::buildInfo();
     json encoded;
     encoded["build_id"] = info.buildId;
     encoded["input_hash"] = info.inputHash;
     encoded["configuration"] = info.configuration;
-    encoded["source"] = {{"revision", info.source.revision.has_value()
-                                      ? json(*info.source.revision)
-                                      : json(nullptr)},
-                         {"dirty", info.source.dirty.has_value()
-                                       ? json(*info.source.dirty)
-                                       : json("unknown")}};
+    encoded["source"] = {
+        {"revision",
+         info.source.revision.has_value() ? json(*info.source.revision) : json(nullptr)},
+        {"dirty", info.source.dirty.has_value() ? json(*info.source.dirty) : json("unknown")}};
     encoded["crt"] = ar::core::detail::buildCrtName();
     encoded["triplet"] = ar::core::detail::buildTriplet();
     encoded["test_hooks"] = ar::core::detail::buildTestHooks();
@@ -52,8 +48,7 @@ json identityJson()
     return encoded;
 }
 
-int usage(const char* program)
-{
+int usage(const char* program) {
     std::fprintf(
         stderr,
         "usage: %s --json | --verify <build-identity.json> [--toolchain <toolchain.json>]\n",
@@ -63,8 +58,7 @@ int usage(const char* program)
 
 } // namespace
 
-int main(int argc, char** argv)
-{
+int main(int argc, char** argv) {
     bool printJson = false;
     std::string sidecarPath;
     std::string toolchainPath;
@@ -107,29 +101,36 @@ int main(int argc, char** argv)
     auto compare = [&mismatches](const char* field, const json& recorded, const json& actual) {
         if (recorded != actual) {
             std::fprintf(
-                stderr, "identity-mismatch: %s recorded=%s compiled=%s\n", field,
-                recorded.dump().c_str(), actual.dump().c_str());
+                stderr,
+                "identity-mismatch: %s recorded=%s compiled=%s\n",
+                field,
+                recorded.dump().c_str(),
+                actual.dump().c_str());
             ++mismatches;
         }
     };
 
     compare("build_id", sidecar.value("build_id", json("")), compiled["build_id"]);
     compare("input_hash", sidecar.value("input_hash", json("")), compiled["input_hash"]);
-    compare("configuration", sidecar.value("configuration", json("")),
-            compiled["configuration"]);
+    compare("configuration", sidecar.value("configuration", json("")), compiled["configuration"]);
     if (sidecar.contains("source")) {
-        compare("source.revision", sidecar["source"].value("revision", json("")),
-                compiled["source"]["revision"]);
-        compare("source.dirty", sidecar["source"].value("dirty", json("")),
-                compiled["source"]["dirty"]);
+        compare(
+            "source.revision",
+            sidecar["source"].value("revision", json("")),
+            compiled["source"]["revision"]);
+        compare(
+            "source.dirty",
+            sidecar["source"].value("dirty", json("")),
+            compiled["source"]["dirty"]);
     } else {
         std::fprintf(stderr, "identity-mismatch: sidecar has no source stamp\n");
         ++mismatches;
     }
     if (sidecar.contains("build_options") && sidecar["build_options"].is_object()) {
-        compare("build_options.test_hooks",
-                sidecar["build_options"].value("test_hooks", json("")),
-                compiled["test_hooks"]);
+        compare(
+            "build_options.test_hooks",
+            sidecar["build_options"].value("test_hooks", json("")),
+            compiled["test_hooks"]);
     } else {
         std::fprintf(stderr, "identity-mismatch: sidecar has no build_options.test_hooks\n");
         ++mismatches;
@@ -145,13 +146,11 @@ int main(int argc, char** argv)
         try {
             toolchainStream >> toolchain;
         } catch (const json::exception& ex) {
-            std::fprintf(stderr, "identity-mismatch: toolchain is not valid JSON: %s\n",
-                         ex.what());
+            std::fprintf(stderr, "identity-mismatch: toolchain is not valid JSON: %s\n", ex.what());
             return 2;
         }
         compare("toolchain.triplet", toolchain.value("triplet", json("")), compiled["triplet"]);
-        const std::string crtKey =
-            compiled["configuration"] == "Debug" ? "debug" : "optimized";
+        const std::string crtKey = compiled["configuration"] == "Debug" ? "debug" : "optimized";
         json expectedCrt = json("");
         if (toolchain.contains("crt") && toolchain["crt"].is_object()) {
             expectedCrt = toolchain["crt"].value(crtKey, json(""));

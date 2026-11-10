@@ -57,10 +57,12 @@ std::uint32_t parseVersion(std::string_view text) {
     const std::string_view majorText = text.substr(0, dot);
     const std::string_view minorText =
         dot == std::string_view::npos ? std::string_view{} : text.substr(dot + 1);
-    const auto major = static_cast<std::uint32_t>(std::strtoul(std::string(majorText).c_str(), nullptr, 10));
-    const auto minor = minorText.empty()
-        ? std::uint32_t{0}
-        : static_cast<std::uint32_t>(std::strtoul(std::string(minorText).c_str(), nullptr, 10));
+    const auto major =
+        static_cast<std::uint32_t>(std::strtoul(std::string(majorText).c_str(), nullptr, 10));
+    const auto minor =
+        minorText.empty()
+            ? std::uint32_t{0}
+            : static_cast<std::uint32_t>(std::strtoul(std::string(minorText).c_str(), nullptr, 10));
     return VK_MAKE_API_VERSION(0, major, minor, 0);
 }
 
@@ -83,7 +85,8 @@ Spec readSpec() {
         }
         const std::size_t equals = entry.find('=');
         const std::string key = entry.substr(0, equals);
-        const std::string value = equals == std::string::npos ? std::string{} : entry.substr(equals + 1);
+        const std::string value =
+            equals == std::string::npos ? std::string{} : entry.substr(equals + 1);
         if (key == "loader") {
             spec.loaderApi = parseVersion(value);
         } else if (key == "loader-variant") {
@@ -135,8 +138,8 @@ VKAPI_ATTR VkResult VKAPI_CALL fixtureCreateInstance(
     const Spec spec = currentSpec();
     if (instance != nullptr) {
         *instance = spec.createResult == VK_SUCCESS
-            ? reinterpret_cast<VkInstance>(static_cast<std::uintptr_t>(1))
-            : VK_NULL_HANDLE;
+                        ? reinterpret_cast<VkInstance>(static_cast<std::uintptr_t>(1))
+                        : VK_NULL_HANDLE;
     }
     return spec.createResult;
 }
@@ -157,8 +160,8 @@ VKAPI_ATTR VkResult VKAPI_CALL fixtureEnumerateInstanceExtensionProperties(
 
 VKAPI_ATTR void VKAPI_CALL fixtureDestroyInstance(VkInstance, const VkAllocationCallbacks*) {}
 
-VKAPI_ATTR VkResult VKAPI_CALL fixtureEnumeratePhysicalDevices(
-    VkInstance, std::uint32_t* count, VkPhysicalDevice* devices) {
+VKAPI_ATTR VkResult VKAPI_CALL
+fixtureEnumeratePhysicalDevices(VkInstance, std::uint32_t* count, VkPhysicalDevice* devices) {
     const Spec spec = currentSpec();
     if (devices == nullptr) {
         *count = spec.deviceCount;
@@ -170,16 +173,16 @@ VKAPI_ATTR VkResult VKAPI_CALL fixtureEnumeratePhysicalDevices(
     const std::uint32_t offered = *count;
     std::uint32_t written = 0;
     for (std::uint32_t index = 0; index < spec.deviceCount && index < offered; ++index) {
-        devices[index] = reinterpret_cast<VkPhysicalDevice>(
-            static_cast<std::uintptr_t>(0x10 + index));
+        devices[index] =
+            reinterpret_cast<VkPhysicalDevice>(static_cast<std::uintptr_t>(0x10 + index));
         ++written;
     }
     *count = written;
     return written < offered ? VK_INCOMPLETE : VK_SUCCESS;
 }
 
-VKAPI_ATTR void VKAPI_CALL fixtureGetPhysicalDeviceProperties(
-    VkPhysicalDevice, VkPhysicalDeviceProperties* properties) {
+VKAPI_ATTR void VKAPI_CALL
+fixtureGetPhysicalDeviceProperties(VkPhysicalDevice, VkPhysicalDeviceProperties* properties) {
     if (properties == nullptr) {
         return;
     }
@@ -225,8 +228,8 @@ VKAPI_ATTR VkResult VKAPI_CALL fixtureEnumerateDeviceExtensionProperties(
 }
 
 #if defined(VK_EXT_descriptor_heap)
-VKAPI_ATTR void VKAPI_CALL fixtureGetPhysicalDeviceFeatures2(
-    VkPhysicalDevice, VkPhysicalDeviceFeatures2* features) {
+VKAPI_ATTR void VKAPI_CALL
+fixtureGetPhysicalDeviceFeatures2(VkPhysicalDevice, VkPhysicalDeviceFeatures2* features) {
     if (features == nullptr) {
         return;
     }
@@ -244,8 +247,8 @@ VKAPI_ATTR void VKAPI_CALL fixtureGetPhysicalDeviceFeatures2(
 
 } // namespace
 
-extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(
-    VkInstance, const char* name) {
+extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
+vkGetInstanceProcAddr(VkInstance, const char* name) {
     const Spec spec = currentSpec();
     if (name == nullptr) {
         return nullptr;
