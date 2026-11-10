@@ -1,8 +1,8 @@
 # runtime 模块
 
-P0技术方案修订：3，2026-11-04。下列组合接口细化为候选，未实施、未获逐项确认；不增加游戏框架或P0帧循环。
+P0技术方案修订：4，2026-11-06。组合接口按 2026-11-04 授权收口并已实施（见文末实现状态）；不增加游戏框架或P0帧循环。
 
-状态：模块组合职责和目录已确认；尚无引擎实现。这里是长期设计入口。
+状态：模块组合职责与目录已确认；2.1 runtime 组合已实现（2026-11-06），两配置各 49/49 用例通过。这里是长期设计入口。
 
 - 目录：engine/runtime/include/runtime、engine/runtime/src；公开头不增加 ar 路径层。
 - 职责：组合当前阶段需要的基础和图形能力；具体初始化、关闭、接口及所有权按已确认方案实施，不默认增加游戏玩法、编辑器或完整应用框架。
@@ -87,3 +87,22 @@ runtime编码为optional UTF-8对象文本capability_json，core校验语法/顶
 runtime编码失败显式传RunSummaryInput.capability_encoding_error，不能仅传nullopt；完整身份/主结果/清理事实和JSON组合以P0 proposal字段表为准。双字段冲突固定summary/internal_error及output_failed，保留原业务Error。
 
 有效配置先创建诊断再rhi open；隔离拒绝返回StartFailure.initialization_failed，primary_error为cleanup/cleanup_failed，origin=internal/1；没有RhiSession，不调用close，本次资源已释放=true、残留和cleanup_errors为空。正常finish诊断不解除既有进程隔离。诊断create失败为output_failed且未执行隔离检查；finish失败保留隔离主错误但最终output_failed。
+
+## 2026-11-06 实现状态（2.1 runtime 组合）
+
+已落盘：`engine/runtime/include/runtime/RuntimeConfig.h`（`QueryMode{Inspect,RequireProduct,Development}`、`RuntimeConfig{mode, diagnostics, query}`）与 `RuntimeSession.h`（`StartFailure{endResult, report, diagnosticsAvailable}`、`RuntimeSession::start`、`report()`、`close()`、不可复制/不可移动、PIMPL）；`engine/runtime/src/CapabilityJson.{h,cpp}` 与 `RuntimeSession.cpp`。`ar_runtime` 静态库链接 `ar_core`、`ar_rhi`、`ar_cxx23`、`ar_cxx_flags`，nlohmann/json 仅私有。
+
+行为与上文候选一致的部分：requested_api 与模式不符在加载 Vulkan 前拒绝（`invalid_arguments/validation`，诊断未建立）；诊断创建失败返回 `output_failed` 且不进入 rhi；`Inspect` 接受 1.3/1.4 且查询完整即成功；`RequireProduct` 要求 1.4，产品资格不足时返回 `unsupported/api_version_unsupported` 并保留报告；`Development` 要求显式 1.3、成功但 `product=false`；`report()` 是 runtime 自有快照，close 后值不变；`close()` 先 rhi 后 finish，重复调用返回缓存 EndResult；析构只释放 rhi 再释放诊断，不写摘要。
+
+capability 编码：按 D1 字段顺序输出（`schema_version/run_id/build_id/source/input_hash/configuration/mode/product_target/requirement_profile/loader_api/device_api/api_variants/instance_create/extensions_query_status/extensions/features/capability_source/variant_supported/effective_api/judgments/product_target_supported/device_name/driver_version/descriptor_heap/renderer_runtime_validated/result/errors`）；成功会话一定给对象文本，编码异常时改传 `capability_encoding_error{stage=summary, category=output_failed}`，不产出空对象。
+
+已知差异与限制：
+
+- `rhi::QueryConfig.requiredDeviceExtensions` 仍是候选接口外的新增字段（自 2026-11-05 起未决），runtime 只透传，不解释。
+- 报告不含 `run_id/build_id/schema_version/mode` 的运行时副本，这些字段只在编码的 capability_json 与 `summary.json` 中出现。
+- `runtime-device-index-invalid` 中 instance 已为枚举而创建，rollback 时销毁；用例断言的是"没有 runtime 会话、没有换设备、设备索引为 invalid_arguments"，不是"未创建 instance"（Vulkan 枚举需要 instance）。
+- 未实现：取消/超时后的强制回收、`CapabilityReport` 中的 feature 精确判定、P1 帧循环与 GPU 提交。
+
+2026-11-06 评审修复（F1–F9）后：`runtime-require-product`、`runtime-mode-mismatch`、`runtime-diagnostic-create-failure` 补上了此前零覆盖的三条路径（产品资格不足、模式与 requested_api 不符、诊断创建失败）；capability_json 的 `descriptor_heap` 改为 `{status: …}` 对象而非字符串；rhi 回滚残留经 `QueryFailure.residualResources` 转发到 `RunSummaryInput.residualResources`，被拒启动的 `report.result` 不再默认 success。rhi 侧同批修正：实例释放失败时保留实例与模块、不 `volkFinalize()`/不卸库，并因此隔离进程；`shutdown` 记录 1→2→3 次序供测试断言。stub 加载器改为每次调用重读 `AR_RHI_FIXTURE_SPEC`，使同一进程内的 SECTION 互不继承行为。
+
+验证（2026-11-06，`python scripts/build_checks.py --phase test --test-file tests/runtime/test_runtime_session.cpp`）：16 条命令全部 exit 0；两配置各 49/49（core 13 + rhi 18 + runtime 16）；`clcmd-*` preview=9、latest=0、ehsc=9、c4530=0、Debug `mdd=9/md=0`、RelWithDebInfo `md=9/mdd=0`、errors/warnings=0；身份 Debug `8a9ec718…`、RelWithDebInfo `a79b070b…`、input_hash `56bda280…`。

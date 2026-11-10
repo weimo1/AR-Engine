@@ -24,3 +24,5 @@ target_link_libraries(ar_rhi
     PRIVATE
         volk::volk
 )
+
+set_target_properties(ar_rhi PROPERTIES FOLDER "Engine")

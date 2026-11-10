@@ -27,6 +27,7 @@
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -44,6 +45,8 @@ struct Spec {
     bool deviceExtensionsFail = false;
     bool destroyUnavailable = false;
     bool descriptorHeapPresent = false;
+    // Raw device-name bytes as hex, so a test can hand the runtime text that is not valid UTF-8.
+    std::string deviceNameHex;
 };
 
 std::uint32_t parseVersion(std::string_view text) {
@@ -107,14 +110,17 @@ Spec readSpec() {
             spec.destroyUnavailable = value == "missing";
         } else if (key == "heap") {
             spec.descriptorHeapPresent = value == "present";
+        } else if (key == "device-name-hex") {
+            spec.deviceNameHex = value;
         }
     }
     return spec;
 }
 
-const Spec& currentSpec() {
-    static const Spec spec = readSpec();
-    return spec;
+// Read on every call: the tests reuse one process (and one loaded module) across sections, so a
+// cached snapshot would leak the first section's behaviour into the ones after it.
+Spec currentSpec() {
+    return readSpec();
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL fixtureEnumerateInstanceVersion(std::uint32_t* apiVersion) {
@@ -126,7 +132,7 @@ VKAPI_ATTR VkResult VKAPI_CALL fixtureEnumerateInstanceVersion(std::uint32_t* ap
 
 VKAPI_ATTR VkResult VKAPI_CALL fixtureCreateInstance(
     const VkInstanceCreateInfo*, const VkAllocationCallbacks*, VkInstance* instance) {
-    const Spec& spec = currentSpec();
+    const Spec spec = currentSpec();
     if (instance != nullptr) {
         *instance = spec.createResult == VK_SUCCESS
             ? reinterpret_cast<VkInstance>(static_cast<std::uintptr_t>(1))
@@ -137,7 +143,7 @@ VKAPI_ATTR VkResult VKAPI_CALL fixtureCreateInstance(
 
 VKAPI_ATTR VkResult VKAPI_CALL fixtureEnumerateInstanceExtensionProperties(
     const char*, std::uint32_t* count, VkExtensionProperties* properties) {
-    const Spec& spec = currentSpec();
+    const Spec spec = currentSpec();
     if (spec.instanceExtensionsFail) {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
@@ -153,7 +159,7 @@ VKAPI_ATTR void VKAPI_CALL fixtureDestroyInstance(VkInstance, const VkAllocation
 
 VKAPI_ATTR VkResult VKAPI_CALL fixtureEnumeratePhysicalDevices(
     VkInstance, std::uint32_t* count, VkPhysicalDevice* devices) {
-    const Spec& spec = currentSpec();
+    const Spec spec = currentSpec();
     if (devices == nullptr) {
         *count = spec.deviceCount;
         return VK_SUCCESS;
@@ -177,16 +183,27 @@ VKAPI_ATTR void VKAPI_CALL fixtureGetPhysicalDeviceProperties(
     if (properties == nullptr) {
         return;
     }
-    properties->apiVersion = currentSpec().deviceApi;
+    const Spec spec = currentSpec();
+    properties->apiVersion = spec.deviceApi;
     properties->driverVersion = 1;
     std::memset(properties->deviceName, 0, sizeof(properties->deviceName));
-    const char* name = "AR Engine fixture device";
-    std::memcpy(properties->deviceName, name, std::strlen(name));
+    if (spec.deviceNameHex.empty()) {
+        const char* name = "AR Engine fixture device";
+        std::memcpy(properties->deviceName, name, std::strlen(name));
+        return;
+    }
+    std::string bytes;
+    for (std::size_t index = 0; index + 1 < spec.deviceNameHex.size(); index += 2) {
+        const std::string pair = spec.deviceNameHex.substr(index, 2);
+        bytes.push_back(static_cast<char>(std::strtoul(pair.c_str(), nullptr, 16)));
+    }
+    const std::size_t limit = sizeof(properties->deviceName) - 1;
+    std::memcpy(properties->deviceName, bytes.data(), std::min(bytes.size(), limit));
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL fixtureEnumerateDeviceExtensionProperties(
     VkPhysicalDevice, const char*, std::uint32_t* count, VkExtensionProperties* properties) {
-    const Spec& spec = currentSpec();
+    const Spec spec = currentSpec();
     if (spec.deviceExtensionsFail) {
         return VK_ERROR_FEATURE_NOT_PRESENT;
     }
@@ -229,7 +246,7 @@ VKAPI_ATTR void VKAPI_CALL fixtureGetPhysicalDeviceFeatures2(
 
 extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(
     VkInstance, const char* name) {
-    const Spec& spec = currentSpec();
+    const Spec spec = currentSpec();
     if (name == nullptr) {
         return nullptr;
     }

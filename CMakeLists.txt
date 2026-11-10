@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 4.2)
 
 project(ArEngine VERSION 0.1.0 LANGUAGES CXX)
 
+# Group the generated Visual Studio solution. Every target assigns a FOLDER; see the per-module
+# CMakeLists.txt files (Engine) and tests/CMakeLists.txt (Tests, TestSupport).
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+
 if(NOT MSVC)
     message(FATAL_ERROR "AR Engine P0 requires MSVC from Visual Studio 2026.")
 endif()
@@ -84,6 +88,7 @@ ar_require_cxx23_preview()
 
 add_subdirectory(engine/core)
 add_subdirectory(engine/rhi)
+add_subdirectory(engine/runtime)
 
 if(AR_BUILD_TESTS)
     enable_testing()

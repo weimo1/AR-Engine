@@ -46,10 +46,12 @@ struct QueryConfig {
 };
 
 // Returned when open cannot produce a session. The report holds whatever was already established
-// and is owned by the caller.
+// and is owned by the caller. A rollback that could not release everything lists the leftovers in
+// residualResources, so the caller's summary can state them instead of implying a clean release.
 struct QueryFailure {
     core::Error error;
     std::vector<core::Error> cleanupErrors;
+    std::vector<core::ResidualResource> residualResources;
     CapabilityReport report;
 };
 

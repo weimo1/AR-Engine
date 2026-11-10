@@ -76,6 +76,8 @@ P0单owner线程使用，禁止并发emit/finish，不启动日志线程，不�
 
 低内存/强杀/系统磁盘阻塞不保证摘要完整。对普通可恢复写失败做真实文件测试和内部sink故障测试，不扩展公共插件sink接口以方便测试。
 
+2026-11-06 补记（事件消息编码）：调用方传入的事件message与错误message可能来自驱动原始字节，不保证是合法UTF-8。`emit`在序列化失败时不得让异常穿出：置sticky错误、记入诊断错误并返回`output_failed/output`，`finish`据此把结果降为`output_failed`且`diagnostics_complete=false`；摘要内的错误message统一经`sanitizeUtf8`规范化（非法序列替换为U+FFFD），避免`summary.dump()`因字节问题抛出。该行为由`core-event-encoding-failure`固定。
+
 ## 6. 可验证结果及实施顺序
 
 验收用例与断言引用[P0 test-plan](../../../openspec/changes/bootstrap-engine-p0/test-plan.md)，不在模块入口再维护测试计数。重点是正常结束、打开失败、JSON转义、配额、重复finish、晚到事件和真实摘要写失败；不是只测试字段能打印。

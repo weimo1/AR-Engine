@@ -49,6 +49,9 @@ set(AR_REQUIRED_CORE_CASES
     core-late-event
     report-unwritable
     core-flush-failure
+    core-capability-combinations
+    core-summary-conflicts
+    core-event-encoding-failure
 )
 foreach(case IN LISTS AR_REQUIRED_CORE_CASES)
     add_test(NAME ${case} COMMAND ar_core_tests "[${case}]")
@@ -110,6 +113,54 @@ foreach(case IN LISTS AR_REQUIRED_RHI_CASES)
     )
 endforeach()
 
+set(AR_REQUIRED_RUNTIME_CASES
+    runtime-rollback
+    runtime-device-none
+    runtime-device-index-invalid
+    runtime-cleanup-failure
+    runtime-cleanup-empty
+    runtime-quarantine-reopen
+    runtime-repeat-close
+    runtime-summary-capability
+    runtime-system-inspect
+    runtime-system-development
+    runtime-require-product
+    runtime-mode-mismatch
+    runtime-diagnostic-create-failure
+    runtime-summary-output-failure
+    runtime-capability-encode-failure
+    runtime-destructor
+)
+
+add_executable(ar_runtime_tests
+    runtime/test_runtime_session.cpp
+)
+target_link_libraries(ar_runtime_tests
+    PRIVATE
+        ar_runtime
+        Catch2::Catch2WithMain
+        nlohmann_json::nlohmann_json
+)
+# The runtime cases read the rhi process counters and quarantine flag, which are private hooks.
+target_include_directories(ar_runtime_tests
+    PRIVATE "${PROJECT_SOURCE_DIR}/engine/rhi/src"
+)
+target_compile_definitions(ar_runtime_tests PRIVATE AR_ENABLE_TEST_HOOKS=1)
+add_dependencies(ar_runtime_tests ar_rhi_fixture)
+foreach(case IN LISTS AR_REQUIRED_RUNTIME_CASES)
+    add_test(NAME ${case} COMMAND ar_runtime_tests "[${case}]")
+    set_tests_properties(${case} PROPERTIES
+        ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
+    )
+endforeach()
+
+# F5 launches the executable directly, so CTest's ENVIRONMENT property does not apply.
+foreach(test_target IN ITEMS ar_core_tests ar_rhi_tests ar_runtime_tests)
+    set_target_properties(${test_target} PROPERTIES
+        VS_DEBUGGER_ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
+    )
+endforeach()
+
 # Each translation unit below includes exactly one public header, so a successful compile is
 # the self-containment proof. The test only asserts the objects for this configuration exist.
 add_library(ar_public_header_probe OBJECT
@@ -119,8 +170,10 @@ add_library(ar_public_header_probe OBJECT
     public_headers/header_rhi_loader_source.cpp
     public_headers/header_rhi_capabilities.cpp
     public_headers/header_rhi_session.cpp
+    public_headers/header_runtime_config.cpp
+    public_headers/header_runtime_session.cpp
 )
-target_link_libraries(ar_public_header_probe PRIVATE ar_core ar_rhi)
+target_link_libraries(ar_public_header_probe PRIVATE ar_core ar_rhi ar_runtime)
 add_test(NAME public-headers
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/check_public_headers.py"
         --search-root "${CMAKE_CURRENT_BINARY_DIR}"
@@ -150,3 +203,9 @@ add_test(NAME build-identity
         --configuration "$<CONFIG>"
         --test-hooks "$<IF:$<BOOL:${AR_ENABLE_TEST_HOOKS}>,on,off>"
 )
+
+# Visual Studio solution folders. The three suites are the entry points a developer runs; the
+# fixture loader and the two probes only exist to serve them.
+set_target_properties(ar_core_tests ar_rhi_tests ar_runtime_tests PROPERTIES FOLDER "Tests")
+set_target_properties(ar_rhi_fixture ar_identity_probe ar_public_header_probe
+    PROPERTIES FOLDER "TestSupport")

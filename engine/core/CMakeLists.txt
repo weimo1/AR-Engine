@@ -30,3 +30,5 @@ if(AR_ENABLE_TEST_HOOKS)
 endif()
 
 ar_add_build_info(ar_core)
+
+set_target_properties(ar_core PROPERTIES FOLDER "Engine")

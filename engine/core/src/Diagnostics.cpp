@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <exception>
 #include <ctime>
 #include <fstream>
 #include <functional>
@@ -110,12 +111,63 @@ Error makeError(ErrorCategory category, ErrorStage stage, std::string message)
     return Error{category, stage, std::move(message), std::nullopt};
 }
 
+// Serialization refuses invalid UTF-8, and free text such as a device name can legitimately carry
+// raw bytes. Diagnostics must never let that escape as an exception: an unencodable event has to
+// become a reported output failure, and a summary has to stay parseable JSON.
+std::string sanitizeUtf8(const std::string& text) {
+    static constexpr std::uint32_t kMinimumCodePoint[5] = {0, 0, 0x80, 0x800, 0x10000};
+    std::string sanitized;
+    sanitized.reserve(text.size());
+    const auto* bytes = reinterpret_cast<const unsigned char*>(text.data());
+    std::size_t index = 0;
+    while (index < text.size()) {
+        const unsigned char lead = bytes[index];
+        std::size_t length = 0;
+        std::uint32_t codePoint = 0;
+        if (lead < 0x80) {
+            length = 1;
+            codePoint = lead;
+        } else if ((lead & 0xE0) == 0xC0) {
+            length = 2;
+            codePoint = lead & 0x1F;
+        } else if ((lead & 0xF0) == 0xE0) {
+            length = 3;
+            codePoint = lead & 0x0F;
+        } else if ((lead & 0xF8) == 0xF0) {
+            length = 4;
+            codePoint = lead & 0x07;
+        }
+
+        bool valid = length != 0 && index + length <= text.size();
+        for (std::size_t offset = 1; valid && offset < length; ++offset) {
+            const unsigned char continuation = bytes[index + offset];
+            if ((continuation & 0xC0) != 0x80) {
+                valid = false;
+                break;
+            }
+            codePoint = (codePoint << 6) | (continuation & 0x3F);
+        }
+        if (valid && (codePoint < kMinimumCodePoint[length] || codePoint > 0x10FFFF ||
+                         (codePoint >= 0xD800 && codePoint <= 0xDFFF))) {
+            valid = false;
+        }
+        if (!valid) {
+            sanitized += "\xEF\xBF\xBD";
+            ++index;
+            continue;
+        }
+        sanitized.append(text, index, length);
+        index += length;
+    }
+    return sanitized;
+}
+
 Json encodeError(const Error& error)
 {
     Json encoded;
     encoded["category"] = toString(error.category);
     encoded["stage"] = toString(error.stage);
-    encoded["message"] = error.message;
+    encoded["message"] = sanitizeUtf8(error.message);
     if (error.origin.has_value()) {
         encoded["origin"] = {{"domain", error.origin->domain}, {"code", error.origin->code}};
     } else {
@@ -521,7 +573,19 @@ std::expected<void, Error> DiagnosticSession::emit(const Event& event)
             : Json(nullptr);
     record["timestamp"] = timestamp;
     record["thread_id"] = threadIdText();
-    const std::string jsonLine = record.dump();
+    std::string jsonLine;
+    try {
+        jsonLine = record.dump();
+    } catch (const std::exception& ex) {
+        // A caller-supplied message that is not valid UTF-8 must surface as an output failure
+        // instead of unwinding through the logging path.
+        impl.incomplete = true;
+        const Error error = makeError(ErrorCategory::OutputFailed, ErrorStage::Output,
+            std::string("event record could not be encoded as UTF-8 JSON: ") + ex.what());
+        impl.stickyError = error;
+        impl.recordDiagnostic(error);
+        return std::unexpected(error);
+    }
     if (jsonLine.size() + 1 > impl.config.quota.singleEventBytes) {
         impl.incomplete = true;
         return std::unexpected(makeError(ErrorCategory::OutputFailed, ErrorStage::Output,

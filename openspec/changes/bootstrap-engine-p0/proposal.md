@@ -280,3 +280,7 @@ runtime-cleanup-failure单独使用“已持有instance但对应销毁入口不�
 ## 影响与验收依据
 
 主责为P0跨模块基础工程，长期入口为[core](../../../docs/modules/core/README.md)、[rhi](../../../docs/modules/rhi/README.md)、[runtime](../../../docs/modules/runtime/README.md)。规划阶段只修改规划、派生spec和导航；实现阶段已按用户指令落盘 1.1/1.2/2.2 与 3.2，以及 2.3 的 rhi 切片（loader/instance/枚举/报告/幂等 close，公开头与 18 个 rhi 用例，两配置各 30/30 含 fixture 驱动的负向用例），并收口 quarantine 进程隔离与 `report()` 关闭后失效语义（调用计数 + 关闭前复制，另修复缺失的 `Impl::closed` 终止标志），2.3 已勾选；`cleanup-empty` 与 `runtime-*` 属 2.1。检查映射见[test-plan](test-plan.md)，接口机制及取舍见[design](design.md)。独立方案复核和用户对新增关键差异的确认之后再交实现者；不自动执行Git/付费调用。
+
+2026-11-06 追加：2.1 runtime 组合已实现（`RuntimeConfig`/`RuntimeSession` 公开头与 `CapabilityJson`/`RuntimeSession` 实现，`ar_runtime` 通过 PUBLIC 依赖复用 rhi 值类型），三模式语义、失败回滚、close 幂等、report() 快照与 capability_json 交 core 写摘要均按上文；runtime 级用例 13 个，两配置各 43/43。2.1 与 3.1 已勾选；3.3 云端与 3.4 交付仍未完成，真实 GPU 运行、取消/超时路径及 2.2 其余 JSON 输入冲突组合未覆盖。
+
+2026-11-06 追加：按独立验收的三项缺口补齐覆盖后，两配置各 49/49（core 13 + rhi 18 + runtime 16 + public-headers + build-identity）。摘要失败矩阵现由 `core-capability-combinations`/`core-summary-conflicts`/`runtime-summary-output-failure` 覆盖；隔离矩阵由独占子进程的 `[.][runtime-quarantine-child]` 覆盖连续拒绝与既有隔离下的诊断创建失败；清理失败与析构场景已移入独立子进程并核对重复 close/析构不再清理。补齐过程中修复一处真实缺陷：core 此前会让非 UTF-8 的事件消息在 `record.dump()` 抛出并穿过 `emit`/`finish`，现由 `sanitizeUtf8()` 规范化摘要内的错误消息、`emit` 将序列化失败转为 `output_failed`（sticky + 诊断错误），并由 `core-event-encoding-failure` 固定。

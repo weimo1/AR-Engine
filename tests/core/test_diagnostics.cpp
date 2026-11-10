@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -546,4 +547,197 @@ TEST_CASE("an unwritable summary fails the run and keeps the primary error", "[r
     CHECK(result.resourcesReleased == false);
     REQUIRE(result.residualResources.size() == 1);
     CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::OutputFailed));
+}
+
+TEST_CASE("capability inputs are checked against the summary contract",
+          "[core-capability-combinations]")
+{
+    const fs::path root = freshRoot("core-capability-combinations");
+    const RunSummaryIdentity identity = testIdentity();
+
+    // One run per combination: the session refuses to reuse an existing run directory.
+    auto finishWith = [&](const std::string& runId, std::optional<std::string> capability,
+                          std::optional<Error> encodingError) {
+        auto created = DiagnosticSession::create(testConfig(root, runId), identity);
+        REQUIRE(created.has_value());
+        RunSummaryInput input;
+        input.runId = runId;
+        input.identity = identity;
+        input.primaryResult = ResultKind::InitializationFailed;
+        input.primaryError =
+            Error{ErrorCategory::DeviceNotFound, ErrorStage::Enumeration, "no device", std::nullopt};
+        input.capabilityJson = std::move(capability);
+        input.capabilityEncodingError = std::move(encodingError);
+        EndResult result = (*created)->finish(input);
+        return std::pair<EndResult, nlohmann::json>{
+            std::move(result), parseJson(readAll(root / runId / "summary.json"))};
+    };
+
+    SECTION("a valid object is embedded as an object")
+    {
+        auto [result, summary] = finishWith("run-capability-object", std::string(R"({"probe":"ok"})"), std::nullopt);
+        CHECK(result.result == ResultKind::InitializationFailed);
+        CHECK(result.diagnosticsComplete);
+        CHECK(summary["capability"].is_object());
+        CHECK(summary["capability"]["probe"] == "ok");
+        CHECK_FALSE(summary.contains("capability_json"));
+    }
+
+    SECTION("invalid JSON fails the run with a null capability")
+    {
+        auto [result, summary] = finishWith("run-capability-invalid", std::string("{not json"), std::nullopt);
+        CHECK(result.result == ResultKind::OutputFailed);
+        CHECK_FALSE(result.diagnosticsComplete);
+        CHECK(result.primaryError->category == ErrorCategory::DeviceNotFound);
+        CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::OutputFailed));
+        CHECK(summary["capability"].is_null());
+        CHECK(summary["primary_error"]["category"] == "device_not_found");
+    }
+
+    SECTION("a top-level array is not a capability object")
+    {
+        auto [result, summary] = finishWith("run-capability-array", std::string("[1,2]"), std::nullopt);
+        CHECK(result.result == ResultKind::OutputFailed);
+        CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::OutputFailed));
+        CHECK(summary["capability"].is_null());
+    }
+
+    SECTION("a top-level scalar is not a capability object")
+    {
+        auto [result, summary] = finishWith("run-capability-scalar", std::string("42"), std::nullopt);
+        CHECK(result.result == ResultKind::OutputFailed);
+        CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::OutputFailed));
+        CHECK(summary["capability"].is_null());
+    }
+
+    SECTION("an empty string is not a capability object")
+    {
+        auto [result, summary] = finishWith("run-capability-empty", std::string(), std::nullopt);
+        CHECK(result.result == ResultKind::OutputFailed);
+        CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::OutputFailed));
+        CHECK(summary["capability"].is_null());
+    }
+
+    SECTION("an encoding error alone is reported without a capability payload")
+    {
+        auto [result, summary] = finishWith("run-capability-error", std::nullopt,
+            Error{ErrorCategory::OutputFailed, ErrorStage::Summary, "capability encode failed",
+                  std::nullopt});
+        CHECK(result.result == ResultKind::OutputFailed);
+        CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::OutputFailed));
+        CHECK(summary["capability"].is_null());
+        CHECK(result.primaryError->category == ErrorCategory::DeviceNotFound);
+    }
+
+    SECTION("supplying both a payload and an encoding error is a conflict")
+    {
+        auto [result, summary] = finishWith("run-capability-both", std::string(R"({"probe":"ok"})"),
+            Error{ErrorCategory::OutputFailed, ErrorStage::Summary, "capability encode failed",
+                  std::nullopt});
+        CHECK(result.result == ResultKind::OutputFailed);
+        CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::InternalError));
+        CHECK(summary["capability"].is_null());
+        CHECK(result.primaryError->category == ErrorCategory::DeviceNotFound);
+    }
+}
+
+TEST_CASE("summary facts that contradict the session are rejected as internal errors",
+          "[core-summary-conflicts]")
+{
+    const fs::path root = freshRoot("core-summary-conflicts");
+    const RunSummaryIdentity identity = testIdentity();
+
+    auto finishWith = [&](const std::string& runId, const std::function<void(RunSummaryInput&)>& amend) {
+        auto created = DiagnosticSession::create(testConfig(root, runId), identity);
+        REQUIRE(created.has_value());
+        RunSummaryInput input;
+        input.runId = runId;
+        input.identity = identity;
+        input.primaryResult = ResultKind::InitializationFailed;
+        input.primaryError =
+            Error{ErrorCategory::DeviceNotFound, ErrorStage::Enumeration, "no device", std::nullopt};
+        amend(input);
+        EndResult result = (*created)->finish(input);
+        return std::pair<EndResult, nlohmann::json>{
+            std::move(result), parseJson(readAll(root / runId / "summary.json"))};
+    };
+
+    SECTION("released resources cannot be reported together with residual ones")
+    {
+        auto [result, summary] = finishWith("run-conflict-residual", [](RunSummaryInput& input) {
+            input.resourcesReleased = true;
+            input.residualResources.push_back(
+                ResidualResource{ResourceKind::Instance, ResourceState::Retained});
+        });
+        CHECK(result.result == ResultKind::OutputFailed);
+        CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::InternalError));
+        CHECK(summary["capability"].is_null());
+        CHECK(summary["resources_released"] == true);
+        REQUIRE(summary["residual_resources"].size() == 1);
+    }
+
+    SECTION("a mismatched build identity is rejected")
+    {
+        auto [result, summary] = finishWith("run-conflict-identity", [](RunSummaryInput& input) {
+            input.identity.buildId = "build-somethingelse";
+        });
+        CHECK(result.result == ResultKind::OutputFailed);
+        CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::InternalError));
+        CHECK(summary["build_id"] == identity.buildId);
+    }
+
+    SECTION("a mismatched run id is rejected")
+    {
+        auto [result, summary] = finishWith("run-conflict-runid", [](RunSummaryInput& input) {
+            input.runId = "run-somewhere-else";
+        });
+        CHECK(result.result == ResultKind::OutputFailed);
+        CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::InternalError));
+        CHECK(summary["run_id"] == "run-conflict-runid");
+    }
+
+    SECTION("an encoding error with the wrong stage and category is a conflict")
+    {
+        auto [result, summary] = finishWith("run-conflict-encoding", [](RunSummaryInput& input) {
+            input.capabilityEncodingError =
+                Error{ErrorCategory::InternalError, ErrorStage::Validation, "wrong fields",
+                      std::nullopt};
+        });
+        CHECK(result.result == ResultKind::OutputFailed);
+        CHECK(hasDiagnosticError(result, ErrorStage::Summary, ErrorCategory::InternalError));
+        CHECK(summary["capability"].is_null());
+    }
+}
+
+TEST_CASE("an event message that is not valid UTF-8 fails the output instead of throwing",
+          "[core-event-encoding-failure]")
+{
+    const fs::path root = freshRoot("core-event-encoding-failure");
+    auto created = DiagnosticSession::create(testConfig(root, "run-event-utf8"), testIdentity());
+    REQUIRE(created.has_value());
+    DiagnosticSession& session = **created;
+
+    // A device name legitimately arrives from the driver as raw bytes; the diagnostic path must
+    // report an output failure instead of letting the serializer throw through the caller.
+    Event event;
+    event.level = LogLevel::Info;
+    event.module = "rhi";
+    event.eventId = "rhi.query.complete";
+    event.message = "device '\xC3\x28' reports API 1.4";
+    event.stage = ErrorStage::Capability;
+
+    const auto emitted = session.emit(event);
+    REQUIRE_FALSE(emitted.has_value());
+    CHECK(emitted.error().category == ErrorCategory::OutputFailed);
+    CHECK(emitted.error().stage == ErrorStage::Output);
+
+    RunSummaryInput input;
+    input.runId = "run-event-utf8";
+    input.identity = testIdentity();
+    input.primaryResult = ResultKind::Success;
+    const EndResult result = session.finish(input);
+    CHECK(result.result == ResultKind::OutputFailed);
+    CHECK_FALSE(result.diagnosticsComplete);
+    CHECK(hasDiagnosticError(result, ErrorStage::Output, ErrorCategory::OutputFailed));
+    CHECK(result.primaryResult == ResultKind::Success);
 }

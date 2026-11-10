@@ -16,8 +16,10 @@
 
 ## 当前任务
 
+- 2026-11-06 用户确认按既定总体架构和任务依赖推进，学校进度暂不要求额外压缩范围或调整顺序。GPU/Bindless诊断随对应功能建设，长期职责见 [RHI调试方案](docs/modules/rhi/README.md#gpu与bindless调试方案2026-11-06) 和 [render验证方案](docs/modules/render/README.md#bindless与gpu效果验证2026-11-06)。各阶段具体接口和验收仍按对应方案确认范围执行。
 - 当前阶段为 **P0-code 开发**，正在实现 P0 基础工程。
-- 当前开发任务为 **2.1 runtime 组合**，把 core 诊断与 rhi 查询串成公共入口，并跑对应检查。
+- **2.1 runtime 组合已于 2026-11-06 完成**：三模式、失败回滚、close 幂等、capability_json 交 core 写摘要；runtime 级用例 16 个（含评审后补的 require_product、mode-mismatch、diagnostic-create-failure），两配置各 49/49。
+- 当前阶段为 **3.1 验收缺口已补，待复验**：独立验收提出的三项缺口已补齐——摘要失败矩阵（core-capability-combinations/core-summary-conflicts/runtime-summary-output-failure）、隔离连续拒绝与既有隔离下诊断创建失败、cleanup-failure 与析构场景移入独占子进程并检查 WaitForSingleObject/超时回收；补齐过程中修复 core 对非 UTF-8 事件消息抛异常穿过 emit/finish 的真实缺陷（sanitizeUtf8 + emit 转 output_failed，配 core-event-encoding-failure）。复跑 16/16 命令、两配置各 49/49；本批尚未提交/推送，待独立复验。
 - **2.3 RHI 已于 2026-11-06 完成**：隔离标志与 quarantine-reopen、`report()` 关闭后失效的计数验证、`Impl::closed` 缺失修复，两配置各 30/30。
 
 ## 本批交付记录（2026-11-06）
@@ -25,15 +27,15 @@
 - 工作流切片 `b87938b`、RHI 2.3 收口切片 `5c85ef8` 已提交并推送到 origin/main；RHI 的 18 个已评审文件与提交 blob 逐一核对一致。
 - `5c85ef8` 的 [GitHub Workflow checks #42070320194](https://github.com/weimo1/AR-Engine/actions/runs/42070320194) 已完成，workflow-checks 作业 success。本地工作流 95 项测试通过；RHI 沿用同一代码输入的 16/16 命令、两配置各 30/30 证据。
 - P0 CPU 工作流仍为手动触发，本轮未触发；GPU 未运行。3.3 与整体交付 3.4 仍未完成，不将工作流 CI 通过视为引擎云端构建通过。
-- 下一步交开发执行 2.1 runtime 组合，同步补齐 3.1；按现有方案核对接口与失败处理后实施、自检，再交独立评审。
+- 2.1 runtime 组合与其 3.1 用例已实施并自检通过（16/16 命令、两配置各 49/49）；9 条评审意见已修复（实例残留不卸库、回滚残留上送、descriptor_heap 对象化、三条新用例、被拒启动 result、次序与卸库断言、拼写），并重跑同一批检查；下一步把刷新后的评审包交独立评审，未覆盖项如实保留：真实 GPU、云端 CI、取消/超时路径、2.2 其余 JSON 组合。
 
 ## 开发检查命令
 
-以下以刚才的 RHI 切片为例。测试源码路径按本批任务替换，多份文件可重复传 `--test-file`。
+以下以本批 runtime 切片为例。测试源码路径按本批任务替换，多份文件可重复传 `--test-file`。
 
 ```powershell
 python scripts/build_checks.py --phase build
-python scripts/build_checks.py --phase test --test-file tests/rhi/test_rhi_session.cpp
+python scripts/build_checks.py --phase test --test-file tests/runtime/test_runtime_session.cpp
 python scripts/prepare_review.py
 ```
 

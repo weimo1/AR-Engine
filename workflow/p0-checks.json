@@ -233,6 +233,8 @@
       "expected_capability_source": null,
       "expected_cases": [
         "build-identity",
+        "core-capability-combinations",
+        "core-event-encoding-failure",
         "core-flush-failure",
         "core-json-escaping",
         "core-late-event",
@@ -241,6 +243,7 @@
         "core-quota",
         "core-quota-cumulative",
         "core-repeat-finish",
+        "core-summary-conflicts",
         "core-summary-truncated",
         "public-headers",
         "report-unwritable",
@@ -261,7 +264,23 @@
         "rhi-quarantine-reopen",
         "rhi-repeat-close",
         "rhi-report-after-close",
-        "rhi-request-validation"
+        "rhi-request-validation",
+        "runtime-capability-encode-failure",
+        "runtime-cleanup-empty",
+        "runtime-cleanup-failure",
+        "runtime-destructor",
+        "runtime-device-index-invalid",
+        "runtime-device-none",
+        "runtime-diagnostic-create-failure",
+        "runtime-mode-mismatch",
+        "runtime-quarantine-reopen",
+        "runtime-repeat-close",
+        "runtime-require-product",
+        "runtime-rollback",
+        "runtime-summary-capability",
+        "runtime-summary-output-failure",
+        "runtime-system-development",
+        "runtime-system-inspect"
       ]
     },
     {
@@ -467,6 +486,8 @@
       "expected_capability_source": null,
       "expected_cases": [
         "build-identity",
+        "core-capability-combinations",
+        "core-event-encoding-failure",
         "core-flush-failure",
         "core-json-escaping",
         "core-late-event",
@@ -475,6 +496,7 @@
         "core-quota",
         "core-quota-cumulative",
         "core-repeat-finish",
+        "core-summary-conflicts",
         "core-summary-truncated",
         "public-headers",
         "report-unwritable",
@@ -495,7 +517,23 @@
         "rhi-quarantine-reopen",
         "rhi-repeat-close",
         "rhi-report-after-close",
-        "rhi-request-validation"
+        "rhi-request-validation",
+        "runtime-capability-encode-failure",
+        "runtime-cleanup-empty",
+        "runtime-cleanup-failure",
+        "runtime-destructor",
+        "runtime-device-index-invalid",
+        "runtime-device-none",
+        "runtime-diagnostic-create-failure",
+        "runtime-mode-mismatch",
+        "runtime-quarantine-reopen",
+        "runtime-repeat-close",
+        "runtime-require-product",
+        "runtime-rollback",
+        "runtime-summary-capability",
+        "runtime-summary-output-failure",
+        "runtime-system-development",
+        "runtime-system-inspect"
       ]
     },
     {

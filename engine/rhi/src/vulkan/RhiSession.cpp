@@ -35,7 +35,18 @@ struct ProcessState {
     std::size_t loadCalls = 0;
     std::size_t volkInitializeCalls = 0;
     std::size_t instanceCreateCalls = 0;
+    std::size_t destroyInstanceCalls = 0;
+    std::size_t volkFinalizeCalls = 0;
+    std::size_t unloadCalls = 0;
     std::size_t reportCallsAfterClose = 0;
+    std::size_t quarantineChecks = 0;
+    // Release steps in execution order (1 instance, 2 volk, 3 module), so a test asserts the
+    // sequence rather than only the totals.
+    std::vector<int> shutdownOrder;
+    // Injected once by runtime-cleanup-failure: the OS refuses to unload an already destroyed
+    // instance's module. The module stays loaded until process exit, which is what the assertion
+    // about a retained OS module describes.
+    bool failUnloadOnce = false;
 #endif
 };
 
@@ -505,6 +516,10 @@ struct RhiSession::Impl {
     // Releases whatever was acquired, in reverse order, and records what could not be released.
     void shutdown() {
         if (instance != VK_NULL_HANDLE) {
+#ifdef AR_ENABLE_TEST_HOOKS
+            ++g_process.destroyInstanceCalls;
+            g_process.shutdownOrder.push_back(1);
+#endif
             if (vkDestroyInstance != nullptr) {
                 vkDestroyInstance(instance, nullptr);
             } else {
@@ -516,12 +531,36 @@ struct RhiSession::Impl {
             }
             instance = VK_NULL_HANDLE;
         }
+        if (!residualResources.empty()) {
+            // The instance is still alive: unloading the module or clearing the volk table would
+            // leave a live instance behind a dangling entry table. Keep both, quarantine the
+            // process, and let process exit release them (proposal: instance and module retained).
+            g_process.quarantined = true;
+            return;
+        }
         if (volkInitialized) {
+#ifdef AR_ENABLE_TEST_HOOKS
+            ++g_process.volkFinalizeCalls;
+            g_process.shutdownOrder.push_back(2);
+#endif
             volkFinalize();
             volkInitialized = false;
         }
         if (module != nullptr) {
-            if (!::FreeLibrary(module)) {
+#ifdef AR_ENABLE_TEST_HOOKS
+            ++g_process.unloadCalls;
+            g_process.shutdownOrder.push_back(3);
+            bool unloaded = false;
+            if (g_process.failUnloadOnce) {
+                g_process.failUnloadOnce = false;
+                ::SetLastError(ERROR_INVALID_HANDLE);
+            } else {
+                unloaded = ::FreeLibrary(module) != FALSE;
+            }
+#else
+            const bool unloaded = ::FreeLibrary(module) != FALSE;
+#endif
+            if (!unloaded) {
                 retain(core::ResourceKind::OsModule);
                 noteCleanup(makeError(
                     core::ErrorCategory::CleanupFailed,
@@ -546,6 +585,9 @@ struct RhiSession::Impl {
 
         // Checked before any OS load, volk initialisation or instance creation: a process that
         // retained resources must not reuse the previously loaded entry table.
+#ifdef AR_ENABLE_TEST_HOOKS
+        ++g_process.quarantineChecks;
+#endif
         if (g_process.quarantined) {
             report.productTargetSupported = false;
             report.result = core::ResultKind::InitializationFailed;
@@ -624,6 +666,9 @@ struct RhiSession::Impl {
         QueryFailure result;
         result.error = std::move(error);
         result.cleanupErrors = cleanupErrors;
+        // A rollback that could not release everything must report that fact upward; without it a
+        // failed start would look like a clean release and the runtime summary would lose it.
+        result.residualResources = residualResources;
         result.report = report;
         return result;
     }
@@ -705,14 +750,29 @@ void clearProcessQuarantine() noexcept {
 
 ProcessCounters processCounters() noexcept {
     return ProcessCounters{g_process.loadCalls, g_process.volkInitializeCalls,
-        g_process.instanceCreateCalls, g_process.reportCallsAfterClose};
+        g_process.instanceCreateCalls, g_process.destroyInstanceCalls,
+        g_process.volkFinalizeCalls, g_process.unloadCalls, g_process.reportCallsAfterClose,
+        g_process.quarantineChecks};
 }
 
 void resetProcessCounters() noexcept {
     g_process.loadCalls = 0;
     g_process.volkInitializeCalls = 0;
     g_process.instanceCreateCalls = 0;
+    g_process.destroyInstanceCalls = 0;
+    g_process.volkFinalizeCalls = 0;
+    g_process.unloadCalls = 0;
     g_process.reportCallsAfterClose = 0;
+    g_process.quarantineChecks = 0;
+    g_process.shutdownOrder.clear();
+}
+
+std::vector<int> processShutdownOrder() {
+    return g_process.shutdownOrder;
+}
+
+void failNextUnloadForTesting() noexcept {
+    g_process.failUnloadOnce = true;
 }
 
 } // namespace detail
