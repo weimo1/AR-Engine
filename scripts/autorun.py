@@ -102,8 +102,16 @@ REVIEW_PROMPT = """你是独立代码评审，只读。工作区 {root}。评审
 最后一行必须是 `VERDICT: PASS` 或 `VERDICT: BLOCK`。"""
 
 
-def next_task() -> tuple[str, str, str] | None:
-    lines = (ROOT / 'TASK.md').read_text(encoding='utf-8').splitlines()
+VERDICT_LINE = re.compile(r'^\s*`?VERDICT: (PASS|BLOCK)`?\s*$', re.MULTILINE)
+
+
+def next_task(committed: bool = False) -> tuple[str, str, str] | None:
+    """First unticked task. With committed=True it reads TASK.md as of HEAD: an interrupted task
+    may already be ticked in the working tree, and resuming must still pick that one."""
+    if committed:
+        lines = git('show', 'HEAD:TASK.md').stdout.splitlines()
+    else:
+        lines = (ROOT / 'TASK.md').read_text(encoding='utf-8').splitlines()
     for index, line in enumerate(lines):
         match = TASK_LINE.match(line)
         if match:
@@ -235,9 +243,12 @@ def run_task(task_id: str, task: str, agents: list[str], testers: list[str],
             return OUT_OF_QUOTA
         review_log = out / f'review-{name}.log'
         review = review_log.read_text(encoding='utf-8', errors='replace')
-        if 'VERDICT: BLOCK' not in review and 'VERDICT: PASS' not in review:
+        # The last verdict line decides. A PASS quoted earlier in the text (the prompt echoed
+        # back, or a sentence about it) must not outvote a closing BLOCK.
+        verdicts = VERDICT_LINE.findall(review)
+        if not verdicts:
             return f'review ended without a verdict, see {review_log}'
-        if 'VERDICT: PASS' not in review:
+        if verdicts[-1] != 'PASS':
             failure = develop_until_green(
                 f'\n评审提出了阻断问题，只修这些，不做其他改动：\n{tail(review_log, 80)}\n', 'fix')
             if failure:
@@ -288,7 +299,7 @@ def main() -> int:
     trust = args.trust
     resumed = args.resume
     for _ in range(args.max_tasks):
-        found = next_task()
+        found = next_task(committed=resumed)
         if not found:
             print('autorun: queue is empty')
             return 0
