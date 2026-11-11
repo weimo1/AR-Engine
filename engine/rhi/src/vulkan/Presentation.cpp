@@ -69,28 +69,62 @@ std::expected<void, core::Error> Presentation::open(
                 "Vulkan swapchain entry points are unavailable",
                 std::nullopt});
     }
+    m_physical = physical;
+    m_surface = surface;
+    m_graphicsFamily = graphicsFamily;
+    m_presentFamily = presentFamily;
+    m_shaders = shaders;
+    m_enableScreenshot = enableScreenshot;
+    for (Frame& frame : m_frames) {
+        if (auto created = createFrame(frame, graphicsFamily); !created) {
+            return created;
+        }
+    }
+    if (m_shaders) {
+        VkPipelineLayoutCreateInfo layout{};
+        layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        if (auto created = create(
+                m_device,
+                m_pipelineLayout,
+                layout,
+                vkCreatePipelineLayout,
+                "vkCreatePipelineLayout");
+            !created) {
+            return created;
+        }
+    }
+    auto created = createSwapchain(framebuffer);
+    if (!created) {
+        return std::unexpected(std::move(created.error()));
+    }
+    if (!*created) {
+        return std::unexpected(unavailable("the initial surface has no drawable extent"));
+    }
+    return {};
+}
 
+std::expected<bool, core::Error> Presentation::createSwapchain(VkExtent2D framebuffer) {
     VkSurfaceCapabilitiesKHR caps{};
-    VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical, surface, &caps);
+    VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_physical, m_surface, &caps);
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkGetPhysicalDeviceSurfaceCapabilitiesKHR", result));
     }
     if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)) {
         return std::unexpected(unavailable("the surface does not support color attachments"));
     }
-    m_extent = caps.currentExtent;
-    if (m_extent.width == std::numeric_limits<std::uint32_t>::max()) {
-        m_extent = {
+    m_swapchain.extent = caps.currentExtent;
+    if (m_swapchain.extent.width == std::numeric_limits<std::uint32_t>::max()) {
+        m_swapchain.extent = {
             std::clamp(framebuffer.width, caps.minImageExtent.width, caps.maxImageExtent.width),
             std::clamp(framebuffer.height, caps.minImageExtent.height, caps.maxImageExtent.height),
         };
     }
-    if (m_extent.width == 0 || m_extent.height == 0) {
-        return std::unexpected(unavailable("the surface has no drawable extent"));
+    if (m_swapchain.extent.width == 0 || m_swapchain.extent.height == 0) {
+        return false;
     }
 
     std::uint32_t count = 0;
-    result = vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &count, nullptr);
+    result = vkGetPhysicalDeviceSurfaceFormatsKHR(m_physical, m_surface, &count, nullptr);
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkGetPhysicalDeviceSurfaceFormatsKHR", result));
     }
@@ -98,7 +132,7 @@ std::expected<void, core::Error> Presentation::open(
     if (formats.empty()) {
         return std::unexpected(unavailable("the surface has no formats"));
     }
-    result = vkGetPhysicalDeviceSurfaceFormatsKHR(physical, surface, &count, formats.data());
+    result = vkGetPhysicalDeviceSurfaceFormatsKHR(m_physical, m_surface, &count, formats.data());
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkGetPhysicalDeviceSurfaceFormatsKHR", result));
     }
@@ -120,8 +154,8 @@ std::expected<void, core::Error> Presentation::open(
     if (format == preferredFormats.end()) {
         return std::unexpected(unavailable("the surface has no supported 8-bit SDR color format"));
     }
-    m_format = *format;
-    if (enableScreenshot && !(caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
+    m_swapchain.format = *format;
+    if (m_enableScreenshot && !(caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
         return std::unexpected(
             unavailable("the surface cannot copy swapchain images for screenshots"));
     }
@@ -141,21 +175,21 @@ std::expected<void, core::Error> Presentation::open(
         return std::unexpected(unavailable("the surface has no supported composite alpha mode"));
     }
 
-    const std::array families{graphicsFamily, presentFamily};
+    const std::array families{m_graphicsFamily, m_presentFamily};
     VkSwapchainCreateInfoKHR swapchain{};
     swapchain.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-    swapchain.surface = surface;
+    swapchain.surface = m_surface;
     swapchain.minImageCount = imageCount;
     swapchain.imageFormat = *format;
     swapchain.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-    swapchain.imageExtent = m_extent;
+    swapchain.imageExtent = m_swapchain.extent;
     swapchain.imageArrayLayers = 1;
     swapchain.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    if (enableScreenshot) {
+    if (m_enableScreenshot) {
         swapchain.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     }
     swapchain.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (graphicsFamily != presentFamily) {
+    if (m_graphicsFamily != m_presentFamily) {
         swapchain.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
         swapchain.queueFamilyIndexCount = static_cast<std::uint32_t>(families.size());
         swapchain.pQueueFamilyIndices = families.data();
@@ -164,19 +198,19 @@ std::expected<void, core::Error> Presentation::open(
     swapchain.compositeAlpha = *alpha;
     swapchain.presentMode = VK_PRESENT_MODE_FIFO_KHR;
     swapchain.clipped = VK_TRUE;
-    if (auto created =
-            create(m_device, m_swapchain, swapchain, vkCreateSwapchainKHR, "vkCreateSwapchainKHR");
+    if (auto created = create(
+            m_device, m_swapchain.handle, swapchain, vkCreateSwapchainKHR, "vkCreateSwapchainKHR");
         !created) {
-        return created;
+        return std::unexpected(std::move(created.error()));
     }
 
-    result = vkGetSwapchainImagesKHR(m_device, m_swapchain, &count, nullptr);
+    result = vkGetSwapchainImagesKHR(m_device, m_swapchain.handle, &count, nullptr);
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkGetSwapchainImagesKHR", result));
     }
     std::vector<VkImage> images(count);
     if (!images.empty()) {
-        result = vkGetSwapchainImagesKHR(m_device, m_swapchain, &count, images.data());
+        result = vkGetSwapchainImagesKHR(m_device, m_swapchain.handle, &count, images.data());
         if (result != VK_SUCCESS) {
             return std::unexpected(failed("vkGetSwapchainImagesKHR", result));
         }
@@ -184,9 +218,9 @@ std::expected<void, core::Error> Presentation::open(
     if (count == 0) {
         return std::unexpected(unavailable("the swapchain has no images"));
     }
-    m_images.resize(count);
-    for (std::size_t index = 0; index < m_images.size(); ++index) {
-        Image& image = m_images[index];
+    m_swapchain.images.resize(count);
+    for (std::size_t index = 0; index < m_swapchain.images.size(); ++index) {
+        Image& image = m_swapchain.images[index];
         image.handle = images[index];
         VkImageViewCreateInfo view{};
         view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -197,43 +231,43 @@ std::expected<void, core::Error> Presentation::open(
         if (auto created =
                 create(m_device, image.view, view, vkCreateImageView, "vkCreateImageView");
             !created) {
-            return created;
+            return std::unexpected(std::move(created.error()));
         }
     }
 
-    for (Frame& frame : m_frames) {
-        if (auto created = createFrame(frame, graphicsFamily); !created) {
-            return created;
+    if (m_enableScreenshot) {
+        if (auto created = createReadback(m_physical); !created) {
+            return std::unexpected(std::move(created.error()));
         }
     }
-    if (enableScreenshot) {
-        if (auto created = createReadback(physical); !created) {
-            return created;
+    if (m_shaders) {
+        if (auto created = createTrianglePipeline(*format, *m_shaders); !created) {
+            return std::unexpected(std::move(created.error()));
         }
     }
-    if (shaders) {
-        return createTrianglePipeline(*format, *shaders);
-    }
-    return {};
+    m_requestedExtent = framebuffer;
+    return true;
 }
 
 std::expected<void, core::Error> Presentation::createReadback(VkPhysicalDevice physical) {
     constexpr VkDeviceSize maxBytes = 128u * 1024u * 1024u;
-    const auto pixels = static_cast<VkDeviceSize>(m_extent.width) * m_extent.height;
+    const auto pixels =
+        static_cast<VkDeviceSize>(m_swapchain.extent.width) * m_swapchain.extent.height;
     if (pixels > maxBytes / 4) {
         return std::unexpected(unavailable("screenshot exceeds the 128 MiB readback limit"));
     }
-    m_readbackBytes = static_cast<std::size_t>(pixels * 4);
+    m_swapchain.readbackBytes = static_cast<std::size_t>(pixels * 4);
     VkBufferCreateInfo buffer{};
     buffer.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buffer.size = m_readbackBytes;
+    buffer.size = m_swapchain.readbackBytes;
     buffer.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    if (auto created = create(m_device, m_readback, buffer, vkCreateBuffer, "vkCreateBuffer");
+    if (auto created =
+            create(m_device, m_swapchain.readback, buffer, vkCreateBuffer, "vkCreateBuffer");
         !created) {
         return created;
     }
     VkMemoryRequirements requirements{};
-    vkGetBufferMemoryRequirements(m_device, m_readback, &requirements);
+    vkGetBufferMemoryRequirements(m_device, m_swapchain.readback, &requirements);
     VkPhysicalDeviceMemoryProperties memory{};
     vkGetPhysicalDeviceMemoryProperties(physical, &memory);
     for (std::uint32_t index = 0; index < memory.memoryTypeCount; ++index) {
@@ -242,17 +276,22 @@ std::expected<void, core::Error> Presentation::createReadback(VkPhysicalDevice p
             !(flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
             continue;
         }
-        m_hostCoherent = (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+        m_swapchain.hostCoherent = (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
         VkMemoryAllocateInfo allocation{};
         allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocation.allocationSize = requirements.size;
         allocation.memoryTypeIndex = index;
         if (auto allocated = create(
-                m_device, m_readbackMemory, allocation, vkAllocateMemory, "vkAllocateMemory");
+                m_device,
+                m_swapchain.readbackMemory,
+                allocation,
+                vkAllocateMemory,
+                "vkAllocateMemory");
             !allocated) {
             return allocated;
         }
-        const VkResult result = vkBindBufferMemory(m_device, m_readback, m_readbackMemory, 0);
+        const VkResult result =
+            vkBindBufferMemory(m_device, m_swapchain.readback, m_swapchain.readbackMemory, 0);
         if (result != VK_SUCCESS) {
             return std::unexpected(failed("vkBindBufferMemory", result));
         }
@@ -269,27 +308,30 @@ Presentation::readScreenshot(Frame& frame, FrameScreenshot& screenshot) {
     }
     frame.submitted.pending = false;
     FrameScreenshot captured{
-        m_extent.width, m_extent.height, std::vector<std::uint8_t>(m_readbackBytes)};
+        m_swapchain.extent.width,
+        m_swapchain.extent.height,
+        std::vector<std::uint8_t>(m_swapchain.readbackBytes)};
     void* mapped = nullptr;
-    result = vkMapMemory(m_device, m_readbackMemory, 0, VK_WHOLE_SIZE, 0, &mapped);
+    result = vkMapMemory(m_device, m_swapchain.readbackMemory, 0, VK_WHOLE_SIZE, 0, &mapped);
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkMapMemory", result));
     }
-    if (!m_hostCoherent) {
+    if (!m_swapchain.hostCoherent) {
         VkMappedMemoryRange range{};
         range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-        range.memory = m_readbackMemory;
+        range.memory = m_swapchain.readbackMemory;
         range.size = VK_WHOLE_SIZE;
         result = vkInvalidateMappedMemoryRanges(m_device, 1, &range);
     }
     if (result == VK_SUCCESS) {
         std::memcpy(captured.rgba.data(), mapped, captured.rgba.size());
     }
-    vkUnmapMemory(m_device, m_readbackMemory);
+    vkUnmapMemory(m_device, m_swapchain.readbackMemory);
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkInvalidateMappedMemoryRanges", result));
     }
-    if (m_format == VK_FORMAT_B8G8R8A8_SRGB || m_format == VK_FORMAT_B8G8R8A8_UNORM) {
+    if (m_swapchain.format == VK_FORMAT_B8G8R8A8_SRGB ||
+        m_swapchain.format == VK_FORMAT_B8G8R8A8_UNORM) {
         for (std::size_t i = 0; i < captured.rgba.size(); i += 4) {
             std::swap(captured.rgba[i], captured.rgba[i + 2]);
         }
@@ -300,14 +342,6 @@ Presentation::readScreenshot(Frame& frame, FrameScreenshot& screenshot) {
 
 std::expected<void, core::Error>
 Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& shaders) {
-    VkPipelineLayoutCreateInfo layout{};
-    layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    if (auto created = create(
-            m_device, m_pipelineLayout, layout, vkCreatePipelineLayout, "vkCreatePipelineLayout");
-        !created) {
-        return created;
-    }
-
     struct ShaderModules {
         VkDevice device;
         std::array<VkShaderModule, 2> handles{};
@@ -347,11 +381,11 @@ Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& sha
     const VkViewport viewport{
         0.0F,
         0.0F,
-        static_cast<float>(m_extent.width),
-        static_cast<float>(m_extent.height),
+        static_cast<float>(m_swapchain.extent.width),
+        static_cast<float>(m_swapchain.extent.height),
         0.0F,
         1.0F};
-    const VkRect2D scissor{{0, 0}, m_extent};
+    const VkRect2D scissor{{0, 0}, m_swapchain.extent};
     VkPipelineViewportStateCreateInfo viewportState{};
     viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     viewportState.viewportCount = 1;
@@ -389,8 +423,8 @@ Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& sha
     pipeline.pMultisampleState = &multisample;
     pipeline.pColorBlendState = &blend;
     pipeline.layout = m_pipelineLayout;
-    const VkResult result =
-        vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &m_pipeline);
+    const VkResult result = vkCreateGraphicsPipelines(
+        m_device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &m_swapchain.pipeline);
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkCreateGraphicsPipelines", result));
     }
@@ -473,13 +507,13 @@ Presentation::record(VkCommandBuffer commands, const Image& image, bool capture)
     color.clearValue.color = {{0.025F, 0.06F, 0.14F, 1.0F}};
     VkRenderingInfo rendering{};
     rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    rendering.renderArea.extent = m_extent;
+    rendering.renderArea.extent = m_swapchain.extent;
     rendering.layerCount = 1;
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachments = &color;
     vkCmdBeginRendering(commands, &rendering);
-    if (m_pipeline) {
-        vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+    if (m_swapchain.pipeline) {
+        vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, m_swapchain.pipeline);
         vkCmdDraw(commands, 3, 1, 0, 0);
     }
     vkCmdEndRendering(commands);
@@ -497,8 +531,9 @@ Presentation::record(VkCommandBuffer commands, const Image& image, bool capture)
         vkCmdPipelineBarrier2(commands, &dependency);
         VkBufferImageCopy region{};
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.imageExtent = {m_extent.width, m_extent.height, 1};
-        vkCmdCopyImageToBuffer(commands, image.handle, barrier.newLayout, m_readback, 1, &region);
+        region.imageExtent = {m_swapchain.extent.width, m_swapchain.extent.height, 1};
+        vkCmdCopyImageToBuffer(
+            commands, image.handle, barrier.newLayout, m_swapchain.readback, 1, &region);
 
         host.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
         host.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
@@ -507,7 +542,7 @@ Presentation::record(VkCommandBuffer commands, const Image& image, bool capture)
         host.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
         host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        host.buffer = m_readback;
+        host.buffer = m_swapchain.readback;
         host.size = VK_WHOLE_SIZE;
         dependency.bufferMemoryBarrierCount = 1;
         dependency.pBufferMemoryBarriers = &host;
@@ -548,7 +583,8 @@ VkResult Presentation::drain(Frame& frame, std::uint64_t timeout) {
     return result;
 }
 
-std::expected<void, core::Error> Presentation::draw(Frame& frame, bool capture) {
+std::expected<Presentation::DrawStatus, core::Error>
+Presentation::draw(Frame& frame, bool capture) {
     VkResult result = drain(frame, kFrameTimeout);
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("waiting for the frame fences", result));
@@ -565,17 +601,22 @@ std::expected<void, core::Error> Presentation::draw(Frame& frame, bool capture) 
     std::uint32_t imageIndex = 0;
     result = vkAcquireNextImageKHR(
         m_device,
-        m_swapchain,
+        m_swapchain.handle,
         kFrameTimeout,
         frame.imageAvailable,
         frame.acquired.handle,
         &imageIndex);
+    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        return DrawStatus::OutOfDate;
+    }
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         return std::unexpected(failed("vkAcquireNextImageKHR", result));
     }
+    const bool suboptimalAcquire = result == VK_SUBOPTIMAL_KHR;
     frame.acquired.pending = true;
-    if (auto recorded = record(frame.commands, m_images[imageIndex], capture); !recorded) {
-        return recorded;
+    if (auto recorded = record(frame.commands, m_swapchain.images[imageIndex], capture);
+        !recorded) {
+        return std::unexpected(std::move(recorded.error()));
     }
 
     VkSemaphoreSubmitInfo acquire{};
@@ -613,18 +654,23 @@ std::expected<void, core::Error> Presentation::draw(Frame& frame, bool capture) 
     present.waitSemaphoreCount = 1;
     present.pWaitSemaphores = &frame.renderingFinished;
     present.swapchainCount = 1;
-    present.pSwapchains = &m_swapchain;
+    present.pSwapchains = &m_swapchain.handle;
     present.pImageIndices = &imageIndex;
     result = vkQueuePresentKHR(m_presentQueue, &present);
     frame.presented.pending = presentEnqueued(result);
+    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        return DrawStatus::OutOfDate;
+    }
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         return std::unexpected(failed("vkQueuePresentKHR", result));
     }
-    return {};
+    return suboptimalAcquire || result == VK_SUBOPTIMAL_KHR ? DrawStatus::Suboptimal
+                                                            : DrawStatus::Presented;
 }
 
-std::expected<void, core::Error> Presentation::presentFrame(FrameScreenshot* screenshot) {
-    if (m_failed || !m_swapchain || (screenshot && !m_readback)) {
+std::expected<PresentStatus, core::Error>
+Presentation::presentFrame(VkExtent2D framebuffer, FrameScreenshot* screenshot) {
+    if (m_failed || (screenshot && !m_enableScreenshot)) {
         return std::unexpected(
             core::Error{
                 core::ErrorCategory::InvalidState,
@@ -632,23 +678,47 @@ std::expected<void, core::Error> Presentation::presentFrame(FrameScreenshot* scr
                 "the swapchain cannot accept another frame",
                 std::nullopt});
     }
+    if (framebuffer.width == 0 || framebuffer.height == 0) {
+        return PresentStatus::Retry;
+    }
+    if (!m_swapchain.handle || m_rebuild || framebuffer.width != m_requestedExtent.width ||
+        framebuffer.height != m_requestedExtent.height) {
+        if (auto error = drainFrames()) {
+            m_failed = true;
+            return std::unexpected(std::move(*error));
+        }
+        destroySwapchain();
+        auto created = createSwapchain(framebuffer);
+        if (!created) {
+            m_failed = true;
+            return std::unexpected(std::move(created.error()));
+        }
+        if (!*created) {
+            return PresentStatus::Retry;
+        }
+        m_rebuild = false;
+    }
     auto& frame = m_frames[m_frameIndex];
     auto result = draw(frame, screenshot != nullptr);
-    if (result && screenshot) {
-        result = readScreenshot(frame, *screenshot);
-    }
     if (!result) {
         m_failed = true;
-        return result;
+        return std::unexpected(std::move(result.error()));
+    }
+    m_rebuild = *result != DrawStatus::Presented;
+    if (*result == DrawStatus::OutOfDate) {
+        return PresentStatus::Retry;
+    }
+    if (screenshot) {
+        if (auto captured = readScreenshot(frame, *screenshot); !captured) {
+            m_failed = true;
+            return std::unexpected(std::move(captured.error()));
+        }
     }
     m_frameIndex = (m_frameIndex + 1) % m_frames.size();
-    return {};
+    return PresentStatus::Presented;
 }
 
-std::optional<core::Error> Presentation::close() {
-    if (!m_swapchain) {
-        return std::nullopt;
-    }
+std::optional<core::Error> Presentation::drainFrames() {
     std::optional<core::Error> error;
     for (Frame& frame : m_frames) {
         const VkResult result = drain(frame, kFrameTimeout);
@@ -662,6 +732,14 @@ std::optional<core::Error> Presentation::close() {
             // The parent quarantines the process and preserves the complete lifetime chain.
             return error;
         }
+    }
+    return error;
+}
+
+std::optional<core::Error> Presentation::close() {
+    auto error = drainFrames();
+    if (error && (!error->origin || error->origin->code != VK_ERROR_DEVICE_LOST)) {
+        return error;
     }
     for (Frame& frame : m_frames) {
         if (frame.pool) {
@@ -677,26 +755,34 @@ std::optional<core::Error> Presentation::close() {
                 vkDestroyFence(m_device, fence.handle, nullptr);
             }
         }
+        frame = {};
     }
-    for (const Image& image : m_images) {
+    destroySwapchain();
+    if (m_pipelineLayout) {
+        vkDestroyPipelineLayout(m_device, std::exchange(m_pipelineLayout, VK_NULL_HANDLE), nullptr);
+    }
+    return error;
+}
+
+void Presentation::destroySwapchain() noexcept {
+    for (const Image& image : m_swapchain.images) {
         if (image.view) {
             vkDestroyImageView(m_device, image.view, nullptr);
         }
     }
-    if (m_pipeline) {
-        vkDestroyPipeline(m_device, std::exchange(m_pipeline, VK_NULL_HANDLE), nullptr);
+    if (m_swapchain.pipeline) {
+        vkDestroyPipeline(m_device, std::exchange(m_swapchain.pipeline, VK_NULL_HANDLE), nullptr);
     }
-    if (m_pipelineLayout) {
-        vkDestroyPipelineLayout(m_device, std::exchange(m_pipelineLayout, VK_NULL_HANDLE), nullptr);
+    if (m_swapchain.readback) {
+        vkDestroyBuffer(m_device, m_swapchain.readback, nullptr);
     }
-    if (m_readback) {
-        vkDestroyBuffer(m_device, m_readback, nullptr);
+    if (m_swapchain.readbackMemory) {
+        vkFreeMemory(m_device, m_swapchain.readbackMemory, nullptr);
     }
-    if (m_readbackMemory) {
-        vkFreeMemory(m_device, m_readbackMemory, nullptr);
+    if (m_swapchain.handle) {
+        vkDestroySwapchainKHR(m_device, m_swapchain.handle, nullptr);
     }
-    vkDestroySwapchainKHR(m_device, std::exchange(m_swapchain, VK_NULL_HANDLE), nullptr);
-    return error;
+    m_swapchain = {};
 }
 
 } // namespace ar::rhi::detail

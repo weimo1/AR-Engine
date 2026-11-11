@@ -137,6 +137,7 @@ set(AR_REQUIRED_RUNTIME_CASES
     runtime-summary-output-failure
     runtime-capability-encode-failure
     runtime-destructor
+    sample-resize
 )
 
 add_executable(ar_runtime_tests
@@ -152,8 +153,11 @@ target_link_libraries(ar_runtime_tests
 target_include_directories(ar_runtime_tests
     PRIVATE "${PROJECT_SOURCE_DIR}/engine/rhi/src"
 )
-target_compile_definitions(ar_runtime_tests PRIVATE AR_ENABLE_TEST_HOOKS=1)
-add_dependencies(ar_runtime_tests ar_rhi_fixture)
+target_compile_definitions(ar_runtime_tests PRIVATE
+    AR_ENABLE_TEST_HOOKS=1
+    AR_TEST_SHADER_DIR=u8"${CMAKE_BINARY_DIR}/shaders"
+)
+add_dependencies(ar_runtime_tests ar_rhi_fixture ar_triangle_shaders)
 foreach(case IN LISTS AR_REQUIRED_RUNTIME_CASES)
     add_test(NAME ${case} COMMAND ar_runtime_tests "[${case}]")
     set_tests_properties(${case} PROPERTIES
@@ -164,6 +168,8 @@ endforeach()
 # hosted CI runner) leave them out with `ctest -LE gpu`; keep it in step with gpu_cases in
 # workflow/p0-checks.json.
 set_tests_properties(runtime-system-inspect runtime-system-development PROPERTIES LABELS gpu)
+set_tests_properties(sample-resize PROPERTIES LABELS gpu TIMEOUT 45
+    ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>;VK_VALIDATION_VALIDATE_SYNC=1")
 
 add_executable(ar_platform_tests platform/test_window.cpp)
 target_link_libraries(ar_platform_tests PRIVATE ar_platform Catch2::Catch2WithMain)

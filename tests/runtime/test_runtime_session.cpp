@@ -803,3 +803,89 @@ TEST_CASE(
     CHECK(rhi::detail::processCounters().quarantineChecks == beforeBlocked.quarantineChecks);
     CHECK(rhi::detail::isProcessQuarantined());
 }
+
+TEST_CASE("Hidden window rebuilds, pauses, restores and closes", "[sample-resize]") {
+    runtime::RuntimeConfig config;
+    config.mode = runtime::QueryMode::Development;
+    config.query.requestedApi = rhi::makeApiVersion(1, 3);
+    config.query.createGraphicsDevice = true;
+    config.query.enableScreenshot = true;
+    const auto shader = [](const char* name) {
+        std::ifstream input(
+            std::filesystem::path(AR_TEST_SHADER_DIR) / name, std::ios::binary | std::ios::ate);
+        const auto size = static_cast<std::streamoff>(input.tellg());
+        REQUIRE(size > 0);
+        REQUIRE(size % 4 == 0);
+        std::vector<std::uint32_t> words(static_cast<std::size_t>(size / 4));
+        REQUIRE(input.seekg(0).read(reinterpret_cast<char*>(words.data()), size));
+        return words;
+    };
+    config.query.triangleShaders =
+        rhi::TriangleShaders{shader("triangle.vert.spv"), shader("triangle.frag.spv")};
+    config.window.emplace();
+    config.window->visible = false;
+    config.window->title = "AR resize test " + std::to_string(GetCurrentProcessId());
+    config.diagnostics.runId = "sample-resize";
+    config.diagnostics.outputRoot = freshRunDirectory(config.diagnostics.runId);
+    auto session = runtime::RuntimeSession::start(config);
+    REQUIRE(session);
+    const std::wstring title(config.window->title.begin(), config.window->title.end());
+    const HWND window = FindWindowW(nullptr, title.c_str());
+    REQUIRE(window != nullptr);
+    DWORD owner = 0;
+    GetWindowThreadProcessId(window, &owner);
+    REQUIRE(owner == GetCurrentProcessId());
+    REQUIRE_FALSE(IsWindowVisible(window));
+
+    const auto present = [&](rhi::FrameScreenshot* screenshot = nullptr) {
+        auto result = (*session)->presentFrame(screenshot);
+        REQUIRE(result);
+        return *result;
+    };
+    REQUIRE(present() == runtime::FrameStatus::Presented);
+    rhi::FrameScreenshot before;
+    REQUIRE(present(&before) == runtime::FrameStatus::Presented);
+    REQUIRE(before.width > 0);
+    REQUIRE(before.height > 0);
+    REQUIRE(
+        SetWindowPos(window, nullptr, 0, 0, 840, 520, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE));
+    RECT client{};
+    REQUIRE(GetClientRect(window, &client));
+    rhi::FrameScreenshot after;
+    REQUIRE(present(&after) == runtime::FrameStatus::Presented);
+    CHECK(after.width == static_cast<std::uint32_t>(client.right));
+    CHECK(after.height == static_cast<std::uint32_t>(client.bottom));
+    CHECK(after.width != before.width);
+    CHECK(after.height != before.height);
+    REQUIRE(after.rgba.size() == static_cast<std::size_t>(after.width) * after.height * 4);
+    const auto center =
+        (static_cast<std::size_t>(after.height / 2) * after.width + after.width / 2) * 4;
+    CHECK(after.rgba[center] > after.rgba[0]);
+
+    // Change the iconic style directly so the test window remains hidden and never activates.
+    const LONG_PTR normalStyle = GetWindowLongPtrW(window, GWL_STYLE);
+    REQUIRE(SetWindowLongPtrW(window, GWL_STYLE, normalStyle | WS_MINIMIZE) != 0);
+    REQUIRE(IsIconic(window));
+    CHECK_FALSE(IsWindowVisible(window));
+    CHECK(present() == runtime::FrameStatus::Paused);
+    REQUIRE(SetWindowLongPtrW(window, GWL_STYLE, normalStyle) != 0);
+    REQUIRE_FALSE(IsIconic(window));
+    CHECK_FALSE(IsWindowVisible(window));
+    REQUIRE(present() == runtime::FrameStatus::Presented);
+
+    REQUIRE(PostMessageW(window, WM_CLOSE, 0, 0));
+    REQUIRE(present() == runtime::FrameStatus::Closed);
+    const auto closed = (*session)->close();
+    REQUIRE(closed.result == core::ResultKind::Success);
+    REQUIRE(closed.resourcesReleased);
+    CHECK_FALSE(IsWindow(window));
+    std::ifstream events(config.diagnostics.outputRoot / config.diagnostics.runId / "events.jsonl");
+    REQUIRE(events);
+    std::size_t starts = 0;
+    for (std::string line; std::getline(events, line);) {
+        const auto id = Json::parse(line).at("event_id").get<std::string>();
+        CHECK(id != "rhi.validation.error");
+        starts += id == "rhi.query.start";
+    }
+    CHECK(starts == 1);
+}

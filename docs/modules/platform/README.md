@@ -10,6 +10,7 @@ platform 管理窗口和平台事件，向 runtime 提供窗口状态与呈现�
 | `pollEvents()` | 在主线程轮询系统事件。 |
 | `requestClose()`、`shouldClose()` | 设置和读取关闭请求；由调用方决定何时结束事件循环。 |
 | `framebufferSize()`、`isMinimized()` | 分别查询帧缓冲的像素尺寸和窗口的最小化状态。 |
+| `waitEvents(seconds)` | 在主线程等待窗口事件，超时后返回。 |
 | `requiredInstanceExtensions()` | 显式查询时才访问 Vulkan loader，返回独立持有的扩展名副本或查询错误。窗口销毁后副本仍有效。 |
 
 ## 所有权与失败

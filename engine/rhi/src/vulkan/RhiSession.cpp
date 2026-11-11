@@ -1387,14 +1387,15 @@ std::optional<GraphicsDeviceInfo> RhiSession::graphicsDeviceInfo() const noexcep
     return m_impl->graphicsInfo;
 }
 
-std::expected<void, core::Error> RhiSession::presentFrame(FrameScreenshot* screenshot) {
+std::expected<PresentStatus, core::Error>
+RhiSession::presentFrame(std::uint32_t width, std::uint32_t height, FrameScreenshot* screenshot) {
     if (!m_impl->presenter) {
         return std::unexpected(makeError(
             core::ErrorCategory::InvalidState,
             core::ErrorStage::Capability,
             "this RHI session has no active swapchain"));
     }
-    return m_impl->presenter->presentFrame(screenshot);
+    return m_impl->presenter->presentFrame({width, height}, screenshot);
 }
 
 #ifdef AR_ENABLE_TEST_HOOKS

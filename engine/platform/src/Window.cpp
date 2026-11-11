@@ -94,6 +94,10 @@ void Window::pollEvents() const noexcept {
     glfwPollEvents();
 }
 
+void Window::waitEvents(double seconds) const noexcept {
+    glfwWaitEventsTimeout(seconds);
+}
+
 void Window::requestClose() noexcept {
     glfwSetWindowShouldClose(m_impl->handle, GLFW_TRUE);
 }

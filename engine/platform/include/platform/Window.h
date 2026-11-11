@@ -32,6 +32,8 @@ public:
     Window& operator=(const Window&) = delete;
 
     void pollEvents() const noexcept;
+    // The timeout is a positive, finite number of seconds.
+    void waitEvents(double seconds) const noexcept;
     void requestClose() noexcept;
     [[nodiscard]] bool shouldClose() const noexcept;
     [[nodiscard]] FramebufferSize framebufferSize() const noexcept;

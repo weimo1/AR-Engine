@@ -13,6 +13,7 @@
 namespace ar::rhi {
 struct TriangleShaders;
 struct FrameScreenshot;
+enum class PresentStatus;
 } // namespace ar::rhi
 
 namespace ar::rhi::detail {
@@ -33,13 +34,14 @@ public:
         VkExtent2D framebuffer,
         const TriangleShaders* shaders,
         bool enableScreenshot);
-    std::expected<void, core::Error> presentFrame(FrameScreenshot* screenshot);
+    std::expected<PresentStatus, core::Error>
+    presentFrame(VkExtent2D framebuffer, FrameScreenshot* screenshot);
     std::optional<core::Error> close();
     [[nodiscard]] bool hasSwapchain() const noexcept {
-        return m_swapchain != VK_NULL_HANDLE;
+        return m_swapchain.handle != VK_NULL_HANDLE;
     }
     [[nodiscard]] std::size_t imageCount() const noexcept {
-        return m_images.size();
+        return m_swapchain.images.size();
     }
 
 private:
@@ -47,6 +49,20 @@ private:
         VkImage handle = VK_NULL_HANDLE; // Owned by the swapchain.
         VkImageView view = VK_NULL_HANDLE;
     };
+
+    struct SwapchainResources {
+        VkSwapchainKHR handle = VK_NULL_HANDLE;
+        VkPipeline pipeline = VK_NULL_HANDLE;
+        VkBuffer readback = VK_NULL_HANDLE;
+        VkDeviceMemory readbackMemory = VK_NULL_HANDLE;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        VkExtent2D extent{};
+        std::vector<Image> images;
+        std::size_t readbackBytes = 0;
+        bool hostCoherent = false;
+    };
+
+    enum class DrawStatus { Presented, Suboptimal, OutOfDate };
 
     struct Fence {
         VkFence handle = VK_NULL_HANDLE;
@@ -64,31 +80,35 @@ private:
     };
 
     std::expected<void, core::Error> createFrame(Frame& frame, std::uint32_t graphicsFamily);
+    std::expected<bool, core::Error> createSwapchain(VkExtent2D framebuffer);
+    void destroySwapchain() noexcept;
     std::expected<void, core::Error>
     createTrianglePipeline(VkFormat format, const TriangleShaders& shaders);
     std::expected<void, core::Error> createReadback(VkPhysicalDevice physical);
     std::expected<void, core::Error> readScreenshot(Frame& frame, FrameScreenshot& screenshot);
-    std::expected<void, core::Error> draw(Frame& frame, bool capture);
+    std::expected<DrawStatus, core::Error> draw(Frame& frame, bool capture);
     std::expected<void, core::Error>
     record(VkCommandBuffer commands, const Image& image, bool capture);
     VkResult drain(Frame& frame, std::uint64_t timeout);
+    std::optional<core::Error> drainFrames();
 
     VkDevice m_device;
     VkQueue m_graphicsQueue;
     VkQueue m_presentQueue;
-    VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
+    VkPhysicalDevice m_physical = VK_NULL_HANDLE;
+    VkSurfaceKHR m_surface = VK_NULL_HANDLE;
+    std::uint32_t m_graphicsFamily = 0;
+    std::uint32_t m_presentFamily = 0;
+    // The RHI session owns the bytecode for the full lifetime of Presentation.
+    const TriangleShaders* m_shaders = nullptr;
+    bool m_enableScreenshot = false;
+    VkExtent2D m_requestedExtent{};
+    SwapchainResources m_swapchain;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
-    VkPipeline m_pipeline = VK_NULL_HANDLE;
-    VkBuffer m_readback = VK_NULL_HANDLE;
-    VkDeviceMemory m_readbackMemory = VK_NULL_HANDLE;
-    VkFormat m_format = VK_FORMAT_UNDEFINED;
-    std::size_t m_readbackBytes = 0;
-    bool m_hostCoherent = false;
-    VkExtent2D m_extent{};
-    std::vector<Image> m_images;
     std::array<Frame, 2> m_frames{};
     std::size_t m_frameIndex = 0;
     bool m_failed = false;
+    bool m_rebuild = false;
 };
 
 } // namespace ar::rhi::detail

@@ -14,7 +14,9 @@ Debug 创建设备时，instance 启用 `VK_LAYER_KHRONOS_validation` 和 `VK_EX
 
 两套帧上下文各自持有命令池、命令缓冲、acquire 和 render-finished semaphore，以及 acquire、提交和呈现 fence。复用时等该帧仍在途的操作，获取图像成功后记录 Dynamic Rendering 清屏，使用 Synchronization2 切换颜色附件和呈现布局。呈现 fence 证明 render-finished semaphore 可以复用，acquire fence 同时覆盖 acquire 后提交前失败的回收。正常帧循环没有全设备等待。[Khronos 呈现 fence 规范](https://docs.vulkan.org/refpages/latest/refpages/source/VkSwapchainPresentFenceInfoKHR.html)
 
-单交换链切片遇到失效或零尺寸时停止当前运行，携带可用的 Vulkan 错误码。退出先停提交，再等待两套上下文中可能在途的 acquire、提交和呈现 fence。设备丢失也执行这一步，fence 等待返回设备丢失时按规范结束其在途状态。若无法确认在途状态已结束，保留资源链直到进程退出并拒绝再次打开会话。正常释放顺序为帧资源、交换链、设备、surface、instance 及 loader。关闭与部分启动失败共用释放路径。运行中的交换链重建在 T06 处理。
+设备、队列、surface、管线布局和两套帧上下文随会话存活。交换链、视图、依赖颜色格式和静态视口的图形管线、截图读回缓冲随交换链重建。Runtime 跟踪窗口像素尺寸，最小化或零尺寸时等待事件。尺寸变化或 WSI 报告过期、次优时，RHI 等待两套帧的 acquire、提交及呈现 fence，再销毁旧交换链资源并按当前尺寸创建新资源。次优呈现已接受的帧照常计数，过期帧重试。
+
+关闭与重建共用在途等待。设备丢失也执行这一步，fence 等待返回设备丢失时按规范结束其在途状态。若无法确认在途状态已结束，保留资源链直到进程退出并拒绝再次打开会话。关闭释放帧资源与交换链资源，再释放设备、surface、instance 及 loader。重建失败保留原始错误，已经创建的资源仍由关闭路径回滚。
 
 ### 最小三角形管线
 

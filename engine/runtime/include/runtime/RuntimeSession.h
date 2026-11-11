@@ -13,6 +13,8 @@
 
 namespace ar::runtime {
 
+enum class FrameStatus { Presented, Paused, Closed };
+
 // Owned result of a failed start. The caller learns what was established, what was rolled back and
 // which diagnostic run ended, without guessing which module exists.
 struct StartFailure {
@@ -43,8 +45,8 @@ public:
     // the session, so copy before destroying it.
     [[nodiscard]] const rhi::CapabilityReport& report() const noexcept;
 
-    // True after accepting one presentation, false when the window was closed.
-    [[nodiscard]] std::expected<bool, core::Error>
+    // A paused call waits briefly for window events and does not count as a presented frame.
+    [[nodiscard]] std::expected<FrameStatus, core::Error>
     presentFrame(rhi::FrameScreenshot* screenshot = nullptr);
 
     // First call closes rhi, then finishes the diagnostic run. Repeated calls return the cached

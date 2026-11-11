@@ -43,6 +43,8 @@ struct FrameScreenshot {
     std::vector<std::uint8_t> rgba;
 };
 
+enum class PresentStatus { Presented, Retry };
+
 struct Win32Presentation {
     // Borrowed HWND. Keep the window alive through close, or until process exit if
     // close reports a retained Presentation.
@@ -120,10 +122,11 @@ public:
     [[nodiscard]] const CapabilityReport& report() const noexcept;
     [[nodiscard]] std::optional<GraphicsDeviceInfo> graphicsDeviceInfo() const noexcept;
 
-    // Success counts one submitted and accepted presentation, including VK_SUBOPTIMAL_KHR.
+    // Presented counts one accepted presentation, including VK_SUBOPTIMAL_KHR.
+    // Retry requests another call with the latest framebuffer size and does not update screenshot.
     // A failed frame stops further submissions until the session is closed.
-    [[nodiscard]] std::expected<void, core::Error>
-    presentFrame(FrameScreenshot* screenshot = nullptr);
+    [[nodiscard]] std::expected<PresentStatus, core::Error>
+    presentFrame(std::uint32_t width, std::uint32_t height, FrameScreenshot* screenshot = nullptr);
 
     // First call closes presentation, device, surface, messenger, instance, volk and loader.
     // Repeated calls return the cached result without touching the OS again.

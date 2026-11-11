@@ -17,6 +17,7 @@ namespace ar::runtime {
 namespace {
 
 constexpr std::uint32_t kApiVersion1_3 = rhi::makeApiVersion(1, 3);
+constexpr double kWindowEventWaitSeconds = 0.05;
 
 core::ResultKind resultKindFor(core::ErrorCategory category) noexcept {
     switch (category) {
@@ -257,7 +258,8 @@ const rhi::CapabilityReport& RuntimeSession::report() const noexcept {
     return m_impl->report;
 }
 
-std::expected<bool, core::Error> RuntimeSession::presentFrame(rhi::FrameScreenshot* screenshot) {
+std::expected<FrameStatus, core::Error>
+RuntimeSession::presentFrame(rhi::FrameScreenshot* screenshot) {
     if (m_impl->closed || !m_impl->window) {
         return std::unexpected(makeError(
             core::ErrorCategory::InvalidState,
@@ -270,21 +272,26 @@ std::expected<bool, core::Error> RuntimeSession::presentFrame(rhi::FrameScreensh
     auto& window = *m_impl->window;
     window.pollEvents();
     if (window.shouldClose()) {
-        return false;
+        return FrameStatus::Closed;
     }
     const auto size = window.framebufferSize();
     if (window.isMinimized() || size.width <= 0 || size.height <= 0) {
-        m_impl->frameError = makeError(
-            core::ErrorCategory::InitializationFailed,
-            core::ErrorStage::Capability,
-            "the window no longer has a drawable framebuffer");
-    } else if (auto presented = m_impl->rhi->presentFrame(screenshot); !presented) {
-        m_impl->frameError = std::move(presented.error());
+        window.waitEvents(kWindowEventWaitSeconds);
+        return window.shouldClose() ? FrameStatus::Closed : FrameStatus::Paused;
     }
-    if (m_impl->frameError) {
+    const auto presented = m_impl->rhi->presentFrame(
+        static_cast<std::uint32_t>(size.width),
+        static_cast<std::uint32_t>(size.height),
+        screenshot);
+    if (!presented) {
+        m_impl->frameError = std::move(presented.error());
         return std::unexpected(*m_impl->frameError);
     }
-    return true;
+    if (*presented == rhi::PresentStatus::Retry) {
+        window.waitEvents(kWindowEventWaitSeconds);
+        return window.shouldClose() ? FrameStatus::Closed : FrameStatus::Paused;
+    }
+    return FrameStatus::Presented;
 }
 
 core::EndResult RuntimeSession::close() {

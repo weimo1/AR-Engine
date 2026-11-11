@@ -162,10 +162,12 @@ int wmain(int argc, wchar_t** argv) {
     while (!options->frames || presented < *options->frames) {
         const bool capture = options->screenshot && presented + 1 == *options->frames;
         const auto frame = (*session)->presentFrame(capture ? &screenshot : nullptr);
-        if (!frame || !*frame) {
+        if (!frame || *frame == ar::runtime::FrameStatus::Closed) {
             break;
         }
-        ++presented;
+        if (*frame == ar::runtime::FrameStatus::Presented) {
+            ++presented;
+        }
     }
     const ar::core::EndResult result = (*session)->close();
     std::printf("presented_frames=%llu\n", presented);

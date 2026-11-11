@@ -289,6 +289,7 @@
         "runtime-summary-capability",
         "runtime-summary-output-failure",
         "runtime-system-development",
+        "sample-resize",
         "runtime-system-inspect",
         "platform-window-create",
         "platform-window-vulkan-extensions"
@@ -301,6 +302,7 @@
         "sample-triangle-screenshot",
         "platform-window-vulkan-extensions",
         "runtime-system-development",
+        "sample-resize",
         "runtime-system-inspect"
       ]
     },
@@ -563,6 +565,7 @@
         "runtime-summary-capability",
         "runtime-summary-output-failure",
         "runtime-system-development",
+        "sample-resize",
         "runtime-system-inspect",
         "platform-window-create",
         "platform-window-vulkan-extensions"
@@ -575,6 +578,7 @@
         "sample-triangle-screenshot",
         "platform-window-vulkan-extensions",
         "runtime-system-development",
+        "sample-resize",
         "runtime-system-inspect"
       ]
     },
