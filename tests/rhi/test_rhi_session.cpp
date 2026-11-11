@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
@@ -268,6 +269,52 @@ TEST_CASE("a real Vulkan 1.3 graphics device starts and closes", "[rhi-device-cr
 #endif
     CHECK(session.close().resourcesReleased);
     CHECK_FALSE(session.graphicsDeviceInfo().has_value());
+    finishSession(*diagnostics, runId);
+    CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
+}
+
+TEST_CASE("VMA buffers enforce memory access and handle lifetime", "[rhi-vma-buffer]") {
+    const std::string runId = "rhi-vma-buffer";
+    const auto directory = freshRunDirectory(runId);
+    auto diagnostics = makeSession(directory, runId);
+    rhi::QueryConfig config;
+    config.requestedApi = rhi::makeApiVersion(1, 3);
+    config.createGraphicsDevice = true;
+    auto opened = rhi::RhiSession::open(config, *diagnostics);
+    REQUIRE(opened);
+    auto& session = **opened;
+#ifdef _DEBUG
+    REQUIRE(session.graphicsDeviceInfo()->validationEnabled);
+#endif
+    CHECK_FALSE(session.createBuffer({0, rhi::BufferMemory::HostVisible}));
+    CHECK_FALSE(session.createBuffer({UINT64_MAX, rhi::BufferMemory::HostVisible}));
+    const auto host = session.createBuffer({16, rhi::BufferMemory::HostVisible});
+    INFO((host ? "" : host.error().message));
+    REQUIRE(host);
+    const auto local = session.createBuffer({16, rhi::BufferMemory::DeviceLocal});
+    REQUIRE(local);
+    const std::array data{std::byte{1}, std::byte{7}, std::byte{255}, std::byte{42}};
+    std::array<std::byte, data.size()> read{};
+    REQUIRE(session.writeBuffer(*host, 12, data));
+    REQUIRE(session.readBuffer(*host, 12, read));
+    CHECK(read == data);
+    CHECK_FALSE(session.readBuffer(*host, 13, read));
+    CHECK_FALSE(session.writeBuffer(*host, UINT64_MAX, data));
+    CHECK_FALSE(session.writeBuffer(*local, 0, data));
+    CHECK_FALSE(session.readBuffer(*local, 0, read));
+    REQUIRE(session.destroyBuffer(*host));
+    const auto replacement = session.createBuffer({16, rhi::BufferMemory::HostVisible});
+    REQUIRE(replacement);
+    CHECK(*replacement != *host);
+    CHECK_FALSE(session.readBuffer(*host, 0, read));
+    CHECK_FALSE(session.destroyBuffer(*host));
+    REQUIRE(session.close().resourcesReleased);
+    CHECK_FALSE(session.createBuffer({16, rhi::BufferMemory::HostVisible}));
+    auto reopened = rhi::RhiSession::open(config, *diagnostics);
+    REQUIRE(reopened);
+    REQUIRE((*reopened)->createBuffer({16, rhi::BufferMemory::HostVisible}));
+    CHECK_FALSE((*reopened)->destroyBuffer(*replacement));
+    REQUIRE((*reopened)->close().resourcesReleased);
     finishSession(*diagnostics, runId);
     CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
 }

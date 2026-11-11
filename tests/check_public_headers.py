@@ -17,6 +17,7 @@ EXPECTED_STEMS = (
     "header_diagnostics",
     "header_rhi_loader_source",
     "header_rhi_capabilities",
+    "header_rhi_buffer",
     "header_rhi_session",
     "header_runtime_config",
     "header_runtime_session",

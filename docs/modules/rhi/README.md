@@ -1,5 +1,21 @@
 # rhi 模块
 
+## P2a 资源与上传
+
+`RhiSession` 在逻辑设备就绪后组合私有 `resources/`。资源层持有一个 VMA allocator，动态 Vulkan 入口来自现有加载器。VMA 实现只在一个私有编译单元实例化。Buffer 和 Image 各自绑定 allocation，ImageView 借用所属 Image。仅能力查询的会话沿用既有入口。
+
+调用方通过类型化槽位和代数访问资源。释放请求使句柄立即失效。有存活 view 的 Image 拒绝释放，避免隐式撤销调用方持有的 view。GPU 操作引用底层资源直到最后一次相关提交完成，资源层在完成后销毁对象和 allocation，再允许槽位复用。
+
+上传暂用图形队列和 staging Buffer，使用同一队列的有序提交与 fence 维护可轮询、可等待的完成令牌。上传就绪与资源最后使用是各自的记录。RHI 在非一致内存写入后 flush，在完成读回并映射后按需 invalidate。关闭时收敛在途操作，按 view、资源、allocator、设备顺序释放。部分创建失败回滚已取得资源。
+
+当批行为见 [P2a 方案](../../../openspec/changes/p2a-resources-upload/proposal.md)。
+
+### T09 Buffer 接口
+
+`RhiSession` 将创建、读写和释放委托给 `DeviceResources`。首次有效创建请求初始化 allocator，失败返回 Vulkan 错误且允许后续重试。Buffer 声明正字节数和内存类别，大小受设备限制。当前 Buffer 用途为 transfer source 与 destination。Host-visible Buffer 允许按字节范围读写，Device-local Buffer 拒绝直接 CPU 访问，即使内存类型也可映射。
+
+资源层按操作映射和解除映射，写入后 flush，读取前 invalidate。槽位与代数共同校验句柄，代数在进程内不会随会话重置。T09 的 Buffer 尚无提交入口，显式释放可立即回收，关闭会回收其余 Buffer，再销毁 allocator 和设备。
+
 ## P1a 逻辑设备与 Validation
 
 `RhiSession::open` 通过 `QueryConfig::createGraphicsDevice` 显式启用逻辑设备。查询模式仍只做 P0 能力探测。创建设备要求请求与物理设备的 Vulkan API 均至少为 1.3，并要求 `dynamicRendering`、`synchronization2` 和至少一个可用 graphics 队列。默认按枚举顺序选择第一个符合条件的设备，指定索引时只检查该设备。首个可用 graphics 队列族内创建一个队列，只启用本切片需要的两项核心特性。surface、present 与 swapchain 的能力选择在呈现切片接入。

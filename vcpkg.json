@@ -10,6 +10,7 @@
     "vulkan-headers",
     "volk",
     "glfw3",
-    "stb"
+    "stb",
+    "vulkan-memory-allocator"
   ]
 }

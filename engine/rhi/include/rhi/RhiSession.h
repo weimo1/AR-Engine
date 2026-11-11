@@ -4,6 +4,8 @@
 #include <expected>
 #include <memory>
 #include <optional>
+#include <span>
+#include <cstddef>
 #include <string>
 #include <variant>
 #include <vector>
@@ -11,6 +13,7 @@
 #include "core/Diagnostics.h"
 #include "core/Error.h"
 #include "rhi/Capabilities.h"
+#include "rhi/Buffer.h"
 #include "rhi/LoaderSource.h"
 
 namespace ar::rhi {
@@ -127,6 +130,14 @@ public:
     // A failed frame stops further submissions until the session is closed.
     [[nodiscard]] std::expected<PresentStatus, core::Error>
     presentFrame(std::uint32_t width, std::uint32_t height, FrameScreenshot* screenshot = nullptr);
+
+    [[nodiscard]] std::expected<BufferHandle, core::Error> createBuffer(BufferDesc desc);
+    // Byte offsets refer to the logical size. Only HostVisible buffers allow direct CPU access.
+    [[nodiscard]] std::expected<void, core::Error>
+    writeBuffer(BufferHandle handle, std::uint64_t offset, std::span<const std::byte> bytes);
+    [[nodiscard]] std::expected<void, core::Error>
+    readBuffer(BufferHandle handle, std::uint64_t offset, std::span<std::byte> bytes);
+    [[nodiscard]] std::expected<void, core::Error> destroyBuffer(BufferHandle handle);
 
     // First call closes presentation, device, surface, messenger, instance, volk and loader.
     // Repeated calls return the cached result without touching the OS again.

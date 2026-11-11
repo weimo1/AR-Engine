@@ -1,8 +1,16 @@
 find_package(volk CONFIG REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 
 add_library(ar_rhi STATIC
     src/vulkan/Presentation.cpp
     src/vulkan/RhiSession.cpp
+    src/vulkan/resources/DeviceResources.cpp
+    src/vulkan/resources/Vma.cpp
+)
+
+target_compile_definitions(ar_rhi PRIVATE
+    VMA_STATIC_VULKAN_FUNCTIONS=0
+    VMA_DYNAMIC_VULKAN_FUNCTIONS=1
 )
 
 target_include_directories(ar_rhi
@@ -24,6 +32,7 @@ target_link_libraries(ar_rhi
         ar_cxx_flags
     PRIVATE
         volk::volk
+        GPUOpen::VulkanMemoryAllocator
 )
 
 set_target_properties(ar_rhi PROPERTIES FOLDER "Engine")

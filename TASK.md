@@ -6,7 +6,7 @@
 
 ## 当前阶段
 
-**P1a 首个画面**：窗口 → device → swapchain → 三角形 → 截图。P1/P2 以 Vulkan 1.3 为开发基线（Dynamic Rendering、Synchronization2）。本机 RTX 4060 Laptop GPU 在 621.01 驱动下实测设备 API 为 1.4.357，产品目标 1.4 与 Descriptor Heap 另行验收。
+**P2a 资源与上传**：[方案与验收](openspec/changes/p2a-resources-upload/proposal.md)。P1a 已完成人工验收。开发基线为 Vulkan 1.3（Dynamic Rendering、Synchronization2）。本机 RTX 4060 Laptop GPU 在 621.01 驱动下实测设备 API 为 1.4.357。
 
 ## 任务队列
 
@@ -31,8 +31,23 @@
 - [x] T06 resize、最小化与关闭：真机验证缩放重建、暂停恢复、截图尺寸及有序关闭，双配置各 61/61、零编译警告，Debug 零 Validation 错误，独立评审通过。
   - 目标：swapchain 过期/尺寸变化时重建；最小化时暂停渲染不忙等；关闭时等待在途帧后按序释放。
   - 验收：CTest `sample-resize`（标签 `gpu`，程序内改变窗口尺寸、最小化再恢复、继续出帧，Validation 零错误）；门禁全绿。
-- [ ] T07 [人工] P1 里程碑验收
+- [x] T07 [人工] P1 里程碑验收：用户实跑示例，报告 `presented_frames=1141`，运行无异常。
   - 用户运行 `examples/triangle` 看画面、拖动窗口；确认后在本页写出 P2a（Buffer/Image/VMA/上传）的任务。
+
+- [x] T09 VMA 与 Buffer：VMA 3.3.0 真机创建两种 Buffer，主机读写、范围与失效句柄、关闭回收通过；双配置各 62/62、零编译警告，Debug 零 Validation 错误，独立评审通过。
+  - 目标：按现有 vcpkg baseline 接入 VMA，由 RHI 持有设备级 allocator，提供类型化 Buffer 句柄及受控创建、释放。覆盖 host-visible 与 device-local 用途。
+  - 验收：`rhi-vma-buffer` 真机创建两种 Buffer，验证 host-visible 写读一致、过期句柄拒绝和按序关闭。GPU 标签，Debug 零 Validation 错误，完整门禁与独立评审通过。
+- [ ] T10 Image 与 ImageView
+  - 目标：用同一 allocator 创建最小 2D Image，按类型化句柄建立 view，并约束 Image 与 view 的释放顺序。
+  - 验收：`rhi-vma-image-view` 真机创建和释放，验证非法描述及存在 view 时禁止销毁 Image。GPU 标签，Debug 零 Validation 错误，完整门禁与独立评审通过。
+- [ ] T11 Buffer 与 Image 上传
+  - 目标：使用图形队列上的 staging 传输，返回可轮询或等待的完成令牌。为最小调用方提供 Buffer 字节与 Image 像素的数值读回。
+  - 验收：`rhi-upload-readback` 在真机上传确定数据，经 GPU 复制后读回并逐字节比较，同时检查同步 Validation。GPU 标签，完整门禁与独立评审通过。
+- [ ] T12 在途资源退役
+  - 目标：释放请求立即使 CPU 句柄失效。资源、staging 与槽位按最后一次相关提交完成回收。
+  - 验收：`rhi-resource-retirement` 受控测试验证完成前不回收，完成后旧句柄仍无效。GPU 用例 `rhi-upload-retirement` 验证在途上传释放及会话关闭。完整门禁与独立评审通过。
+- [ ] T13 [人工] P2a 里程碑验收
+  - 用户确认 P2a 的数值读回、资源退役和 P1 回归结果后，决定是否进入 P2b。
 
 ## 人工待办（不阻塞队列）
 

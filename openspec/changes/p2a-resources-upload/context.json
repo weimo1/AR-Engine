@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "objective": "P2a 验收 VMA、Buffer/Image/View、上传读回和在途资源退役。",
+  "non_goals": ["Bindless 与 Descriptor Heap 写入", "资产加载与通用传输队列"],
+  "tags": ["native"],
+  "documents": [
+    {"path": "TASK.md", "purpose": "requirements", "status": "confirmed", "basis": "P2a 任务与验收"},
+    {"path": "docs/modules/rhi/README.md", "purpose": "architecture", "status": "reference", "basis": "RHI 所有权与生命周期"}
+  ],
+  "skills": ["ar-cpp-oop-style", "ar-e2e-side-effect-safety", "ar-context7"],
+  "write_paths": ["TASK.md", "openspec/changes/p2a-resources-upload/**", "docs/modules/rhi/README.md", "engine/rhi/**", "vcpkg.json", "tests/**", "workflow/p0-checks.json"]
+}

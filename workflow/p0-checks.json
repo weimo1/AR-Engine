@@ -256,6 +256,7 @@
         "rhi-device-none",
         "rhi-device-create",
         "rhi-device-vulkan14-heap",
+        "rhi-vma-buffer",
         "sample-clear-frames",
         "sample-triangle-frames",
         "sample-triangle-screenshot",
@@ -297,6 +298,7 @@
       "gpu_cases": [
         "rhi-device-create",
         "rhi-device-vulkan14-heap",
+        "rhi-vma-buffer",
         "sample-clear-frames",
         "sample-triangle-frames",
         "sample-triangle-screenshot",
@@ -532,6 +534,7 @@
         "rhi-device-none",
         "rhi-device-create",
         "rhi-device-vulkan14-heap",
+        "rhi-vma-buffer",
         "sample-clear-frames",
         "sample-triangle-frames",
         "sample-triangle-screenshot",
@@ -573,6 +576,7 @@
       "gpu_cases": [
         "rhi-device-create",
         "rhi-device-vulkan14-heap",
+        "rhi-vma-buffer",
         "sample-clear-frames",
         "sample-triangle-frames",
         "sample-triangle-screenshot",

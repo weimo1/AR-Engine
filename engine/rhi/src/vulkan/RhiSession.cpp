@@ -21,6 +21,7 @@
 #include "Presentation.h"
 #include "TestingHooks.h"
 #include "VulkanResult.h"
+#include "resources/DeviceResources.h"
 
 namespace ar::rhi {
 
@@ -276,8 +277,10 @@ struct RhiSession::Impl {
     VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     VkDevice graphicsDevice = VK_NULL_HANDLE;
+    VkPhysicalDevice graphicsPhysical = VK_NULL_HANDLE;
     VkQueue graphicsQueue = VK_NULL_HANDLE;
     std::optional<detail::Presentation> presenter;
+    std::optional<detail::DeviceResources> resources;
     std::optional<GraphicsDeviceInfo> graphicsInfo;
     bool ownsProcess = false;
     bool volkInitialized = false;
@@ -901,6 +904,7 @@ struct RhiSession::Impl {
                 core::ErrorStage::Capability,
                 "vkGetDeviceQueue did not return the graphics queue"));
         }
+        graphicsPhysical = physical;
         if (heapLimits) {
             for (const char* command :
                  {"vkWriteResourceDescriptorsEXT",
@@ -1082,6 +1086,8 @@ struct RhiSession::Impl {
             retainPresentation = presenter->hasSwapchain();
             presenter.reset();
         }
+        // These buffers have no GPU consumers in the current slice.
+        resources.reset();
         graphicsInfo.reset();
         if (graphicsDevice != VK_NULL_HANDLE && !retainPresentation) {
 #ifdef AR_ENABLE_TEST_HOOKS
@@ -1396,6 +1402,55 @@ RhiSession::presentFrame(std::uint32_t width, std::uint32_t height, FrameScreens
             "this RHI session has no active swapchain"));
     }
     return m_impl->presenter->presentFrame({width, height}, screenshot);
+}
+
+std::expected<BufferHandle, core::Error> RhiSession::createBuffer(BufferDesc desc) {
+    if (m_impl->closed || !m_impl->graphicsDevice || m_impl->report.capabilitySource.simulated) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "buffer creation requires an open real graphics device"));
+    }
+    if (!m_impl->resources) {
+        m_impl->resources.emplace(
+            m_impl->instance,
+            m_impl->graphicsPhysical,
+            m_impl->graphicsDevice,
+            compatibilityVersion(m_impl->config.requestedApi));
+    }
+    return m_impl->resources->createBuffer(desc);
+}
+
+std::expected<void, core::Error> RhiSession::writeBuffer(
+    BufferHandle handle, std::uint64_t offset, std::span<const std::byte> bytes) {
+    if (!m_impl->resources) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "there are no active buffer resources"));
+    }
+    return m_impl->resources->writeBuffer(handle, offset, bytes);
+}
+
+std::expected<void, core::Error>
+RhiSession::readBuffer(BufferHandle handle, std::uint64_t offset, std::span<std::byte> bytes) {
+    if (!m_impl->resources) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "there are no active buffer resources"));
+    }
+    return m_impl->resources->readBuffer(handle, offset, bytes);
+}
+
+std::expected<void, core::Error> RhiSession::destroyBuffer(BufferHandle handle) {
+    if (!m_impl->resources) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "there are no active buffer resources"));
+    }
+    return m_impl->resources->destroyBuffer(handle);
 }
 
 #ifdef AR_ENABLE_TEST_HOOKS
