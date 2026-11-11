@@ -19,6 +19,7 @@
     "tests/check_public_headers.py", "workflow/p0-checks.json",
     "docs/modules/rhi/README.md", "docs/实施路线与阶段计划.md", "engine/rhi/**", "tests/rhi/**", "tests/support/rhi_fixture/**",
     "docs/modules/runtime/README.md", "engine/runtime/**", "examples/triangle/**", "tests/triangle/**",
-    "engine/core/include/core/Diagnostics.h", "engine/core/src/Diagnostics.cpp", "scripts/p0_build_identity.py"
+    "engine/core/include/core/Diagnostics.h", "engine/core/src/Diagnostics.cpp", "scripts/p0_build_identity.py",
+    "shaders/**", ".github/workflows/p0-cpu-build.yml"
   ]
 }

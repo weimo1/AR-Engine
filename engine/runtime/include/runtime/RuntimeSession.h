@@ -43,7 +43,7 @@ public:
     [[nodiscard]] const rhi::CapabilityReport& report() const noexcept;
 
     // True after accepting one presentation, false when the window was closed.
-    [[nodiscard]] std::expected<bool, core::Error> presentClearFrame();
+    [[nodiscard]] std::expected<bool, core::Error> presentFrame();
 
     // First call closes rhi, then finishes the diagnostic run. Repeated calls return the cached
     // result without cleaning again or writing a second summary.

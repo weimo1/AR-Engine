@@ -175,9 +175,16 @@ set_tests_properties(platform-window-vulkan-extensions PROPERTIES LABELS gpu)
 
 add_test(NAME sample-clear-frames
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_clear_frames.py"
-        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>"
+        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" clear
 )
-set_tests_properties(sample-clear-frames PROPERTIES
+add_test(NAME sample-triangle-frames
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_clear_frames.py"
+        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" triangle
+)
+add_test(NAME shader-build COMMAND ${CMAKE_COMMAND}
+    "-DVALIDATOR=${AR_SPIRV_VAL}" "-DSHADER_DIR=${CMAKE_BINARY_DIR}/shaders"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_shaders.cmake")
+set_tests_properties(sample-clear-frames sample-triangle-frames PROPERTIES
     LABELS gpu TIMEOUT 50 ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1"
 )
 

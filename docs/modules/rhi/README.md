@@ -16,6 +16,10 @@ Debug 创建设备时，instance 启用 `VK_LAYER_KHRONOS_validation` 和 `VK_EX
 
 单交换链切片遇到失效或零尺寸时停止当前运行，携带可用的 Vulkan 错误码。退出先停提交，再等待两套上下文中可能在途的 acquire、提交和呈现 fence。设备丢失也执行这一步，fence 等待返回设备丢失时按规范结束其在途状态。若无法确认在途状态已结束，保留资源链直到进程退出并拒绝再次打开会话。正常释放顺序为帧资源、交换链、设备、surface、instance 及 loader。关闭与部分启动失败共用释放路径。运行中的交换链重建在 T06 处理。
 
+### 最小三角形管线
+
+示例在启动前读取构建目录中的顶点、片元 SPIR-V，Runtime 将两段字码随设备配置传给 RHI。呈现对象按交换链颜色格式创建 Dynamic Rendering 管线。顶点位置和颜色由顶点 Shader 根据索引生成。管线无描述符、顶点缓冲或深度附件，视口和裁剪范围取交换链尺寸。Shader module 在管线创建后销毁，管线和 layout 在帧同步完成后销毁。未提供 Shader 时仍可运行清屏路径。
+
 ### Vulkan 1.4 与 Descriptor Heap
 
 图形设备按请求的 API 版本选卡。loader 和设备预检比较 variant、主版本与次版本，补丁号保留在报告中。1.3 保持既有必需特性；显式请求 1.4 时记录 Maintenance 5/6、Dynamic Rendering Local Read、Host Image Copy 的支持状态，等对应调用方接入时才启用其功能。

@@ -5,11 +5,14 @@ import sys
 from tempfile import TemporaryDirectory
 
 
-def check(executable: str, output_root: Path, configuration: str) -> None:
+def check(executable: str, output_root: Path, configuration: str, mode: str) -> None:
     output_root.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(prefix="clear-frames-", dir=output_root) as directory:
+    with TemporaryDirectory(prefix=f"{mode}-frames-", dir=output_root) as directory:
+        args = [executable, "--frames", "60", "--hidden", "--output", directory]
+        if mode == "clear":
+            args.append("--clear-only")
         run = subprocess.run(
-            [executable, "--frames", "60", "--hidden", "--output", directory],
+            args,
             capture_output=True, text=True, timeout=40, check=False,
         )
         print(run.stdout, end="")
@@ -36,6 +39,8 @@ def check(executable: str, output_root: Path, configuration: str) -> None:
             raise RuntimeError(f"missing presentation or cleanup diagnostics: {ids}")
         if configuration == "Debug" and "rhi.validation.enabled" not in ids:
             raise RuntimeError("Debug did not enable Vulkan Validation")
+        if ("rhi.presentation.triangle-pipeline" in ids) != (mode == "triangle"):
+            raise RuntimeError(f"unexpected graphics pipeline state for {mode}: {ids}")
         errors = [event for event in events if event["event_id"] == "rhi.validation.error"]
         if errors:
             raise RuntimeError(f"Vulkan Validation errors: {errors}")
@@ -43,4 +48,4 @@ def check(executable: str, output_root: Path, configuration: str) -> None:
 
 
 if __name__ == "__main__":
-    check(sys.argv[1], Path(sys.argv[2]), sys.argv[3])
+    check(sys.argv[1], Path(sys.argv[2]), sys.argv[3], sys.argv[4])

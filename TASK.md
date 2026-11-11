@@ -22,7 +22,7 @@
 - [x] T03 swapchain、帧循环与清屏示例：Vulkan 1.3 窗口路径以呈现 fence 回收两套帧上下文，真机清屏 60 帧；双配置各 57/57、零编译告警，Debug 同步检查零 Validation 错误，独立复审通过。
   - 目标：surface、present 队列、swapchain；帧上下文（2 帧在途，fence/semaphore，不每帧 waitIdle）；新增可执行 `examples/triangle`（先只清屏），支持 `--frames N` 跑完退出。runtime 负责组合 platform + rhi。
   - 验收：CTest `sample-clear-frames`（标签 `gpu`，跑 60 帧 exit 0，诊断里 Validation 错误数为 0）；门禁全绿。
-- [ ] T04 Shader 构建与三角形
+- [x] T04 Shader 构建与三角形：Vulkan 1.3 SPIR-V 编译验证通过，真机三角形呈现 60 帧，双配置各 59/59、零编译警告，Debug 零 Validation 错误，独立评审通过。
   - 目标：CMake 用 glslc 把 `shaders/*.vert|frag` 编成 SPIR-V 并跑 spirv-val，产物进 `build/`；graphics pipeline（Dynamic Rendering）画一个顶点色三角形。
   - 验收：CTest `shader-build`（产物存在且通过 spirv-val）、`sample-triangle-frames`（标签 `gpu`）；门禁全绿。
 - [ ] T05 截图与像素验证

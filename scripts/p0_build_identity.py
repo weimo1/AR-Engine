@@ -40,6 +40,7 @@ INCLUDE_GLOBS = (
     "cmake/**/*",
     "engine/**/*",
     "examples/**/*",
+    "shaders/**/*",
     "tests/**/*",
     "scripts/p0_build_identity.py",
     "scripts/build_checks.py",

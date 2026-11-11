@@ -32,6 +32,11 @@ struct ExplicitDeviceIndex {
 
 using DeviceSelection = std::variant<FirstEnumerated, ExplicitDeviceIndex>;
 
+struct TriangleShaders {
+    std::vector<std::uint32_t> vertex;
+    std::vector<std::uint32_t> fragment;
+};
+
 struct Win32Presentation {
     // Borrowed HWND. Keep the window alive through close, or until process exit if
     // close reports a retained Presentation.
@@ -54,6 +59,7 @@ struct QueryConfig {
     // Opt-in for a Vulkan 1.4 graphics device. Unsupported requests fail explicitly.
     bool enableDescriptorHeap = false;
     std::optional<Win32Presentation> presentation;
+    std::optional<TriangleShaders> triangleShaders;
 };
 
 struct DescriptorHeapLimits {
@@ -109,7 +115,7 @@ public:
 
     // Success counts one submitted and accepted presentation, including VK_SUBOPTIMAL_KHR.
     // A failed frame stops further submissions until the session is closed.
-    [[nodiscard]] std::expected<void, core::Error> presentClearFrame();
+    [[nodiscard]] std::expected<void, core::Error> presentFrame();
 
     // First call closes presentation, device, surface, messenger, instance, volk and loader.
     // Repeated calls return the cached result without touching the OS again.

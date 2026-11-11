@@ -70,6 +70,27 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      - name: Install pinned Vulkan SDK shader tools
+        shell: pwsh
+        run: |
+          $toolDir = Join-Path $env:GITHUB_WORKSPACE 'build/tools/vulkan'
+          New-Item -ItemType Directory -Path $toolDir -Force | Out-Null
+          $installer = Join-Path $toolDir 'vulkan-sdk.exe'
+          Invoke-WebRequest -Uri 'https://vulkan.lunarg.com/sdk/download/1.4.363.0/windows/vulkan_sdk.exe' -OutFile $installer -TimeoutSec 300
+          $expectedHash = '94A82D378F7A5E3E54C9DB7D2FB7016AF136E14AC0A18DBF0F2F67A36352D141'
+          if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne $expectedHash) {
+            throw 'Pinned Vulkan SDK installer checksum mismatch'
+          }
+          $sdk = Join-Path $toolDir '1.4.363.0'
+          $arguments = '--root "{0}" --accept-licenses --default-answer --confirm-command install copy_only=1' -f $sdk
+          $process = Start-Process -FilePath $installer -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or
+              -not (Test-Path -LiteralPath (Join-Path $sdk 'Bin/glslc.exe') -PathType Leaf) -or
+              -not (Test-Path -LiteralPath (Join-Path $sdk 'Bin/spirv-val.exe') -PathType Leaf)) {
+            throw "Vulkan SDK shader tool installation failed (exit $($process.ExitCode))"
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "VULKAN_SDK=$sdk" -Encoding utf8
+
       # One command table drives everything: online vcpkg restore from the pinned baseline,
       # toolchain and dependency records, identity prepare/check, both configurations from a
       # real configure/build with the recorded cl command lines, CTest with the required case

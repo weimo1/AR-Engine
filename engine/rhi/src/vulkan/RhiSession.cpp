@@ -205,6 +205,16 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorStage::Validation,
             "Descriptor Heap requires a Vulkan 1.4 graphics device request");
     }
+    if (config.triangleShaders &&
+        (!config.presentation || config.triangleShaders->vertex.size() < 5 ||
+         config.triangleShaders->fragment.size() < 5 ||
+         config.triangleShaders->vertex.front() != 0x07230203u ||
+         config.triangleShaders->fragment.front() != 0x07230203u)) {
+        return makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "triangle shaders require presentation and valid SPIR-V headers");
+    }
     if (config.presentation &&
         (!config.createGraphicsDevice || !config.presentation->windowHandle ||
          config.presentation->width == 0 || config.presentation->height == 0)) {
@@ -922,9 +932,17 @@ struct RhiSession::Impl {
                     surface,
                     families.graphics,
                     families.present,
-                    {config.presentation->width, config.presentation->height});
+                    {config.presentation->width, config.presentation->height},
+                    config.triangleShaders ? &*config.triangleShaders : nullptr);
                 !opened) {
                 return opened;
+            }
+            if (config.triangleShaders) {
+                emitEvent(
+                    *diagnostics,
+                    core::LogLevel::Info,
+                    "rhi.presentation.triangle-pipeline",
+                    "Dynamic Rendering triangle pipeline created");
             }
             emitEvent(
                 *diagnostics,
@@ -1362,14 +1380,14 @@ std::optional<GraphicsDeviceInfo> RhiSession::graphicsDeviceInfo() const noexcep
     return m_impl->graphicsInfo;
 }
 
-std::expected<void, core::Error> RhiSession::presentClearFrame() {
+std::expected<void, core::Error> RhiSession::presentFrame() {
     if (!m_impl->presenter) {
         return std::unexpected(makeError(
             core::ErrorCategory::InvalidState,
             core::ErrorStage::Capability,
             "this RHI session has no active swapchain"));
     }
-    return m_impl->presenter->presentClearFrame();
+    return m_impl->presenter->presentFrame();
 }
 
 #ifdef AR_ENABLE_TEST_HOOKS

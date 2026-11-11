@@ -257,6 +257,8 @@
         "rhi-device-create",
         "rhi-device-vulkan14-heap",
         "sample-clear-frames",
+        "sample-triangle-frames",
+        "shader-build",
         "rhi-device-enhanced-unavailable",
         "rhi-device-missing-feature",
         "rhi-device-selection",
@@ -294,6 +296,7 @@
         "rhi-device-create",
         "rhi-device-vulkan14-heap",
         "sample-clear-frames",
+        "sample-triangle-frames",
         "platform-window-vulkan-extensions",
         "runtime-system-development",
         "runtime-system-inspect"
@@ -526,6 +529,8 @@
         "rhi-device-create",
         "rhi-device-vulkan14-heap",
         "sample-clear-frames",
+        "sample-triangle-frames",
+        "shader-build",
         "rhi-device-enhanced-unavailable",
         "rhi-device-missing-feature",
         "rhi-device-selection",
@@ -563,6 +568,7 @@
         "rhi-device-create",
         "rhi-device-vulkan14-heap",
         "sample-clear-frames",
+        "sample-triangle-frames",
         "platform-window-vulkan-extensions",
         "runtime-system-development",
         "runtime-system-inspect"

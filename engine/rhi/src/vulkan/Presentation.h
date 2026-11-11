@@ -10,6 +10,10 @@
 
 #include "core/Error.h"
 
+namespace ar::rhi {
+struct TriangleShaders;
+}
+
 namespace ar::rhi::detail {
 
 // Owns the swapchain and its frame resources. The parent closes it before releasing the device.
@@ -25,8 +29,9 @@ public:
         VkSurfaceKHR surface,
         std::uint32_t graphicsFamily,
         std::uint32_t presentFamily,
-        VkExtent2D framebuffer);
-    std::expected<void, core::Error> presentClearFrame();
+        VkExtent2D framebuffer,
+        const TriangleShaders* shaders);
+    std::expected<void, core::Error> presentFrame();
     std::optional<core::Error> close();
     [[nodiscard]] bool hasSwapchain() const noexcept {
         return m_swapchain != VK_NULL_HANDLE;
@@ -57,6 +62,8 @@ private:
     };
 
     std::expected<void, core::Error> createFrame(Frame& frame, std::uint32_t graphicsFamily);
+    std::expected<void, core::Error>
+    createTrianglePipeline(VkFormat format, const TriangleShaders& shaders);
     std::expected<void, core::Error> draw(Frame& frame);
     std::expected<void, core::Error> record(VkCommandBuffer commands, const Image& image);
     VkResult drain(Frame& frame, std::uint64_t timeout);
@@ -65,6 +72,8 @@ private:
     VkQueue m_graphicsQueue;
     VkQueue m_presentQueue;
     VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
+    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
+    VkPipeline m_pipeline = VK_NULL_HANDLE;
     VkExtent2D m_extent{};
     std::vector<Image> m_images;
     std::array<Frame, 2> m_frames{};

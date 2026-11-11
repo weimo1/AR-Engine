@@ -257,7 +257,7 @@ const rhi::CapabilityReport& RuntimeSession::report() const noexcept {
     return m_impl->report;
 }
 
-std::expected<bool, core::Error> RuntimeSession::presentClearFrame() {
+std::expected<bool, core::Error> RuntimeSession::presentFrame() {
     if (m_impl->closed || !m_impl->window) {
         return std::unexpected(makeError(
             core::ErrorCategory::InvalidState,
@@ -278,7 +278,7 @@ std::expected<bool, core::Error> RuntimeSession::presentClearFrame() {
             core::ErrorCategory::InitializationFailed,
             core::ErrorStage::Capability,
             "the window no longer has a drawable framebuffer");
-    } else if (auto presented = m_impl->rhi->presentClearFrame(); !presented) {
+    } else if (auto presented = m_impl->rhi->presentFrame(); !presented) {
         m_impl->frameError = std::move(presented.error());
     }
     if (m_impl->frameError) {

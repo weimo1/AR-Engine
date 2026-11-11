@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "VulkanResult.h"
+#include "rhi/RhiSession.h"
 
 namespace ar::rhi::detail {
 namespace {
@@ -54,7 +55,8 @@ std::expected<void, core::Error> Presentation::open(
     VkSurfaceKHR surface,
     std::uint32_t graphicsFamily,
     std::uint32_t presentFamily,
-    VkExtent2D framebuffer) {
+    VkExtent2D framebuffer,
+    const TriangleShaders* shaders) {
     if (!vkGetPhysicalDeviceSurfaceCapabilitiesKHR || !vkGetPhysicalDeviceSurfaceFormatsKHR ||
         !vkCreateSwapchainKHR || !vkDestroySwapchainKHR || !vkGetSwapchainImagesKHR ||
         !vkAcquireNextImageKHR || !vkQueuePresentKHR) {
@@ -194,6 +196,108 @@ std::expected<void, core::Error> Presentation::open(
             return created;
         }
     }
+    if (shaders) {
+        return createTrianglePipeline(*format, *shaders);
+    }
+    return {};
+}
+
+std::expected<void, core::Error>
+Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& shaders) {
+    VkPipelineLayoutCreateInfo layout{};
+    layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    if (auto created = create(
+            m_device, m_pipelineLayout, layout, vkCreatePipelineLayout, "vkCreatePipelineLayout");
+        !created) {
+        return created;
+    }
+
+    struct ShaderModules {
+        VkDevice device;
+        std::array<VkShaderModule, 2> handles{};
+        ~ShaderModules() {
+            for (auto handle : handles) {
+                if (handle) {
+                    vkDestroyShaderModule(device, handle, nullptr);
+                }
+            }
+        }
+    } modules{m_device};
+
+    const std::array bytecode{&shaders.vertex, &shaders.fragment};
+    const std::array stages{VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+    std::array<VkPipelineShaderStageCreateInfo, 2> stageInfos{};
+    for (std::size_t i = 0; i < stageInfos.size(); ++i) {
+        VkShaderModuleCreateInfo module{};
+        module.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        module.codeSize = bytecode[i]->size() * sizeof(std::uint32_t);
+        module.pCode = bytecode[i]->data();
+        if (auto created = create(
+                m_device, modules.handles[i], module, vkCreateShaderModule, "vkCreateShaderModule");
+            !created) {
+            return created;
+        }
+        stageInfos[i].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stageInfos[i].stage = stages[i];
+        stageInfos[i].module = modules.handles[i];
+        stageInfos[i].pName = "main";
+    }
+
+    VkPipelineVertexInputStateCreateInfo vertex{};
+    vertex.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    VkPipelineInputAssemblyStateCreateInfo assembly{};
+    assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    const VkViewport viewport{
+        0.0F,
+        0.0F,
+        static_cast<float>(m_extent.width),
+        static_cast<float>(m_extent.height),
+        0.0F,
+        1.0F};
+    const VkRect2D scissor{{0, 0}, m_extent};
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.pViewports = &viewport;
+    viewportState.scissorCount = 1;
+    viewportState.pScissors = &scissor;
+    VkPipelineRasterizationStateCreateInfo raster{};
+    raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.lineWidth = 1.0F;
+    VkPipelineMultisampleStateCreateInfo multisample{};
+    multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineColorBlendAttachmentState color{};
+    color.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo blend{};
+    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend.attachmentCount = 1;
+    blend.pAttachments = &color;
+    VkPipelineRenderingCreateInfo rendering{};
+    rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachmentFormats = &format;
+    VkGraphicsPipelineCreateInfo pipeline{};
+    pipeline.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipeline.pNext = &rendering;
+    pipeline.stageCount = static_cast<std::uint32_t>(stageInfos.size());
+    pipeline.pStages = stageInfos.data();
+    pipeline.pVertexInputState = &vertex;
+    pipeline.pInputAssemblyState = &assembly;
+    pipeline.pViewportState = &viewportState;
+    pipeline.pRasterizationState = &raster;
+    pipeline.pMultisampleState = &multisample;
+    pipeline.pColorBlendState = &blend;
+    pipeline.layout = m_pipelineLayout;
+    const VkResult result =
+        vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &m_pipeline);
+    if (result != VK_SUCCESS) {
+        return std::unexpected(failed("vkCreateGraphicsPipelines", result));
+    }
     return {};
 }
 
@@ -278,6 +382,10 @@ Presentation::record(VkCommandBuffer commands, const Image& image) {
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachments = &color;
     vkCmdBeginRendering(commands, &rendering);
+    if (m_pipeline) {
+        vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+        vkCmdDraw(commands, 3, 1, 0, 0);
+    }
     vkCmdEndRendering(commands);
 
     barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
@@ -390,7 +498,7 @@ std::expected<void, core::Error> Presentation::draw(Frame& frame) {
     return {};
 }
 
-std::expected<void, core::Error> Presentation::presentClearFrame() {
+std::expected<void, core::Error> Presentation::presentFrame() {
     if (m_failed || !m_swapchain) {
         return std::unexpected(
             core::Error{
@@ -445,6 +553,12 @@ std::optional<core::Error> Presentation::close() {
         if (image.view) {
             vkDestroyImageView(m_device, image.view, nullptr);
         }
+    }
+    if (m_pipeline) {
+        vkDestroyPipeline(m_device, std::exchange(m_pipeline, VK_NULL_HANDLE), nullptr);
+    }
+    if (m_pipelineLayout) {
+        vkDestroyPipelineLayout(m_device, std::exchange(m_pipelineLayout, VK_NULL_HANDLE), nullptr);
     }
     vkDestroySwapchainKHR(m_device, std::exchange(m_swapchain, VK_NULL_HANDLE), nullptr);
     return error;

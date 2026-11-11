@@ -4,9 +4,12 @@
 #include <cstdio>
 #include <cwchar>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include "runtime/RuntimeSession.h"
 
@@ -15,6 +18,7 @@ namespace {
 struct Options {
     std::optional<std::uint32_t> frames;
     bool visible = true;
+    bool clearOnly = false;
     std::filesystem::path output = AR_TRIANGLE_OUTPUT_ROOT;
 };
 
@@ -24,6 +28,8 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
         const std::wstring_view arg = argv[index];
         if (arg == L"--hidden") {
             options.visible = false;
+        } else if (arg == L"--clear-only") {
+            options.clearOnly = true;
         } else if (arg == L"--frames" && !options.frames && index + 1 < argc) {
             const std::wstring_view value = argv[++index];
             if (value.empty() || value.find_first_not_of(L"0123456789") != value.npos) {
@@ -50,6 +56,23 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
     return options;
 }
 
+std::optional<std::vector<std::uint32_t>> readShader(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    const auto bytes = static_cast<std::streamoff>(input.tellg());
+    constexpr auto wordSize = static_cast<std::streamoff>(sizeof(std::uint32_t));
+    constexpr std::streamoff maxShaderBytes = 1 << 20;
+    if (bytes < 5 * wordSize || bytes > maxShaderBytes || bytes % wordSize != 0) {
+        std::fwprintf(stderr, L"Missing or invalid shader: %ls\n", path.c_str());
+        return std::nullopt;
+    }
+    std::vector<std::uint32_t> words(static_cast<std::size_t>(bytes / wordSize));
+    if (!input.seekg(0).read(reinterpret_cast<char*>(words.data()), bytes)) {
+        std::fwprintf(stderr, L"Could not read shader: %ls\n", path.c_str());
+        return std::nullopt;
+    }
+    return words;
+}
+
 void printError(const ar::core::Error& error) {
     std::fprintf(stderr, "%s: %s", ar::core::toString(error.category), error.message.c_str());
     if (error.origin) {
@@ -67,7 +90,9 @@ void printError(const ar::core::Error& error) {
 int wmain(int argc, wchar_t** argv) {
     const auto options = parse(argc, argv);
     if (!options) {
-        std::fputs("usage: ar_triangle [--frames N] [--hidden] [--output DIRECTORY]\n", stderr);
+        std::fputs(
+            "usage: ar_triangle [--frames N] [--hidden] [--clear-only] [--output DIRECTORY]\n",
+            stderr);
         return 2;
     }
 
@@ -75,6 +100,16 @@ int wmain(int argc, wchar_t** argv) {
     config.mode = ar::runtime::QueryMode::Development;
     config.query.requestedApi = ar::rhi::makeApiVersion(1, 3);
     config.query.createGraphicsDevice = true;
+    if (!options->clearOnly) {
+        const std::filesystem::path shaderDir = AR_TRIANGLE_SHADER_DIR;
+        auto vertex = readShader(shaderDir / "triangle.vert.spv");
+        auto fragment = readShader(shaderDir / "triangle.frag.spv");
+        if (!vertex || !fragment) {
+            return 1;
+        }
+        config.query.triangleShaders =
+            ar::rhi::TriangleShaders{std::move(*vertex), std::move(*fragment)};
+    }
     config.window.emplace();
     config.window->title = "AR Engine Triangle";
     config.window->visible = options->visible;
@@ -93,7 +128,7 @@ int wmain(int argc, wchar_t** argv) {
 
     unsigned long long presented = 0;
     while (!options->frames || presented < *options->frames) {
-        const auto frame = (*session)->presentClearFrame();
+        const auto frame = (*session)->presentFrame();
         if (!frame || !*frame) {
             break;
         }
