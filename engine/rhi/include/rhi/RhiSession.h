@@ -37,6 +37,12 @@ struct TriangleShaders {
     std::vector<std::uint32_t> fragment;
 };
 
+struct FrameScreenshot {
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::vector<std::uint8_t> rgba;
+};
+
 struct Win32Presentation {
     // Borrowed HWND. Keep the window alive through close, or until process exit if
     // close reports a retained Presentation.
@@ -60,6 +66,7 @@ struct QueryConfig {
     bool enableDescriptorHeap = false;
     std::optional<Win32Presentation> presentation;
     std::optional<TriangleShaders> triangleShaders;
+    bool enableScreenshot = false;
 };
 
 struct DescriptorHeapLimits {
@@ -115,7 +122,8 @@ public:
 
     // Success counts one submitted and accepted presentation, including VK_SUBOPTIMAL_KHR.
     // A failed frame stops further submissions until the session is closed.
-    [[nodiscard]] std::expected<void, core::Error> presentFrame();
+    [[nodiscard]] std::expected<void, core::Error>
+    presentFrame(FrameScreenshot* screenshot = nullptr);
 
     // First call closes presentation, device, surface, messenger, instance, volk and loader.
     // Repeated calls return the cached result without touching the OS again.

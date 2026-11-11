@@ -258,6 +258,7 @@
         "rhi-device-vulkan14-heap",
         "sample-clear-frames",
         "sample-triangle-frames",
+        "sample-triangle-screenshot",
         "shader-build",
         "rhi-device-enhanced-unavailable",
         "rhi-device-missing-feature",
@@ -297,6 +298,7 @@
         "rhi-device-vulkan14-heap",
         "sample-clear-frames",
         "sample-triangle-frames",
+        "sample-triangle-screenshot",
         "platform-window-vulkan-extensions",
         "runtime-system-development",
         "runtime-system-inspect"
@@ -530,6 +532,7 @@
         "rhi-device-vulkan14-heap",
         "sample-clear-frames",
         "sample-triangle-frames",
+        "sample-triangle-screenshot",
         "shader-build",
         "rhi-device-enhanced-unavailable",
         "rhi-device-missing-feature",
@@ -569,6 +572,7 @@
         "rhi-device-vulkan14-heap",
         "sample-clear-frames",
         "sample-triangle-frames",
+        "sample-triangle-screenshot",
         "platform-window-vulkan-extensions",
         "runtime-system-development",
         "runtime-system-inspect"

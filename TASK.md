@@ -25,7 +25,7 @@
 - [x] T04 Shader 构建与三角形：Vulkan 1.3 SPIR-V 编译验证通过，真机三角形呈现 60 帧，双配置各 59/59、零编译警告，Debug 零 Validation 错误，独立评审通过。
   - 目标：CMake 用 glslc 把 `shaders/*.vert|frag` 编成 SPIR-V 并跑 spirv-val，产物进 `build/`；graphics pipeline（Dynamic Rendering）画一个顶点色三角形。
   - 验收：CTest `shader-build`（产物存在且通过 spirv-val）、`sample-triangle-frames`（标签 `gpu`）；门禁全绿。
-- [ ] T05 截图与像素验证
+- [x] T05 截图与像素验证：真机末帧 PNG 1280×720，中心和四角像素通过；双配置各 60/60、零编译警告，Debug 零 Validation 错误，独立评审通过。
   - 目标：`--screenshot <path>` 在最后一帧回读 swapchain 图像写 PNG（stb_image_write）。
   - 验收：CTest `sample-triangle-screenshot`（标签 `gpu`）：中心像素落在三角形内且非清屏色，四角为清屏色；门禁全绿。
 - [ ] T06 resize、最小化与关闭

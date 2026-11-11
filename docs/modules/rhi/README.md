@@ -20,6 +20,10 @@ Debug 创建设备时，instance 启用 `VK_LAYER_KHRONOS_validation` 和 `VK_EX
 
 示例在启动前读取构建目录中的顶点、片元 SPIR-V，Runtime 将两段字码随设备配置传给 RHI。呈现对象按交换链颜色格式创建 Dynamic Rendering 管线。顶点位置和颜色由顶点 Shader 根据索引生成。管线无描述符、顶点缓冲或深度附件，视口和裁剪范围取交换链尺寸。Shader module 在管线创建后销毁，管线和 layout 在帧同步完成后销毁。未提供 Shader 时仍可运行清屏路径。
 
+### 末帧截图
+
+截图会话创建带 transfer source 用途的交换链和一块可映射的读回缓冲，启动时校验表面能力，读回上限为 128 MiB。目标帧在 Dynamic Rendering 之后、呈现之前把图像复制到缓冲。RHI 等该帧的提交 fence，再做必要的缓存失效，将紧密排列的像素统一为 RGBA8。缓冲和内存在会话关闭时随交换链资源释放。示例用 stb 写 PNG 并处理路径错误。Runtime 转交捕获请求和读回结果。
+
 ### Vulkan 1.4 与 Descriptor Heap
 
 图形设备按请求的 API 版本选卡。loader 和设备预检比较 variant、主版本与次版本，补丁号保留在报告中。1.3 保持既有必需特性；显式请求 1.4 时记录 Maintenance 5/6、Dynamic Rendering Local Read、Host Image Copy 的支持状态，等对应调用方接入时才启用其功能。

@@ -215,6 +215,12 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorStage::Validation,
             "triangle shaders require presentation and valid SPIR-V headers");
     }
+    if (config.enableScreenshot && !config.presentation) {
+        return makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "screenshots require presentation");
+    }
     if (config.presentation &&
         (!config.createGraphicsDevice || !config.presentation->windowHandle ||
          config.presentation->width == 0 || config.presentation->height == 0)) {
@@ -933,7 +939,8 @@ struct RhiSession::Impl {
                     families.graphics,
                     families.present,
                     {config.presentation->width, config.presentation->height},
-                    config.triangleShaders ? &*config.triangleShaders : nullptr);
+                    config.triangleShaders ? &*config.triangleShaders : nullptr,
+                    config.enableScreenshot);
                 !opened) {
                 return opened;
             }
@@ -1380,14 +1387,14 @@ std::optional<GraphicsDeviceInfo> RhiSession::graphicsDeviceInfo() const noexcep
     return m_impl->graphicsInfo;
 }
 
-std::expected<void, core::Error> RhiSession::presentFrame() {
+std::expected<void, core::Error> RhiSession::presentFrame(FrameScreenshot* screenshot) {
     if (!m_impl->presenter) {
         return std::unexpected(makeError(
             core::ErrorCategory::InvalidState,
             core::ErrorStage::Capability,
             "this RHI session has no active swapchain"));
     }
-    return m_impl->presenter->presentFrame();
+    return m_impl->presenter->presentFrame(screenshot);
 }
 
 #ifdef AR_ENABLE_TEST_HOOKS

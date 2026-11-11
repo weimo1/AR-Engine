@@ -181,10 +181,20 @@ add_test(NAME sample-triangle-frames
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_clear_frames.py"
         "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" triangle
 )
+find_package(Stb REQUIRED)
+add_executable(ar_verify_screenshot triangle/verify_screenshot.cpp)
+target_include_directories(ar_verify_screenshot SYSTEM PRIVATE "${Stb_INCLUDE_DIR}")
+target_link_libraries(ar_verify_screenshot PRIVATE ar_cxx23 ar_cxx_flags)
+set_target_properties(ar_verify_screenshot PROPERTIES FOLDER "TestSupport")
+add_test(NAME sample-triangle-screenshot
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_clear_frames.py"
+        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" screenshot
+        "$<TARGET_FILE:ar_verify_screenshot>"
+)
 add_test(NAME shader-build COMMAND ${CMAKE_COMMAND}
     "-DVALIDATOR=${AR_SPIRV_VAL}" "-DSHADER_DIR=${CMAKE_BINARY_DIR}/shaders"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_shaders.cmake")
-set_tests_properties(sample-clear-frames sample-triangle-frames PROPERTIES
+set_tests_properties(sample-clear-frames sample-triangle-frames sample-triangle-screenshot PROPERTIES
     LABELS gpu TIMEOUT 50 ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1"
 )
 

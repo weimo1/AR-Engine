@@ -9,6 +9,7 @@
     "catch2",
     "vulkan-headers",
     "volk",
-    "glfw3"
+    "glfw3",
+    "stb"
   ]
 }

@@ -12,7 +12,8 @@
 
 namespace ar::rhi {
 struct TriangleShaders;
-}
+struct FrameScreenshot;
+} // namespace ar::rhi
 
 namespace ar::rhi::detail {
 
@@ -30,8 +31,9 @@ public:
         std::uint32_t graphicsFamily,
         std::uint32_t presentFamily,
         VkExtent2D framebuffer,
-        const TriangleShaders* shaders);
-    std::expected<void, core::Error> presentFrame();
+        const TriangleShaders* shaders,
+        bool enableScreenshot);
+    std::expected<void, core::Error> presentFrame(FrameScreenshot* screenshot);
     std::optional<core::Error> close();
     [[nodiscard]] bool hasSwapchain() const noexcept {
         return m_swapchain != VK_NULL_HANDLE;
@@ -64,8 +66,11 @@ private:
     std::expected<void, core::Error> createFrame(Frame& frame, std::uint32_t graphicsFamily);
     std::expected<void, core::Error>
     createTrianglePipeline(VkFormat format, const TriangleShaders& shaders);
-    std::expected<void, core::Error> draw(Frame& frame);
-    std::expected<void, core::Error> record(VkCommandBuffer commands, const Image& image);
+    std::expected<void, core::Error> createReadback(VkPhysicalDevice physical);
+    std::expected<void, core::Error> readScreenshot(Frame& frame, FrameScreenshot& screenshot);
+    std::expected<void, core::Error> draw(Frame& frame, bool capture);
+    std::expected<void, core::Error>
+    record(VkCommandBuffer commands, const Image& image, bool capture);
     VkResult drain(Frame& frame, std::uint64_t timeout);
 
     VkDevice m_device;
@@ -74,6 +79,11 @@ private:
     VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_pipeline = VK_NULL_HANDLE;
+    VkBuffer m_readback = VK_NULL_HANDLE;
+    VkDeviceMemory m_readbackMemory = VK_NULL_HANDLE;
+    VkFormat m_format = VK_FORMAT_UNDEFINED;
+    std::size_t m_readbackBytes = 0;
+    bool m_hostCoherent = false;
     VkExtent2D m_extent{};
     std::vector<Image> m_images;
     std::array<Frame, 2> m_frames{};

@@ -17,6 +17,8 @@ add_custom_target(ar_triangle_shaders DEPENDS ${triangle_shaders})
 set_target_properties(ar_triangle_shaders PROPERTIES FOLDER "Examples")
 
 add_executable(ar_triangle main.cpp)
+find_package(Stb REQUIRED)
+target_include_directories(ar_triangle SYSTEM PRIVATE "${Stb_INCLUDE_DIR}")
 add_dependencies(ar_triangle ar_triangle_shaders)
 target_link_libraries(ar_triangle PRIVATE ar_runtime)
 target_compile_definitions(ar_triangle PRIVATE

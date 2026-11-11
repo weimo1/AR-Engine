@@ -13,12 +13,17 @@
 
 #include "runtime/RuntimeSession.h"
 
+#define STBI_WRITE_NO_STDIO
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
+
 namespace {
 
 struct Options {
     std::optional<std::uint32_t> frames;
     bool visible = true;
     bool clearOnly = false;
+    std::optional<std::filesystem::path> screenshot;
     std::filesystem::path output = AR_TRIANGLE_OUTPUT_ROOT;
 };
 
@@ -41,6 +46,11 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
                 return std::nullopt;
             }
             options.frames = static_cast<std::uint32_t>(frames);
+        } else if (arg == L"--screenshot" && !options.screenshot && index + 1 < argc) {
+            options.screenshot = argv[++index];
+            if (options.screenshot->empty()) {
+                return std::nullopt;
+            }
         } else if (arg == L"--output" && index + 1 < argc) {
             options.output = argv[++index];
             if (options.output.empty()) {
@@ -50,10 +60,29 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
             return std::nullopt;
         }
     }
-    if (!options.visible && !options.frames) {
+    if ((!options.visible || options.screenshot) && !options.frames) {
         return std::nullopt;
     }
     return options;
+}
+
+bool writeScreenshot(const std::filesystem::path& path, const ar::rhi::FrameScreenshot& image) {
+    std::ofstream stream(path, std::ios::binary);
+    if (!stream) {
+        return false;
+    }
+    const int written = stbi_write_png_to_func(
+        [](void* context, void* bytes, int size) {
+            static_cast<std::ofstream*>(context)->write(static_cast<const char*>(bytes), size);
+        },
+        &stream,
+        static_cast<int>(image.width),
+        static_cast<int>(image.height),
+        4,
+        image.rgba.data(),
+        static_cast<int>(image.width * 4));
+    stream.close();
+    return written != 0 && static_cast<bool>(stream);
 }
 
 std::optional<std::vector<std::uint32_t>> readShader(const std::filesystem::path& path) {
@@ -91,7 +120,8 @@ int wmain(int argc, wchar_t** argv) {
     const auto options = parse(argc, argv);
     if (!options) {
         std::fputs(
-            "usage: ar_triangle [--frames N] [--hidden] [--clear-only] [--output DIRECTORY]\n",
+            "usage: ar_triangle [--frames N] [--hidden] [--clear-only] "
+            "[--screenshot PATH] [--output DIRECTORY]\n",
             stderr);
         return 2;
     }
@@ -100,6 +130,7 @@ int wmain(int argc, wchar_t** argv) {
     config.mode = ar::runtime::QueryMode::Development;
     config.query.requestedApi = ar::rhi::makeApiVersion(1, 3);
     config.query.createGraphicsDevice = true;
+    config.query.enableScreenshot = options->screenshot.has_value();
     if (!options->clearOnly) {
         const std::filesystem::path shaderDir = AR_TRIANGLE_SHADER_DIR;
         auto vertex = readShader(shaderDir / "triangle.vert.spv");
@@ -127,8 +158,10 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     unsigned long long presented = 0;
+    ar::rhi::FrameScreenshot screenshot;
     while (!options->frames || presented < *options->frames) {
-        const auto frame = (*session)->presentFrame();
+        const bool capture = options->screenshot && presented + 1 == *options->frames;
+        const auto frame = (*session)->presentFrame(capture ? &screenshot : nullptr);
         if (!frame || !*frame) {
             break;
         }
@@ -150,6 +183,10 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (options->frames && presented != *options->frames) {
         std::fputs("window closed before the requested frame count\n", stderr);
+        return 1;
+    }
+    if (options->screenshot && !writeScreenshot(*options->screenshot, screenshot)) {
+        std::fwprintf(stderr, L"Could not write screenshot: %ls\n", options->screenshot->c_str());
         return 1;
     }
     return 0;

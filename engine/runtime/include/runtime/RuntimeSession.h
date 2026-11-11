@@ -8,6 +8,7 @@
 #include "core/Diagnostics.h"
 #include "core/Error.h"
 #include "rhi/Capabilities.h"
+#include "rhi/RhiSession.h"
 #include "runtime/RuntimeConfig.h"
 
 namespace ar::runtime {
@@ -43,7 +44,8 @@ public:
     [[nodiscard]] const rhi::CapabilityReport& report() const noexcept;
 
     // True after accepting one presentation, false when the window was closed.
-    [[nodiscard]] std::expected<bool, core::Error> presentFrame();
+    [[nodiscard]] std::expected<bool, core::Error>
+    presentFrame(rhi::FrameScreenshot* screenshot = nullptr);
 
     // First call closes rhi, then finishes the diagnostic run. Repeated calls return the cached
     // result without cleaning again or writing a second summary.
