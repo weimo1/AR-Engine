@@ -40,7 +40,7 @@
 - [x] T10 Image 与 ImageView：真机验证 2D 图像、多个视图、错误销毁顺序及关闭回收；双配置各 63/63、零编译警告，Debug 零 Validation 错误，独立评审通过。
   - 目标：用同一 allocator 创建最小 2D Image，按类型化句柄建立 view，并约束 Image 与 view 的释放顺序。
   - 验收：`rhi-vma-image-view` 真机创建和释放，验证非法描述及存在 view 时禁止销毁 Image。GPU 标签，Debug 零 Validation 错误，完整门禁与独立评审通过。
-- [ ] T11 Buffer 与 Image 上传
+- [x] T11 Buffer 与 Image 上传：真机逐字节验证 Buffer、Image 和 Host-visible 直读；双配置各 64/64、零编译警告，Debug 同步 Validation 零错误，独立复审通过。
   - 目标：使用图形队列上的 staging 传输，返回可轮询或等待的完成令牌。为最小调用方提供 Buffer 字节与 Image 像素的数值读回。
   - 验收：`rhi-upload-readback` 在真机上传确定数据，经 GPU 复制后读回并逐字节比较，同时检查同步 Validation。GPU 标签，完整门禁与独立评审通过。
 - [ ] T12 在途资源退役

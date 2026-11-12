@@ -319,6 +319,61 @@ TEST_CASE("VMA buffers enforce memory access and handle lifetime", "[rhi-vma-buf
     CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
 }
 
+TEST_CASE("staging copies preserve buffer bytes and RGBA8 pixels", "[rhi-upload-readback]") {
+    const std::string runId = "rhi-upload-readback";
+    const auto directory = freshRunDirectory(runId);
+    auto diagnostics = makeSession(directory, runId);
+    rhi::QueryConfig config;
+    config.requestedApi = rhi::makeApiVersion(1, 3);
+    config.createGraphicsDevice = true;
+    auto opened = rhi::RhiSession::open(config, *diagnostics);
+    REQUIRE(opened);
+    auto& session = **opened;
+#ifdef _DEBUG
+    REQUIRE(session.graphicsDeviceInfo()->validationEnabled);
+#endif
+    const auto buffer = session.createBuffer({16, rhi::BufferMemory::DeviceLocal});
+    const auto image = session.createImage({2, 2});
+    REQUIRE(buffer);
+    REQUIRE(image);
+    std::array<std::byte, 16> input{};
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        input[i] = static_cast<std::byte>(i * 13 + 7);
+    }
+    std::array<std::byte, 16> output{};
+    CHECK_FALSE(session.readbackImage(*image, output));
+    CHECK_FALSE(session.uploadBuffer(*buffer, std::span(input).first(15)));
+    CHECK_FALSE(session.waitTransfer({}));
+    const auto bufferToken = session.uploadBuffer(*buffer, input);
+    INFO((bufferToken ? "" : bufferToken.error().message));
+    REQUIRE(bufferToken);
+    REQUIRE(session.pollTransfer(*bufferToken));
+    REQUIRE(session.waitTransfer(*bufferToken));
+    CHECK(session.pollTransfer(*bufferToken).value_or(false));
+    REQUIRE(session.readbackBuffer(*buffer, output));
+    CHECK(output == input);
+    const auto host = session.createBuffer({input.size(), rhi::BufferMemory::HostVisible});
+    REQUIRE(host);
+    input[3] = std::byte{0xb1};
+    REQUIRE(session.uploadBuffer(*host, input));
+    REQUIRE(session.readBuffer(*host, 0, output));
+    CHECK(output == input);
+    REQUIRE(session.writeBuffer(*host, 0, input));
+    input[0] = std::byte{0xfe};
+    const auto imageToken = session.uploadImage(*image, input);
+    REQUIRE(imageToken);
+    REQUIRE(session.readbackImage(*image, output));
+    CHECK(session.pollTransfer(*imageToken).value_or(false));
+    CHECK(output == input);
+    input[1] = std::byte{0xda};
+    REQUIRE(session.uploadImage(*image, input));
+    REQUIRE(session.readbackImage(*image, output));
+    CHECK(output == input);
+    REQUIRE(session.close().resourcesReleased);
+    finishSession(*diagnostics, runId);
+    CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
+}
+
 TEST_CASE("VMA images outlive their views", "[rhi-vma-image-view]") {
     const std::string runId = "rhi-vma-image-view";
     const auto directory = freshRunDirectory(runId);

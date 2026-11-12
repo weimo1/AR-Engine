@@ -75,13 +75,23 @@ DeviceResources::DeviceResources(
     VkInstance instance,
     VkPhysicalDevice physical,
     VkDevice device,
+    VkQueue queue,
+    std::uint32_t queueFamily,
     std::uint32_t apiVersion) noexcept
-    : m_instance(instance), m_physical(physical), m_device(device), m_apiVersion(apiVersion) {}
+    : m_instance(instance), m_physical(physical), m_device(device), m_queue(queue),
+      m_queueFamily(queueFamily), m_apiVersion(apiVersion) {}
 
 DeviceResources::~DeviceResources() {
     if (!m_allocator) {
         return;
     }
+    if (m_transferPool) {
+        vkDestroyCommandPool(m_device, m_transferPool, nullptr);
+    }
+    if (m_transferFence) {
+        vkDestroyFence(m_device, m_transferFence, nullptr);
+    }
+    freeStaging();
     for (const auto& slot : m_views) {
         if (slot.view) {
             vkDestroyImageView(m_device, slot.view, nullptr);
@@ -122,11 +132,7 @@ std::expected<void, core::Error> DeviceResources::ensureAllocator() {
     return {};
 }
 
-std::expected<BufferHandle, core::Error> DeviceResources::createBuffer(BufferDesc desc) {
-    if (!desc.bytes ||
-        (desc.memory != BufferMemory::HostVisible && desc.memory != BufferMemory::DeviceLocal)) {
-        return std::unexpected(invalid("buffer requires a positive size and a valid memory class"));
-    }
+VkDeviceSize DeviceResources::bufferSizeLimit() {
     if (!m_maxBufferSize) {
         VkPhysicalDeviceMaintenance4Properties limits{};
         limits.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES;
@@ -136,7 +142,15 @@ std::expected<BufferHandle, core::Error> DeviceResources::createBuffer(BufferDes
         vkGetPhysicalDeviceProperties2(m_physical, &properties);
         m_maxBufferSize = limits.maxBufferSize;
     }
-    if (desc.bytes > m_maxBufferSize) {
+    return m_maxBufferSize;
+}
+
+std::expected<BufferHandle, core::Error> DeviceResources::createBuffer(BufferDesc desc) {
+    if (!desc.bytes ||
+        (desc.memory != BufferMemory::HostVisible && desc.memory != BufferMemory::DeviceLocal)) {
+        return std::unexpected(invalid("buffer requires a positive size and a valid memory class"));
+    }
+    if (desc.bytes > bufferSizeLimit()) {
         return std::unexpected(invalid("buffer size exceeds the device limit"));
     }
     if (auto initialized = ensureAllocator(); !initialized) {
@@ -146,7 +160,17 @@ std::expected<BufferHandle, core::Error> DeviceResources::createBuffer(BufferDes
     if (!index) {
         return std::unexpected(index.error());
     }
+    auto created = allocateBuffer(desc);
+    if (!created) {
+        return std::unexpected(std::move(created.error()));
+    }
+    created->generation = nextGeneration++;
+    m_buffers[*index] = *created;
+    return BufferHandle{*index, created->generation};
+}
 
+std::expected<DeviceResources::BufferSlot, core::Error>
+DeviceResources::allocateBuffer(BufferDesc desc) {
     VkBufferCreateInfo buffer{};
     buffer.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     buffer.size = desc.bytes;
@@ -166,9 +190,14 @@ std::expected<BufferHandle, core::Error> DeviceResources::createBuffer(BufferDes
         return std::unexpected(failed("vmaCreateBuffer", result));
     }
     created.desc = desc;
-    created.generation = nextGeneration++;
-    m_buffers[*index] = created;
-    return BufferHandle{*index, created.generation};
+    return created;
+}
+
+void DeviceResources::freeStaging() noexcept {
+    if (m_staging.buffer) {
+        vmaDestroyBuffer(m_allocator, m_staging.buffer, m_staging.allocation);
+        m_staging = {};
+    }
 }
 
 std::expected<DeviceResources::BufferSlot*, core::Error>
@@ -183,6 +212,9 @@ DeviceResources::validateAccess(BufferHandle handle, std::uint64_t offset, std::
     if (offset > slot->desc.bytes || bytes > slot->desc.bytes - offset) {
         return std::unexpected(invalid("buffer access is outside the resource range"));
     }
+    if (auto settled = settleTransfer(true); !settled) {
+        return std::unexpected(std::move(settled.error()));
+    }
     return slot;
 }
 
@@ -192,10 +224,14 @@ std::expected<void, core::Error> DeviceResources::writeBuffer(
     if (!slot) {
         return std::unexpected(std::move(slot.error()));
     }
+    return writeAllocation((*slot)->allocation, offset, bytes);
+}
+
+std::expected<void, core::Error> DeviceResources::writeAllocation(
+    VmaAllocation_T* allocation, std::uint64_t offset, std::span<const std::byte> bytes) {
     if (bytes.empty()) {
         return {};
     }
-    const auto allocation = (*slot)->allocation;
     void* mapped = nullptr;
     VkResult result = vmaMapMemory(m_allocator, allocation, &mapped);
     if (result != VK_SUCCESS) {
@@ -216,10 +252,14 @@ DeviceResources::readBuffer(BufferHandle handle, std::uint64_t offset, std::span
     if (!slot) {
         return std::unexpected(std::move(slot.error()));
     }
+    return readAllocation((*slot)->allocation, offset, bytes);
+}
+
+std::expected<void, core::Error> DeviceResources::readAllocation(
+    VmaAllocation_T* allocation, std::uint64_t offset, std::span<std::byte> bytes) {
     if (bytes.empty()) {
         return {};
     }
-    const auto allocation = (*slot)->allocation;
     void* mapped = nullptr;
     VkResult result = vmaMapMemory(m_allocator, allocation, &mapped);
     if (result != VK_SUCCESS) {
@@ -240,6 +280,9 @@ std::expected<void, core::Error> DeviceResources::destroyBuffer(BufferHandle han
     auto* slot = findSlot(m_buffers, handle);
     if (!slot) {
         return std::unexpected(invalid("buffer handle is invalid or expired"));
+    }
+    if (auto settled = settleTransfer(true); !settled) {
+        return std::unexpected(std::move(settled.error()));
     }
     vmaDestroyBuffer(m_allocator, slot->buffer, slot->allocation);
     *slot = {};
@@ -293,6 +336,7 @@ std::expected<ImageHandle, core::Error> DeviceResources::createImage(ImageDesc d
         return std::unexpected(failed("vmaCreateImage", result));
     }
     created.generation = nextGeneration++;
+    created.desc = desc;
     m_images[*index] = created;
     return ImageHandle{*index, created.generation};
 }
@@ -347,8 +391,69 @@ std::expected<void, core::Error> DeviceResources::destroyImage(ImageHandle handl
                 "destroy the image views before destroying their image",
                 std::nullopt});
     }
+    if (auto settled = settleTransfer(true); !settled) {
+        return std::unexpected(std::move(settled.error()));
+    }
     vmaDestroyImage(m_allocator, slot->image, slot->allocation);
     *slot = {};
+    return {};
+}
+
+std::expected<TransferToken, core::Error>
+DeviceResources::uploadBuffer(BufferHandle handle, std::span<const std::byte> bytes) {
+    const auto* slot = findSlot(m_buffers, handle);
+    if (!slot || bytes.size() != slot->desc.bytes) {
+        return std::unexpected(invalid("upload requires a live buffer and its full byte count"));
+    }
+    auto submitted =
+        transfer(slot->buffer, nullptr, bytes, {}, slot->desc.memory == BufferMemory::HostVisible);
+    if (submitted) {
+        m_buffers[handle.slot].uploaded = true;
+    }
+    return submitted;
+}
+
+std::expected<void, core::Error>
+DeviceResources::readbackBuffer(BufferHandle handle, std::span<std::byte> bytes) {
+    const auto* slot = findSlot(m_buffers, handle);
+    if (!slot || !slot->uploaded || bytes.size() != slot->desc.bytes) {
+        return std::unexpected(
+            invalid("readback requires an uploaded buffer and its full byte count"));
+    }
+    if (auto result = transfer(slot->buffer, nullptr, {}, bytes); !result) {
+        return std::unexpected(std::move(result.error()));
+    }
+    return {};
+}
+
+namespace {
+bool matchesImageSize(ImageDesc desc, std::size_t bytes) {
+    const auto pixels = static_cast<std::uint64_t>(desc.width) * desc.height;
+    return pixels <= std::numeric_limits<std::uint64_t>::max() / 4 && bytes == pixels * 4;
+}
+} // namespace
+
+std::expected<TransferToken, core::Error>
+DeviceResources::uploadImage(ImageHandle handle, std::span<const std::byte> bytes) {
+    auto* slot = findSlot(m_images, handle);
+    if (!slot || !matchesImageSize(slot->desc, bytes.size())) {
+        return std::unexpected(
+            invalid("upload requires a live image and its full RGBA8 byte count"));
+    }
+    return transfer(VK_NULL_HANDLE, slot, bytes, {});
+}
+
+std::expected<void, core::Error>
+DeviceResources::readbackImage(ImageHandle handle, std::span<std::byte> bytes) {
+    auto* slot = findSlot(m_images, handle);
+    if (!slot || slot->layout == VK_IMAGE_LAYOUT_UNDEFINED ||
+        !matchesImageSize(slot->desc, bytes.size())) {
+        return std::unexpected(
+            invalid("readback requires an uploaded image and its full RGBA8 byte count"));
+    }
+    if (auto result = transfer(VK_NULL_HANDLE, slot, {}, bytes); !result) {
+        return std::unexpected(std::move(result.error()));
+    }
     return {};
 }
 

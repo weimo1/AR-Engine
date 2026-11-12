@@ -69,6 +69,7 @@ set(AR_REQUIRED_RHI_CASES
     rhi-device-vulkan14-heap
     rhi-vma-buffer
     rhi-vma-image-view
+    rhi-upload-readback
     rhi-device-enhanced-unavailable
     rhi-device-missing-feature
     rhi-device-selection
@@ -122,6 +123,8 @@ endforeach()
 
 set_tests_properties(rhi-device-create rhi-device-vulkan14-heap rhi-vma-buffer rhi-vma-image-view
     PROPERTIES LABELS gpu TIMEOUT 30)
+set_tests_properties(rhi-upload-readback PROPERTIES LABELS gpu TIMEOUT 30
+    ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>;VK_VALIDATION_VALIDATE_SYNC=1")
 
 set(AR_REQUIRED_RUNTIME_CASES
     runtime-rollback

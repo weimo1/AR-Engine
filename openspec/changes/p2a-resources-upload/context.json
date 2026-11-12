@@ -8,5 +8,5 @@
     {"path": "docs/modules/rhi/README.md", "purpose": "architecture", "status": "reference", "basis": "RHI 所有权与生命周期"}
   ],
   "skills": ["ar-cpp-oop-style", "ar-e2e-side-effect-safety", "ar-context7"],
-  "write_paths": ["TASK.md", "openspec/changes/p2a-resources-upload/**", "docs/modules/rhi/README.md", "engine/rhi/**", "vcpkg.json", "tests/**", "workflow/p0-checks.json"]
+  "write_paths": ["TASK.md", "openspec/changes/p2a-resources-upload/**", "docs/modules/rhi/README.md", "engine/rhi/**", "engine/core/include/core/Diagnostics.h", "engine/core/src/Diagnostics.cpp", "vcpkg.json", "tests/**", "workflow/p0-checks.json"]
 }

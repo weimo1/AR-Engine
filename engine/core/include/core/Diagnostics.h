@@ -54,6 +54,7 @@ enum class ResourceKind {
     DispatchState,
     OsModule,
     Presentation,
+    DeviceResources,
 };
 
 enum class ResourceState {

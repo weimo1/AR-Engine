@@ -19,6 +19,10 @@
 
 namespace ar::rhi {
 
+struct TransferToken {
+    std::uint64_t value = 0;
+};
+
 inline constexpr std::uint32_t
 makeApiVersion(std::uint32_t major, std::uint32_t minor, std::uint32_t patch = 0) noexcept {
     return (major << 22) | (minor << 12) | patch;
@@ -144,6 +148,17 @@ public:
     [[nodiscard]] std::expected<ImageViewHandle, core::Error> createImageView(ImageHandle image);
     [[nodiscard]] std::expected<void, core::Error> destroyImageView(ImageViewHandle handle);
     [[nodiscard]] std::expected<void, core::Error> destroyImage(ImageHandle handle);
+
+    [[nodiscard]] std::expected<TransferToken, core::Error>
+    uploadBuffer(BufferHandle handle, std::span<const std::byte> bytes);
+    [[nodiscard]] std::expected<TransferToken, core::Error>
+    uploadImage(ImageHandle handle, std::span<const std::byte> bytes);
+    [[nodiscard]] std::expected<void, core::Error>
+    readbackBuffer(BufferHandle handle, std::span<std::byte> bytes);
+    [[nodiscard]] std::expected<void, core::Error>
+    readbackImage(ImageHandle handle, std::span<std::byte> bytes);
+    [[nodiscard]] std::expected<bool, core::Error> pollTransfer(TransferToken token);
+    [[nodiscard]] std::expected<void, core::Error> waitTransfer(TransferToken token);
 
     // First call closes presentation, device, surface, messenger, instance, volk and loader.
     // Repeated calls return the cached result without touching the OS again.

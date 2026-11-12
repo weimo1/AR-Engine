@@ -22,6 +22,12 @@
 
 创建失败不发布句柄。只要 Image 还有存活的 view，销毁请求就返回错误并保留该 Image。关闭时先销毁所有 view，再销毁 VMA Image 和 Buffer，最后释放 allocator。T10 无 GPU 提交入口，图像布局和传输同步在 T11 接入。
 
+### T11 传输与数值读回
+
+资源层在设备图形队列上保留一笔在途传输，按需分配 staging 和复用命令池、命令缓冲及 fence。上传整块 Buffer 或紧密排列的 RGBA8 像素，返回会话专用完成令牌。下一笔传输、CPU 映射和显式释放会先等待上一笔传输完成。读回整块已上传资源，在传输到主机的 barrier、fence 和 invalidate 后复制给调用方。Image 跟踪最后一次成功提交的传输布局。
+
+关闭先收敛传输，再销毁 staging、资源和设备。若等待失败且仍无法证明传输已结束，保留资源和设备链并隔离会话。T12 将同步等待的释放改为按完成状态退役。
+
 ## P1a 逻辑设备与 Validation
 
 `RhiSession::open` 通过 `QueryConfig::createGraphicsDevice` 显式启用逻辑设备。查询模式仍只做 P0 能力探测。创建设备要求请求与物理设备的 Vulkan API 均至少为 1.3，并要求 `dynamicRendering`、`synchronization2` 和至少一个可用 graphics 队列。默认按枚举顺序选择第一个符合条件的设备，指定索引时只检查该设备。首个可用 graphics 队列族内创建一个队列，只启用本切片需要的两项核心特性。surface、present 与 swapchain 的能力选择在呈现切片接入。

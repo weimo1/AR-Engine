@@ -195,6 +195,8 @@ const char* resourceKindName(ResourceKind kind) {
         return "os_module";
     case ResourceKind::Presentation:
         return "presentation";
+    case ResourceKind::DeviceResources:
+        return "device_resources";
     }
     return "instance";
 }

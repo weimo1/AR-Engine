@@ -299,6 +299,8 @@ struct RhiSession::Impl {
                 instance,
                 graphicsPhysical,
                 graphicsDevice,
+                graphicsQueue,
+                graphicsInfo->graphicsQueueFamily,
                 compatibilityVersion(config.requestedApi));
         }
         return &*resources;
@@ -1103,10 +1105,22 @@ struct RhiSession::Impl {
             retainPresentation = presenter->hasSwapchain();
             presenter.reset();
         }
-        // These buffers have no GPU consumers in the current slice.
+        bool retainResources = false;
+        if (resources) {
+            if (auto settled = resources->settleTransfer(true); !settled) {
+                auto error = std::move(settled.error());
+                error.stage = core::ErrorStage::Cleanup;
+                error.category = core::ErrorCategory::CleanupFailed;
+                noteCleanup(std::move(error));
+            }
+            retainResources = resources->hasPendingTransfer();
+            if (retainResources) {
+                resources->abandon();
+            }
+        }
         resources.reset();
         graphicsInfo.reset();
-        if (graphicsDevice != VK_NULL_HANDLE && !retainPresentation) {
+        if (graphicsDevice != VK_NULL_HANDLE && !retainPresentation && !retainResources) {
 #ifdef AR_ENABLE_TEST_HOOKS
             g_process.shutdownOrder.push_back(4);
 #endif
@@ -1125,8 +1139,13 @@ struct RhiSession::Impl {
             vkDestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
             debugMessenger = VK_NULL_HANDLE;
         }
-        if (retainPresentation) {
-            retain(core::ResourceKind::Presentation);
+        if (retainPresentation || retainResources) {
+            if (retainPresentation) {
+                retain(core::ResourceKind::Presentation);
+            }
+            if (retainResources) {
+                retain(core::ResourceKind::DeviceResources);
+            }
             retain(core::ResourceKind::Instance);
             retain(core::ResourceKind::OsModule);
             g_process.quarantined = true;
@@ -1497,6 +1516,70 @@ std::expected<void, core::Error> RhiSession::destroyImage(ImageHandle handle) {
             "there are no active image resources"));
     }
     return m_impl->resources->destroyImage(handle);
+}
+
+std::expected<TransferToken, core::Error>
+RhiSession::uploadBuffer(BufferHandle handle, std::span<const std::byte> bytes) {
+    if (!m_impl->resources) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "there are no active transfer resources"));
+    }
+    return m_impl->resources->uploadBuffer(handle, bytes);
+}
+
+std::expected<TransferToken, core::Error>
+RhiSession::uploadImage(ImageHandle handle, std::span<const std::byte> bytes) {
+    if (!m_impl->resources) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "there are no active transfer resources"));
+    }
+    return m_impl->resources->uploadImage(handle, bytes);
+}
+
+std::expected<void, core::Error>
+RhiSession::readbackBuffer(BufferHandle handle, std::span<std::byte> bytes) {
+    if (!m_impl->resources) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "there are no active transfer resources"));
+    }
+    return m_impl->resources->readbackBuffer(handle, bytes);
+}
+
+std::expected<void, core::Error>
+RhiSession::readbackImage(ImageHandle handle, std::span<std::byte> bytes) {
+    if (!m_impl->resources) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "there are no active transfer resources"));
+    }
+    return m_impl->resources->readbackImage(handle, bytes);
+}
+
+std::expected<bool, core::Error> RhiSession::pollTransfer(TransferToken token) {
+    if (!m_impl->resources) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "there are no active transfer resources"));
+    }
+    return m_impl->resources->pollTransfer(token);
+}
+
+std::expected<void, core::Error> RhiSession::waitTransfer(TransferToken token) {
+    if (!m_impl->resources) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "there are no active transfer resources"));
+    }
+    return m_impl->resources->waitTransfer(token);
 }
 
 #ifdef AR_ENABLE_TEST_HOOKS
