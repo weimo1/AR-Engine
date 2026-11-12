@@ -36,7 +36,7 @@ template <typename Slots> std::expected<std::uint32_t, core::Error> reserveSlot(
         return std::unexpected(invalid("resource handle generations exhausted"));
     }
     const auto free =
-        std::ranges::find_if(slots, [](const auto& slot) { return slot.generation == 0; });
+        std::ranges::find_if(slots, [](const auto& slot) { return slot.lifetime.free(); });
     const auto index = static_cast<std::size_t>(free - slots.begin());
     if (index == slots.size()) {
         if (index == std::numeric_limits<std::uint32_t>::max()) {
@@ -62,7 +62,7 @@ typename Slots::value_type* findSlot(Slots& slots, Handle handle) noexcept {
         return nullptr;
     }
     auto& slot = slots[handle.slot];
-    return slot.generation == handle.generation ? &slot : nullptr;
+    return slot.lifetime.matches(handle.generation) ? &slot : nullptr;
 }
 
 constexpr VkFormat kImageFormat = VK_FORMAT_R8G8B8A8_UNORM;
@@ -164,9 +164,9 @@ std::expected<BufferHandle, core::Error> DeviceResources::createBuffer(BufferDes
     if (!created) {
         return std::unexpected(std::move(created.error()));
     }
-    created->generation = nextGeneration++;
+    created->lifetime.generation = nextGeneration++;
     m_buffers[*index] = *created;
-    return BufferHandle{*index, created->generation};
+    return BufferHandle{*index, created->lifetime.generation};
 }
 
 std::expected<DeviceResources::BufferSlot, core::Error>
@@ -197,6 +197,21 @@ void DeviceResources::freeStaging() noexcept {
     if (m_staging.buffer) {
         vmaDestroyBuffer(m_allocator, m_staging.buffer, m_staging.allocation);
         m_staging = {};
+    }
+}
+
+void DeviceResources::collectRetired() noexcept {
+    for (auto& slot : m_buffers) {
+        if (slot.lifetime.reclaimable(m_pendingTransfer && m_transferBuffer == slot.buffer)) {
+            vmaDestroyBuffer(m_allocator, slot.buffer, slot.allocation);
+            slot = {};
+        }
+    }
+    for (auto& slot : m_images) {
+        if (slot.lifetime.reclaimable(m_pendingTransfer && m_transferImage == slot.image)) {
+            vmaDestroyImage(m_allocator, slot.image, slot.allocation);
+            slot = {};
+        }
     }
 }
 
@@ -281,11 +296,8 @@ std::expected<void, core::Error> DeviceResources::destroyBuffer(BufferHandle han
     if (!slot) {
         return std::unexpected(invalid("buffer handle is invalid or expired"));
     }
-    if (auto settled = settleTransfer(true); !settled) {
-        return std::unexpected(std::move(settled.error()));
-    }
-    vmaDestroyBuffer(m_allocator, slot->buffer, slot->allocation);
-    *slot = {};
+    slot->lifetime.retired = true;
+    collectRetired();
     return {};
 }
 
@@ -335,10 +347,10 @@ std::expected<ImageHandle, core::Error> DeviceResources::createImage(ImageDesc d
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vmaCreateImage", result));
     }
-    created.generation = nextGeneration++;
+    created.lifetime.generation = nextGeneration++;
     created.desc = desc;
     m_images[*index] = created;
-    return ImageHandle{*index, created.generation};
+    return ImageHandle{*index, created.lifetime.generation};
 }
 
 std::expected<ImageViewHandle, core::Error> DeviceResources::createImageView(ImageHandle image) {
@@ -362,9 +374,9 @@ std::expected<ImageViewHandle, core::Error> DeviceResources::createImageView(Ima
         return std::unexpected(failed("vkCreateImageView", result));
     }
     created.image = image;
-    created.generation = nextGeneration++;
+    created.lifetime.generation = nextGeneration++;
     m_views[*index] = created;
-    return ImageViewHandle{*index, created.generation};
+    return ImageViewHandle{*index, created.lifetime.generation};
 }
 
 std::expected<void, core::Error> DeviceResources::destroyImageView(ImageViewHandle handle) {
@@ -391,11 +403,8 @@ std::expected<void, core::Error> DeviceResources::destroyImage(ImageHandle handl
                 "destroy the image views before destroying their image",
                 std::nullopt});
     }
-    if (auto settled = settleTransfer(true); !settled) {
-        return std::unexpected(std::move(settled.error()));
-    }
-    vmaDestroyImage(m_allocator, slot->image, slot->allocation);
-    *slot = {};
+    slot->lifetime.retired = true;
+    collectRetired();
     return {};
 }
 

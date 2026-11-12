@@ -11,6 +11,7 @@
 #include "rhi/Buffer.h"
 #include "rhi/Image.h"
 #include "rhi/RhiSession.h"
+#include "ResourceLifetime.h"
 
 struct VmaAllocation_T;
 struct VmaAllocator_T;
@@ -63,14 +64,14 @@ private:
         VkBuffer buffer = VK_NULL_HANDLE;
         VmaAllocation_T* allocation = nullptr;
         BufferDesc desc{};
-        std::uint64_t generation = 0;
+        ResourceLifetime lifetime;
         bool uploaded = false;
     };
 
     struct ImageSlot {
         VkImage image = VK_NULL_HANDLE;
         VmaAllocation_T* allocation = nullptr;
-        std::uint64_t generation = 0;
+        ResourceLifetime lifetime;
         ImageDesc desc{};
         VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
     };
@@ -78,13 +79,14 @@ private:
     struct ViewSlot {
         VkImageView view = VK_NULL_HANDLE;
         ImageHandle image{};
-        std::uint64_t generation = 0;
+        ResourceLifetime lifetime;
     };
 
     std::expected<void, core::Error> ensureAllocator();
     VkDeviceSize bufferSizeLimit();
     std::expected<BufferSlot, core::Error> allocateBuffer(BufferDesc desc);
     void freeStaging() noexcept;
+    void collectRetired() noexcept;
     std::expected<void, core::Error>
     writeAllocation(VmaAllocation_T*, std::uint64_t, std::span<const std::byte>);
     std::expected<void, core::Error>
@@ -118,6 +120,9 @@ private:
     std::uint64_t m_lastTransfer = 0;
     std::uint64_t m_completedTransfer = 0;
     bool m_pendingTransfer = false;
+    VkBuffer m_transferBuffer = VK_NULL_HANDLE;
+    VkImage m_transferImage = VK_NULL_HANDLE;
+    bool m_readbackNeedsStaging = false;
     bool m_transferLost = false;
 };
 

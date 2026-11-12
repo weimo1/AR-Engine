@@ -81,6 +81,12 @@ std::expected<bool, core::Error> DeviceResources::settleTransfer(bool wait) {
         return std::unexpected(transferError("transfer fence", result));
     }
     m_completedTransfer = m_lastTransfer;
+    m_transferBuffer = VK_NULL_HANDLE;
+    m_transferImage = VK_NULL_HANDLE;
+    collectRetired();
+    if (!m_readbackNeedsStaging) {
+        freeStaging();
+    }
     return true;
 }
 
@@ -244,6 +250,10 @@ std::expected<TransferToken, core::Error> DeviceResources::transfer(
     submit.pCommandBufferInfos = &commands;
     const VkResult result = vkQueueSubmit2(m_queue, 1, &submit, m_transferFence);
     m_pendingTransfer = result == VK_SUCCESS || result == VK_ERROR_DEVICE_LOST;
+    if (m_pendingTransfer) {
+        m_transferBuffer = buffer;
+        m_transferImage = image ? image->image : VK_NULL_HANDLE;
+    }
     if (result != VK_SUCCESS) {
         return std::unexpected(transferError("vkQueueSubmit2", result));
     }
@@ -255,10 +265,15 @@ std::expected<TransferToken, core::Error> DeviceResources::transfer(
         image->layout = layout;
     }
     if (!upload) {
-        if (auto settled = settleTransfer(true); !settled) {
+        m_readbackNeedsStaging = true;
+        auto settled = settleTransfer(true);
+        m_readbackNeedsStaging = false;
+        if (!settled) {
             return std::unexpected(std::move(settled.error()));
         }
-        if (auto read = readAllocation(m_staging.allocation, 0, output); !read) {
+        auto read = readAllocation(m_staging.allocation, 0, output);
+        freeStaging();
+        if (!read) {
             return std::unexpected(std::move(read.error()));
         }
     }

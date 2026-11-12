@@ -16,6 +16,7 @@
 #include "core/BuildInfo.h"
 #include "core/Diagnostics.h"
 #include "rhi/RhiSession.h"
+#include "vulkan/resources/ResourceLifetime.h"
 
 namespace core = ar::core;
 namespace rhi = ar::rhi;
@@ -315,6 +316,64 @@ TEST_CASE("VMA buffers enforce memory access and handle lifetime", "[rhi-vma-buf
     REQUIRE((*reopened)->createBuffer({16, rhi::BufferMemory::HostVisible}));
     CHECK_FALSE((*reopened)->destroyBuffer(*replacement));
     REQUIRE((*reopened)->close().resourcesReleased);
+    finishSession(*diagnostics, runId);
+    CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
+}
+
+TEST_CASE("retired slots stay occupied until completion", "[rhi-resource-retirement]") {
+    rhi::detail::ResourceLifetime slot{42};
+    CHECK(slot.matches(42));
+    slot.retired = true;
+    CHECK_FALSE(slot.matches(42));
+    CHECK_FALSE(slot.free());
+    CHECK_FALSE(slot.reclaimable(true));
+    CHECK(slot.reclaimable(false));
+    slot = {43};
+    CHECK_FALSE(slot.matches(42));
+    CHECK(slot.matches(43));
+}
+
+TEST_CASE("upload resources retire before the fence is observed", "[rhi-upload-retirement]") {
+    const std::string runId = "rhi-upload-retirement";
+    const auto directory = freshRunDirectory(runId);
+    auto diagnostics = makeSession(directory, runId);
+    rhi::QueryConfig config;
+    config.requestedApi = rhi::makeApiVersion(1, 3);
+    config.createGraphicsDevice = true;
+    auto opened = rhi::RhiSession::open(config, *diagnostics);
+    REQUIRE(opened);
+    auto& session = **opened;
+    const std::array<std::byte, 16> bytes{};
+    const auto buffer = session.createBuffer({bytes.size(), rhi::BufferMemory::DeviceLocal});
+    REQUIRE(buffer);
+    const auto upload = session.uploadBuffer(*buffer, bytes);
+    REQUIRE(upload);
+    REQUIRE(session.destroyBuffer(*buffer));
+    CHECK_FALSE(session.destroyBuffer(*buffer));
+    CHECK_FALSE(session.uploadBuffer(*buffer, bytes));
+    const auto other = session.createBuffer({bytes.size(), rhi::BufferMemory::DeviceLocal});
+    REQUIRE(other);
+    CHECK(other->slot != buffer->slot);
+    REQUIRE(session.waitTransfer(*upload));
+    const auto reused = session.createBuffer({bytes.size(), rhi::BufferMemory::DeviceLocal});
+    REQUIRE(reused);
+    CHECK(reused->slot == buffer->slot);
+    CHECK(reused->generation != buffer->generation);
+    CHECK_FALSE(session.destroyBuffer(*buffer));
+
+    const auto image = session.createImage({2, 2});
+    REQUIRE(image);
+    const auto view = session.createImageView(*image);
+    REQUIRE(view);
+    REQUIRE(session.uploadImage(*image, bytes));
+    CHECK_FALSE(session.destroyImage(*image));
+    REQUIRE(session.destroyImageView(*view));
+    REQUIRE(session.destroyImage(*image));
+    CHECK_FALSE(session.createImageView(*image));
+    CHECK_FALSE(session.uploadImage(*image, bytes));
+    const auto closed = session.close();
+    CHECK(closed.resourcesReleased);
+    CHECK(closed.errors.empty());
     finishSession(*diagnostics, runId);
     CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
 }

@@ -43,7 +43,7 @@
 - [x] T11 Buffer 与 Image 上传：真机逐字节验证 Buffer、Image 和 Host-visible 直读；双配置各 64/64、零编译警告，Debug 同步 Validation 零错误，独立复审通过。
   - 目标：使用图形队列上的 staging 传输，返回可轮询或等待的完成令牌。为最小调用方提供 Buffer 字节与 Image 像素的数值读回。
   - 验收：`rhi-upload-readback` 在真机上传确定数据，经 GPU 复制后读回并逐字节比较，同时检查同步 Validation。GPU 标签，完整门禁与独立评审通过。
-- [ ] T12 在途资源退役
+- [x] T12 在途资源退役：真机验证在途释放、完成后槽位复用与会话关闭；双配置各 66/66、零编译警告，Debug 同步 Validation 零错误，独立评审通过。
   - 目标：释放请求立即使 CPU 句柄失效。资源、staging 与槽位按最后一次相关提交完成回收。
   - 验收：`rhi-resource-retirement` 受控测试验证完成前不回收，完成后旧句柄仍无效。GPU 用例 `rhi-upload-retirement` 验证在途上传释放及会话关闭。完整门禁与独立评审通过。
 - [ ] T13 [人工] P2a 里程碑验收
