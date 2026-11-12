@@ -16,6 +16,12 @@
 
 资源层按操作映射和解除映射，写入后 flush，读取前 invalidate。槽位与代数共同校验句柄，代数在进程内不会随会话重置。T09 的 Buffer 尚无提交入口，显式释放可立即回收，关闭会回收其余 Buffer，再销毁 allocator 和设备。
 
+### T10 Image 与 ImageView
+
+`DeviceResources` 用同一个 allocator 创建 device-local 的 2D RGBA8 UNORM Image。单 mip、单层，采用 optimal tiling，支持采样和传输。创建前核对设备对该格式、用途和尺寸的支持。ImageView 覆盖完整的颜色子资源。两个类型分别校验槽位和代数，view 记录所借用 Image 的句柄。
+
+创建失败不发布句柄。只要 Image 还有存活的 view，销毁请求就返回错误并保留该 Image。关闭时先销毁所有 view，再销毁 VMA Image 和 Buffer，最后释放 allocator。T10 无 GPU 提交入口，图像布局和传输同步在 T11 接入。
+
 ## P1a 逻辑设备与 Validation
 
 `RhiSession::open` 通过 `QueryConfig::createGraphicsDevice` 显式启用逻辑设备。查询模式仍只做 P0 能力探测。创建设备要求请求与物理设备的 Vulkan API 均至少为 1.3，并要求 `dynamicRendering`、`synchronization2` 和至少一个可用 graphics 队列。默认按枚举顺序选择第一个符合条件的设备，指定索引时只检查该设备。首个可用 graphics 队列族内创建一个队列，只启用本切片需要的两项核心特性。surface、present 与 swapchain 的能力选择在呈现切片接入。

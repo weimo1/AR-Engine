@@ -319,6 +319,48 @@ TEST_CASE("VMA buffers enforce memory access and handle lifetime", "[rhi-vma-buf
     CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
 }
 
+TEST_CASE("VMA images outlive their views", "[rhi-vma-image-view]") {
+    const std::string runId = "rhi-vma-image-view";
+    const auto directory = freshRunDirectory(runId);
+    auto diagnostics = makeSession(directory, runId);
+    rhi::QueryConfig config;
+    config.requestedApi = rhi::makeApiVersion(1, 3);
+    config.createGraphicsDevice = true;
+    auto opened = rhi::RhiSession::open(config, *diagnostics);
+    REQUIRE(opened);
+    auto& session = **opened;
+#ifdef _DEBUG
+    REQUIRE(session.graphicsDeviceInfo()->validationEnabled);
+#endif
+    CHECK_FALSE(session.createImage({0, 4}));
+    CHECK_FALSE(session.createImage({4, 0}));
+    CHECK_FALSE(session.createImage({UINT32_MAX, 4}));
+    const auto image = session.createImage({16, 8});
+    INFO((image ? "" : image.error().message));
+    REQUIRE(image);
+    const auto first = session.createImageView(*image);
+    const auto second = session.createImageView(*image);
+    REQUIRE(first);
+    REQUIRE(second);
+    CHECK_FALSE(session.destroyImage(*image));
+    REQUIRE(session.destroyImageView(*first));
+    CHECK_FALSE(session.destroyImageView(*first));
+    CHECK_FALSE(session.destroyImage(*image));
+    REQUIRE(session.destroyImageView(*second));
+    REQUIRE(session.destroyImage(*image));
+    CHECK_FALSE(session.createImageView(*image));
+    const auto replacement = session.createImage({16, 8});
+    REQUIRE(replacement);
+    REQUIRE(session.createImageView(*replacement));
+    CHECK_FALSE(session.destroyImage(*image));
+    CHECK_FALSE(session.destroyImageView(*second));
+    const auto closed = session.close();
+    CHECK(closed.resourcesReleased);
+    CHECK(closed.errors.empty());
+    finishSession(*diagnostics, runId);
+    CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
+}
+
 TEST_CASE(
     "a real Vulkan 1.4 graphics device enables the heap on supported hardware",
     "[rhi-device-vulkan14-heap]") {

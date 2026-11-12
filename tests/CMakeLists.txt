@@ -68,6 +68,7 @@ set(AR_REQUIRED_RHI_CASES
     rhi-device-create
     rhi-device-vulkan14-heap
     rhi-vma-buffer
+    rhi-vma-image-view
     rhi-device-enhanced-unavailable
     rhi-device-missing-feature
     rhi-device-selection
@@ -119,7 +120,8 @@ foreach(case IN LISTS AR_REQUIRED_RHI_CASES)
     )
 endforeach()
 
-set_tests_properties(rhi-device-create rhi-device-vulkan14-heap rhi-vma-buffer PROPERTIES LABELS gpu TIMEOUT 30)
+set_tests_properties(rhi-device-create rhi-device-vulkan14-heap rhi-vma-buffer rhi-vma-image-view
+    PROPERTIES LABELS gpu TIMEOUT 30)
 
 set(AR_REQUIRED_RUNTIME_CASES
     runtime-rollback
@@ -221,6 +223,7 @@ add_library(ar_public_header_probe OBJECT
     public_headers/header_rhi_loader_source.cpp
     public_headers/header_rhi_capabilities.cpp
     public_headers/header_rhi_buffer.cpp
+    public_headers/header_rhi_image.cpp
     public_headers/header_rhi_session.cpp
     public_headers/header_runtime_config.cpp
     public_headers/header_runtime_session.cpp

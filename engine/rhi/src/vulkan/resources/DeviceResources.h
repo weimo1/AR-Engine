@@ -9,6 +9,7 @@
 
 #include "core/Error.h"
 #include "rhi/Buffer.h"
+#include "rhi/Image.h"
 
 struct VmaAllocation_T;
 struct VmaAllocator_T;
@@ -35,6 +36,10 @@ public:
     std::expected<void, core::Error>
     readBuffer(BufferHandle handle, std::uint64_t offset, std::span<std::byte> bytes);
     std::expected<void, core::Error> destroyBuffer(BufferHandle handle);
+    std::expected<ImageHandle, core::Error> createImage(ImageDesc desc);
+    std::expected<ImageViewHandle, core::Error> createImageView(ImageHandle image);
+    std::expected<void, core::Error> destroyImageView(ImageViewHandle handle);
+    std::expected<void, core::Error> destroyImage(ImageHandle handle);
 
 private:
     struct BufferSlot {
@@ -44,8 +49,19 @@ private:
         std::uint64_t generation = 0;
     };
 
-    std::expected<void, core::Error> initializeAllocator();
-    BufferSlot* find(BufferHandle handle) noexcept;
+    struct ImageSlot {
+        VkImage image = VK_NULL_HANDLE;
+        VmaAllocation_T* allocation = nullptr;
+        std::uint64_t generation = 0;
+    };
+
+    struct ViewSlot {
+        VkImageView view = VK_NULL_HANDLE;
+        ImageHandle image{};
+        std::uint64_t generation = 0;
+    };
+
+    std::expected<void, core::Error> ensureAllocator();
     std::expected<BufferSlot*, core::Error>
     validateAccess(BufferHandle handle, std::uint64_t offset, std::size_t bytes);
 
@@ -56,6 +72,8 @@ private:
     VkDeviceSize m_maxBufferSize = 0;
     VmaAllocator_T* m_allocator = nullptr;
     std::vector<BufferSlot> m_buffers;
+    std::vector<ImageSlot> m_images;
+    std::vector<ViewSlot> m_views;
 };
 
 } // namespace ar::rhi::detail

@@ -37,7 +37,7 @@
 - [x] T09 VMA 与 Buffer：VMA 3.3.0 真机创建两种 Buffer，主机读写、范围与失效句柄、关闭回收通过；双配置各 62/62、零编译警告，Debug 零 Validation 错误，独立评审通过。
   - 目标：按现有 vcpkg baseline 接入 VMA，由 RHI 持有设备级 allocator，提供类型化 Buffer 句柄及受控创建、释放。覆盖 host-visible 与 device-local 用途。
   - 验收：`rhi-vma-buffer` 真机创建两种 Buffer，验证 host-visible 写读一致、过期句柄拒绝和按序关闭。GPU 标签，Debug 零 Validation 错误，完整门禁与独立评审通过。
-- [ ] T10 Image 与 ImageView
+- [x] T10 Image 与 ImageView：真机验证 2D 图像、多个视图、错误销毁顺序及关闭回收；双配置各 63/63、零编译警告，Debug 零 Validation 错误，独立评审通过。
   - 目标：用同一 allocator 创建最小 2D Image，按类型化句柄建立 view，并约束 Image 与 view 的释放顺序。
   - 验收：`rhi-vma-image-view` 真机创建和释放，验证非法描述及存在 view 时禁止销毁 Image。GPU 标签，Debug 零 Validation 错误，完整门禁与独立评审通过。
 - [ ] T11 Buffer 与 Image 上传

@@ -287,6 +287,23 @@ struct RhiSession::Impl {
     bool closed = false;
     CloseResult closeResult;
 
+    std::expected<detail::DeviceResources*, core::Error> resourcesForCreation() {
+        if (closed || !graphicsDevice || report.capabilitySource.simulated) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::InvalidState,
+                core::ErrorStage::Capability,
+                "resource creation requires an open real graphics device"));
+        }
+        if (!resources) {
+            resources.emplace(
+                instance,
+                graphicsPhysical,
+                graphicsDevice,
+                compatibilityVersion(config.requestedApi));
+        }
+        return &*resources;
+    }
+
     void noteCleanup(core::Error error) {
         report.errors.push_back(ReportError{error.stage, error.category, std::nullopt});
         cleanupErrors.push_back(std::move(error));
@@ -1405,20 +1422,11 @@ RhiSession::presentFrame(std::uint32_t width, std::uint32_t height, FrameScreens
 }
 
 std::expected<BufferHandle, core::Error> RhiSession::createBuffer(BufferDesc desc) {
-    if (m_impl->closed || !m_impl->graphicsDevice || m_impl->report.capabilitySource.simulated) {
-        return std::unexpected(makeError(
-            core::ErrorCategory::InvalidState,
-            core::ErrorStage::Capability,
-            "buffer creation requires an open real graphics device"));
+    auto resources = m_impl->resourcesForCreation();
+    if (!resources) {
+        return std::unexpected(std::move(resources.error()));
     }
-    if (!m_impl->resources) {
-        m_impl->resources.emplace(
-            m_impl->instance,
-            m_impl->graphicsPhysical,
-            m_impl->graphicsDevice,
-            compatibilityVersion(m_impl->config.requestedApi));
-    }
-    return m_impl->resources->createBuffer(desc);
+    return (*resources)->createBuffer(desc);
 }
 
 std::expected<void, core::Error> RhiSession::writeBuffer(
@@ -1451,6 +1459,44 @@ std::expected<void, core::Error> RhiSession::destroyBuffer(BufferHandle handle) 
             "there are no active buffer resources"));
     }
     return m_impl->resources->destroyBuffer(handle);
+}
+
+std::expected<ImageHandle, core::Error> RhiSession::createImage(ImageDesc desc) {
+    auto resources = m_impl->resourcesForCreation();
+    if (!resources) {
+        return std::unexpected(std::move(resources.error()));
+    }
+    return (*resources)->createImage(desc);
+}
+
+std::expected<ImageViewHandle, core::Error> RhiSession::createImageView(ImageHandle image) {
+    if (!m_impl->resources) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "there are no active image resources"));
+    }
+    return m_impl->resources->createImageView(image);
+}
+
+std::expected<void, core::Error> RhiSession::destroyImageView(ImageViewHandle handle) {
+    if (!m_impl->resources) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "there are no active image resources"));
+    }
+    return m_impl->resources->destroyImageView(handle);
+}
+
+std::expected<void, core::Error> RhiSession::destroyImage(ImageHandle handle) {
+    if (!m_impl->resources) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "there are no active image resources"));
+    }
+    return m_impl->resources->destroyImage(handle);
 }
 
 #ifdef AR_ENABLE_TEST_HOOKS

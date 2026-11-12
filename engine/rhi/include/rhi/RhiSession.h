@@ -13,6 +13,7 @@
 #include "core/Diagnostics.h"
 #include "core/Error.h"
 #include "rhi/Capabilities.h"
+#include "rhi/Image.h"
 #include "rhi/Buffer.h"
 #include "rhi/LoaderSource.h"
 
@@ -138,6 +139,11 @@ public:
     [[nodiscard]] std::expected<void, core::Error>
     readBuffer(BufferHandle handle, std::uint64_t offset, std::span<std::byte> bytes);
     [[nodiscard]] std::expected<void, core::Error> destroyBuffer(BufferHandle handle);
+
+    [[nodiscard]] std::expected<ImageHandle, core::Error> createImage(ImageDesc desc);
+    [[nodiscard]] std::expected<ImageViewHandle, core::Error> createImageView(ImageHandle image);
+    [[nodiscard]] std::expected<void, core::Error> destroyImageView(ImageViewHandle handle);
+    [[nodiscard]] std::expected<void, core::Error> destroyImage(ImageHandle handle);
 
     // First call closes presentation, device, surface, messenger, instance, volk and loader.
     // Repeated calls return the cached result without touching the OS again.
