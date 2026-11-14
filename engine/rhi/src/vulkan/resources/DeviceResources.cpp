@@ -3,7 +3,6 @@
 #include <vk_mem_alloc.h>
 
 #include <algorithm>
-#include <array>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -380,16 +379,20 @@ std::expected<ImageViewHandle, core::Error> DeviceResources::createImageView(Ima
     return ImageViewHandle{*index, created.lifetime.generation};
 }
 
-std::expected<VkImageView, core::Error> DeviceResources::createDefaultSampledView() {
-    auto image = createImage({1, 1});
+std::expected<ImageHandle, core::Error>
+DeviceResources::createSampledImage(ImageDesc desc, std::span<const std::byte> pixels) {
+    if (static_cast<std::uint64_t>(desc.width) * desc.height != pixels.size() / 4 ||
+        pixels.size() % 4 != 0) {
+        return std::unexpected(invalid("sampled upload requires the full RGBA8 byte count"));
+    }
+    auto image = createImage(desc);
     if (!image) {
         return std::unexpected(std::move(image.error()));
     }
-    constexpr std::array pixel{std::byte{255}, std::byte{255}, std::byte{255}, std::byte{255}};
     auto uploaded = transfer(
         VK_NULL_HANDLE,
         findSlot(m_images, *image),
-        pixel,
+        pixels,
         {},
         false,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -399,17 +402,35 @@ std::expected<VkImageView, core::Error> DeviceResources::createDefaultSampledVie
     if (auto ready = waitTransfer(*uploaded); !ready) {
         return std::unexpected(std::move(ready.error()));
     }
-    auto view = createImageView(*image);
+    return *image;
+}
+
+std::expected<VkImageView, core::Error> DeviceResources::retainSampledView(ImageViewHandle handle) {
+    auto* view = findSlot(m_views, handle);
     if (!view) {
-        return std::unexpected(std::move(view.error()));
+        return std::unexpected(invalid("image view handle is invalid or expired"));
     }
-    return findSlot(m_views, *view)->view;
+    auto* image = findSlot(m_images, view->image);
+    if (!image || image->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        return std::unexpected(invalid("binding requires a sampled image"));
+    }
+    ++image->bindingReferences;
+    ++view->bindingReferences;
+    return view->view;
 }
 
 std::expected<void, core::Error> DeviceResources::destroyImageView(ImageViewHandle handle) {
     auto* slot = findSlot(m_views, handle);
     if (!slot) {
         return std::unexpected(invalid("image view handle is invalid or expired"));
+    }
+    if (slot && slot->bindingReferences != 0) {
+        return std::unexpected(
+            core::Error{
+                core::ErrorCategory::InvalidState,
+                core::ErrorStage::Capability,
+                "resource is referenced by the descriptor set",
+                std::nullopt});
     }
     vkDestroyImageView(m_device, slot->view, nullptr);
     *slot = {};
@@ -472,6 +493,14 @@ bool matchesImageSize(ImageDesc desc, std::size_t bytes) {
 std::expected<TransferToken, core::Error>
 DeviceResources::uploadImage(ImageHandle handle, std::span<const std::byte> bytes) {
     auto* slot = findSlot(m_images, handle);
+    if (slot && slot->bindingReferences != 0) {
+        return std::unexpected(
+            core::Error{
+                core::ErrorCategory::InvalidState,
+                core::ErrorStage::Capability,
+                "resource is referenced by the descriptor set",
+                std::nullopt});
+    }
     if (!slot || !matchesImageSize(slot->desc, bytes.size())) {
         return std::unexpected(
             invalid("upload requires a live image and its full RGBA8 byte count"));
@@ -482,6 +511,14 @@ DeviceResources::uploadImage(ImageHandle handle, std::span<const std::byte> byte
 std::expected<void, core::Error>
 DeviceResources::readbackImage(ImageHandle handle, std::span<std::byte> bytes) {
     auto* slot = findSlot(m_images, handle);
+    if (slot && slot->bindingReferences != 0) {
+        return std::unexpected(
+            core::Error{
+                core::ErrorCategory::InvalidState,
+                core::ErrorStage::Capability,
+                "resource is referenced by the descriptor set",
+                std::nullopt});
+    }
     if (!slot || slot->layout == VK_IMAGE_LAYOUT_UNDEFINED ||
         !matchesImageSize(slot->desc, bytes.size())) {
         return std::unexpected(

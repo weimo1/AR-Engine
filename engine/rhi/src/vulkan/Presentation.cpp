@@ -58,7 +58,9 @@ std::expected<void, core::Error> Presentation::open(
     std::uint32_t presentFamily,
     VkExtent2D framebuffer,
     const TriangleShaders* shaders,
-    bool enableScreenshot) {
+    bool enableScreenshot,
+    VkDescriptorSetLayout bindingLayout,
+    VkDescriptorSet bindingSet) {
     if (!vkGetPhysicalDeviceSurfaceCapabilitiesKHR || !vkGetPhysicalDeviceSurfaceFormatsKHR ||
         !vkCreateSwapchainKHR || !vkDestroySwapchainKHR || !vkGetSwapchainImagesKHR ||
         !vkAcquireNextImageKHR || !vkQueuePresentKHR) {
@@ -75,6 +77,7 @@ std::expected<void, core::Error> Presentation::open(
     m_presentFamily = presentFamily;
     m_shaders = shaders;
     m_enableScreenshot = enableScreenshot;
+    m_bindingSet = bindingSet;
     for (Frame& frame : m_frames) {
         if (auto created = createFrame(frame, graphicsFamily); !created) {
             return created;
@@ -83,6 +86,10 @@ std::expected<void, core::Error> Presentation::open(
     if (m_shaders) {
         VkPipelineLayoutCreateInfo layout{};
         layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        if (bindingLayout) {
+            layout.setLayoutCount = 1;
+            layout.pSetLayouts = &bindingLayout;
+        }
         if (auto created = create(
                 m_device,
                 m_pipelineLayout,
@@ -514,6 +521,17 @@ Presentation::record(VkCommandBuffer commands, const Image& image, bool capture)
     vkCmdBeginRendering(commands, &rendering);
     if (m_swapchain.pipeline) {
         vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, m_swapchain.pipeline);
+        if (m_bindingSet) {
+            vkCmdBindDescriptorSets(
+                commands,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                m_pipelineLayout,
+                0,
+                1,
+                &m_bindingSet,
+                0,
+                nullptr);
+        }
         vkCmdDraw(commands, 3, 1, 0, 0);
     }
     vkCmdEndRendering(commands);

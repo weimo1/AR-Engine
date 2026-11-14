@@ -78,6 +78,7 @@ struct QueryConfig {
     std::optional<TriangleShaders> triangleShaders;
     bool enableScreenshot = false;
     bool enableSetBinding = false;
+    bool enableSetBindingSample = false;
 };
 
 struct DescriptorHeapLimits {

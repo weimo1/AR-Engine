@@ -201,6 +201,13 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorStage::Validation,
             "a graphics device requires a Vulkan API request of at least 1.3");
     }
+    if (config.enableSetBindingSample &&
+        (!config.enableSetBinding || !config.presentation || !config.triangleShaders)) {
+        return makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "binding sample requires descriptor sets, presentation and shaders");
+    }
     if (config.enableSetBinding && !config.createGraphicsDevice) {
         return makeError(
             core::ErrorCategory::InvalidArguments,
@@ -1006,13 +1013,86 @@ struct RhiSession::Impl {
             if (!owner) {
                 return std::unexpected(std::move(owner.error()));
             }
-            auto view = (*owner)->createDefaultSampledView();
+            constexpr std::array white{
+                std::byte{255}, std::byte{255}, std::byte{255}, std::byte{255}};
+            const auto makeBoundView =
+                [owner](ImageHandle image) -> std::expected<VkImageView, core::Error> {
+                auto handle = (*owner)->createImageView(image);
+                if (!handle) {
+                    return std::unexpected(std::move(handle.error()));
+                }
+                return (*owner)->retainSampledView(*handle);
+            };
+            auto whiteImage = (*owner)->createSampledImage({1, 1}, white);
+            if (!whiteImage) {
+                return std::unexpected(std::move(whiteImage.error()));
+            }
+            auto view = makeBoundView(*whiteImage);
             if (!view) {
                 return std::unexpected(std::move(view.error()));
             }
             setBinding.emplace(graphicsDevice);
             if (auto opened = setBinding->open(*view); !opened) {
                 return opened;
+            }
+            if (config.enableSetBindingSample) {
+                constexpr std::array stripes{
+                    std::byte{255},
+                    std::byte{0},
+                    std::byte{0},
+                    std::byte{255},
+                    std::byte{0},
+                    std::byte{255},
+                    std::byte{0},
+                    std::byte{255}};
+                constexpr std::array blue{
+                    std::byte{0}, std::byte{0}, std::byte{255}, std::byte{255}};
+                auto stripesImage = (*owner)->createSampledImage({2, 1}, stripes);
+                if (!stripesImage) {
+                    return std::unexpected(std::move(stripesImage.error()));
+                }
+                auto stripesView = makeBoundView(*stripesImage);
+                if (!stripesView) {
+                    return std::unexpected(std::move(stripesView.error()));
+                }
+                auto secondView = makeBoundView(*stripesImage);
+                if (!secondView) {
+                    return std::unexpected(std::move(secondView.error()));
+                }
+                auto blueImage = (*owner)->createSampledImage({1, 1}, blue);
+                if (!blueImage) {
+                    return std::unexpected(std::move(blueImage.error()));
+                }
+                auto blueView = makeBoundView(*blueImage);
+                if (!blueView) {
+                    return std::unexpected(std::move(blueView.error()));
+                }
+                const auto checkTransfers = [&]() -> std::expected<void, core::Error> {
+                    std::array<std::byte, stripes.size()> bytes{};
+                    const auto upload = (*owner)->uploadImage(*stripesImage, stripes);
+                    const auto read = (*owner)->readbackImage(*stripesImage, bytes);
+                    if (upload || read ||
+                        upload.error().category != core::ErrorCategory::InvalidState ||
+                        read.error().category != core::ErrorCategory::InvalidState) {
+                        return std::unexpected(makeError(
+                            core::ErrorCategory::InternalError,
+                            core::ErrorStage::Capability,
+                            "binding sample expected upload and readback to reject the shared "
+                            "image"));
+                    }
+                    return {};
+                };
+                if (auto checked = checkTransfers(); !checked) {
+                    return checked;
+                }
+                if (auto populated =
+                        setBinding->populateSample(*stripesView, *blueView, *secondView);
+                    !populated) {
+                    return populated;
+                }
+                if (auto checked = checkTransfers(); !checked) {
+                    return checked;
+                }
             }
             emitEvent(
                 *diagnostics,
@@ -1060,7 +1140,9 @@ struct RhiSession::Impl {
                     families.present,
                     {config.presentation->width, config.presentation->height},
                     config.triangleShaders ? &*config.triangleShaders : nullptr,
-                    config.enableScreenshot);
+                    config.enableScreenshot,
+                    config.enableSetBindingSample ? setBinding->layout() : VK_NULL_HANDLE,
+                    config.enableSetBindingSample ? setBinding->set() : VK_NULL_HANDLE);
                 !opened) {
                 return opened;
             }

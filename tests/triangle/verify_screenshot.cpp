@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <string_view>
 
 #define STBI_ONLY_PNG
 #define STB_IMAGE_IMPLEMENTATION
@@ -24,7 +25,7 @@ bool matches(const unsigned char* pixel, const std::array<double, 3>& color, boo
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 2) {
+    if (argc != 2 && (argc != 3 || std::wstring_view{argv[2]} != L"set-binding")) {
         return 2;
     }
     std::FILE* file = nullptr;
@@ -44,6 +45,51 @@ int wmain(int argc, wchar_t** argv) {
     const auto at = [&](int x, int y) {
         return pixels.get() + (static_cast<std::size_t>(y) * width + x) * 4;
     };
+    if (argc == 3) {
+        // Each vertical region varies only the texture or sampler index relative to region 1.
+        constexpr std::array<std::array<unsigned char, 4>, 4> expected{{
+            {255, 255, 255, 255}, // Default texture and sampler
+            {255, 0, 0, 255},     // Red texel, nearest
+            {0, 0, 255, 255},     // Blue texture, nearest
+            {128, 128, 0, 255},   // Red/green midpoint, linear (UNORM attachment)
+        }};
+        constexpr std::array<unsigned, 4> textureIndices{0, 1, 2, 1};
+        constexpr std::array<unsigned, 4> samplerIndices{0, 0, 0, 1};
+        for (std::size_t region = 0; region < expected.size(); ++region) {
+            const int x = static_cast<int>(2 * region + 1) * width / 8;
+            const int y = height / 2;
+            const auto* pixel = at(x, y);
+            auto target = expected[region];
+            // The linear midpoint is encoded to approximately 188 on an sRGB swapchain.
+            if (region == 3 && pixel[0] > 160) {
+                target[0] = target[1] = 188;
+            }
+            for (std::size_t channel = 0; channel < target.size(); ++channel) {
+                if (std::abs(static_cast<int>(pixel[channel]) - target[channel]) > 3) {
+                    std::fprintf(
+                        stderr,
+                        "binding material=%zu texture_index=%u sampler_index=%u pixel=(%d,%d) "
+                        "expected=(%u,%u,%u,%u) "
+                        "actual=(%u,%u,%u,%u)\n",
+                        region,
+                        textureIndices[region],
+                        samplerIndices[region],
+                        x,
+                        y,
+                        target[0],
+                        target[1],
+                        target[2],
+                        target[3],
+                        pixel[0],
+                        pixel[1],
+                        pixel[2],
+                        pixel[3]);
+                    return 1;
+                }
+            }
+        }
+        return 0;
+    }
     constexpr std::array clear{0.025, 0.06, 0.14};
     const bool srgb = matches(at(0, 0), clear, true);
     const std::array corners{

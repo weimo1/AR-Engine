@@ -13,8 +13,10 @@ def check(executable: str, output_root: Path, configuration: str, mode: str,
         if mode == "clear":
             args.append("--clear-only")
         image = Path(directory) / "frame.png"
-        if mode == "screenshot":
+        if mode in {"screenshot", "set-binding"}:
             args.extend(["--screenshot", str(image)])
+        if mode == "set-binding":
+            args.append("--set-binding")
         run = subprocess.run(
             args,
             capture_output=True, text=True, timeout=40, check=False,
@@ -48,10 +50,13 @@ def check(executable: str, output_root: Path, configuration: str, mode: str,
         errors = [event for event in events if event["event_id"] == "rhi.validation.error"]
         if errors:
             raise RuntimeError(f"Vulkan Validation errors: {errors}")
-        if mode == "screenshot":
+        if mode in {"screenshot", "set-binding"}:
             if not verifier or not image.is_file():
                 raise RuntimeError("screenshot or PNG verifier missing")
-            subprocess.run([verifier, str(image)], check=True, timeout=5)
+            verifier_args = [verifier, str(image)]
+            if mode == "set-binding":
+                verifier_args.append(mode)
+            subprocess.run(verifier_args, check=True, timeout=5)
         print("validation_errors=0")
 
 

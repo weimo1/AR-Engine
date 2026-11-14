@@ -189,7 +189,10 @@ std::expected<TransferToken, core::Error> DeviceResources::transfer(
     if (image) {
         VkImageMemoryBarrier2 barrier{};
         barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        if (image->layout != VK_IMAGE_LAYOUT_UNDEFINED) {
+        if (image->layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        } else if (image->layout != VK_IMAGE_LAYOUT_UNDEFINED) {
             barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
             barrier.srcAccessMask = access;
         }

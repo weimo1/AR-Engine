@@ -33,7 +33,9 @@ public:
         std::uint32_t presentFamily,
         VkExtent2D framebuffer,
         const TriangleShaders* shaders,
-        bool enableScreenshot);
+        bool enableScreenshot,
+        VkDescriptorSetLayout bindingLayout,
+        VkDescriptorSet bindingSet);
     std::expected<PresentStatus, core::Error>
     presentFrame(VkExtent2D framebuffer, FrameScreenshot* screenshot);
     std::optional<core::Error> close();
@@ -104,6 +106,7 @@ private:
     bool m_enableScreenshot = false;
     VkExtent2D m_requestedExtent{};
     SwapchainResources m_swapchain;
+    VkDescriptorSet m_bindingSet = VK_NULL_HANDLE;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     std::array<Frame, 2> m_frames{};
     std::size_t m_frameIndex = 0;

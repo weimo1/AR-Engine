@@ -23,6 +23,7 @@ SetBindingTable::~SetBindingTable() {
     if (m_device) {
         vkDestroyDescriptorPool(m_device, m_pool, nullptr);
         vkDestroyDescriptorSetLayout(m_device, m_layout, nullptr);
+        vkDestroySampler(m_device, m_linearSampler, nullptr);
         vkDestroySampler(m_device, m_defaultSampler, nullptr);
     }
 }
@@ -117,6 +118,42 @@ std::expected<void, core::Error> SetBindingTable::open(VkImageView defaultView) 
     }
     vkUpdateDescriptorSets(
         m_device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    return {};
+}
+
+std::expected<void, core::Error>
+SetBindingTable::populateSample(VkImageView stripes, VkImageView blue, VkImageView secondView) {
+    VkSamplerCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    info.magFilter = VK_FILTER_LINEAR;
+    info.minFilter = VK_FILTER_LINEAR;
+    info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    VkSampler sampler = VK_NULL_HANDLE;
+    if (const auto result = vkCreateSampler(m_device, &info, nullptr, &sampler);
+        result != VK_SUCCESS) {
+        return std::unexpected(bindingError("vkCreateSampler", result));
+    }
+    m_linearSampler = sampler;
+    const std::array images{
+        VkDescriptorImageInfo{VK_NULL_HANDLE, stripes, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        VkDescriptorImageInfo{VK_NULL_HANDLE, blue, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        VkDescriptorImageInfo{VK_NULL_HANDLE, secondView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+    };
+    const VkDescriptorImageInfo linear{sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+    std::array<VkWriteDescriptorSet, 2> writes{};
+    writes[0].sType = writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = writes[1].dstSet = m_set;
+    writes[0].dstArrayElement = writes[1].dstArrayElement = 1;
+    writes[0].descriptorCount = static_cast<std::uint32_t>(images.size());
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    writes[0].pImageInfo = images.data();
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+    writes[1].pImageInfo = &linear;
+    vkUpdateDescriptorSets(m_device, 2, writes.data(), 0, nullptr);
     return {};
 }
 

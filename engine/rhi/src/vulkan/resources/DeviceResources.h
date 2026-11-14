@@ -42,7 +42,9 @@ public:
     std::expected<void, core::Error> destroyBuffer(BufferHandle handle);
     std::expected<ImageHandle, core::Error> createImage(ImageDesc desc);
     std::expected<ImageViewHandle, core::Error> createImageView(ImageHandle image);
-    std::expected<VkImageView, core::Error> createDefaultSampledView();
+    std::expected<ImageHandle, core::Error>
+    createSampledImage(ImageDesc desc, std::span<const std::byte> pixels);
+    std::expected<VkImageView, core::Error> retainSampledView(ImageViewHandle view);
     std::expected<void, core::Error> destroyImageView(ImageViewHandle handle);
     std::expected<void, core::Error> destroyImage(ImageHandle handle);
     std::expected<TransferToken, core::Error>
@@ -75,11 +77,13 @@ private:
         ResourceLifetime lifetime;
         ImageDesc desc{};
         VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        std::size_t bindingReferences = 0;
     };
 
     struct ViewSlot {
         VkImageView view = VK_NULL_HANDLE;
         ImageHandle image{};
+        std::size_t bindingReferences = 0;
         ResourceLifetime lifetime;
     };
 
