@@ -42,6 +42,7 @@ public:
     std::expected<void, core::Error> destroyBuffer(BufferHandle handle);
     std::expected<ImageHandle, core::Error> createImage(ImageDesc desc);
     std::expected<ImageViewHandle, core::Error> createImageView(ImageHandle image);
+    std::expected<VkImageView, core::Error> createDefaultSampledView();
     std::expected<void, core::Error> destroyImageView(ImageViewHandle handle);
     std::expected<void, core::Error> destroyImage(ImageHandle handle);
     std::expected<TransferToken, core::Error>
@@ -97,7 +98,8 @@ private:
         ImageSlot* image,
         std::span<const std::byte> input,
         std::span<std::byte> output,
-        bool hostVisibleDestination = false);
+        bool hostVisibleDestination = false,
+        VkImageLayout finalImageLayout = VK_IMAGE_LAYOUT_UNDEFINED);
     std::expected<BufferSlot*, core::Error>
     validateAccess(BufferHandle handle, std::uint64_t offset, std::size_t bytes);
 

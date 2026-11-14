@@ -77,6 +77,7 @@ struct QueryConfig {
     std::optional<Win32Presentation> presentation;
     std::optional<TriangleShaders> triangleShaders;
     bool enableScreenshot = false;
+    bool enableSetBinding = false;
 };
 
 struct DescriptorHeapLimits {

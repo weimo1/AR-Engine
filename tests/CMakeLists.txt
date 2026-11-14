@@ -72,6 +72,8 @@ set(AR_REQUIRED_RHI_CASES
     rhi-upload-readback
     rhi-resource-retirement
     rhi-upload-retirement
+    rhi-set-binding-limits
+    rhi-set-binding-device
     rhi-device-enhanced-unavailable
     rhi-device-missing-feature
     rhi-device-selection
@@ -125,7 +127,7 @@ endforeach()
 
 set_tests_properties(rhi-device-create rhi-device-vulkan14-heap rhi-vma-buffer rhi-vma-image-view
     PROPERTIES LABELS gpu TIMEOUT 30)
-set_tests_properties(rhi-upload-readback rhi-upload-retirement PROPERTIES LABELS gpu TIMEOUT 30
+set_tests_properties(rhi-upload-readback rhi-upload-retirement rhi-set-binding-device PROPERTIES LABELS gpu TIMEOUT 30
     ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>;VK_VALIDATION_VALIDATE_SYNC=1")
 
 set(AR_REQUIRED_RUNTIME_CASES

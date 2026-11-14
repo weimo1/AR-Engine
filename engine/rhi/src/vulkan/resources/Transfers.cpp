@@ -123,7 +123,8 @@ std::expected<TransferToken, core::Error> DeviceResources::transfer(
     ImageSlot* image,
     std::span<const std::byte> input,
     std::span<std::byte> output,
-    bool hostVisibleDestination) {
+    bool hostVisibleDestination,
+    VkImageLayout finalImageLayout) {
     if (auto settled = settleTransfer(true); !settled) {
         return std::unexpected(std::move(settled.error()));
     }
@@ -210,6 +211,15 @@ std::expected<TransferToken, core::Error> DeviceResources::transfer(
         if (upload) {
             vkCmdCopyBufferToImage(
                 m_transferCommands, stagingBuffer, image->image, layout, 1, &region);
+            if (finalImageLayout != VK_IMAGE_LAYOUT_UNDEFINED) {
+                barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+                barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                barrier.oldLayout = layout;
+                barrier.newLayout = finalImageLayout;
+                vkCmdPipelineBarrier2(m_transferCommands, &dependency);
+            }
         } else {
             vkCmdCopyImageToBuffer(
                 m_transferCommands, image->image, layout, stagingBuffer, 1, &region);
@@ -262,7 +272,7 @@ std::expected<TransferToken, core::Error> DeviceResources::transfer(
         m_firstTransfer = m_lastTransfer;
     }
     if (image) {
-        image->layout = layout;
+        image->layout = finalImageLayout == VK_IMAGE_LAYOUT_UNDEFINED ? layout : finalImageLayout;
     }
     if (!upload) {
         m_readbackNeedsStaging = true;

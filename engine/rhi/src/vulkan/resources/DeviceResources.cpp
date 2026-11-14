@@ -3,6 +3,7 @@
 #include <vk_mem_alloc.h>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -377,6 +378,32 @@ std::expected<ImageViewHandle, core::Error> DeviceResources::createImageView(Ima
     created.lifetime.generation = nextGeneration++;
     m_views[*index] = created;
     return ImageViewHandle{*index, created.lifetime.generation};
+}
+
+std::expected<VkImageView, core::Error> DeviceResources::createDefaultSampledView() {
+    auto image = createImage({1, 1});
+    if (!image) {
+        return std::unexpected(std::move(image.error()));
+    }
+    constexpr std::array pixel{std::byte{255}, std::byte{255}, std::byte{255}, std::byte{255}};
+    auto uploaded = transfer(
+        VK_NULL_HANDLE,
+        findSlot(m_images, *image),
+        pixel,
+        {},
+        false,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    if (!uploaded) {
+        return std::unexpected(std::move(uploaded.error()));
+    }
+    if (auto ready = waitTransfer(*uploaded); !ready) {
+        return std::unexpected(std::move(ready.error()));
+    }
+    auto view = createImageView(*image);
+    if (!view) {
+        return std::unexpected(std::move(view.error()));
+    }
+    return findSlot(m_views, *view)->view;
 }
 
 std::expected<void, core::Error> DeviceResources::destroyImageView(ImageViewHandle handle) {

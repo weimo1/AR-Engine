@@ -21,6 +21,8 @@
 #include "Presentation.h"
 #include "TestingHooks.h"
 #include "VulkanResult.h"
+#include "binding/SetBindingLimits.h"
+#include "binding/SetBindingTable.h"
 #include "resources/DeviceResources.h"
 
 namespace ar::rhi {
@@ -199,6 +201,12 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorStage::Validation,
             "a graphics device requires a Vulkan API request of at least 1.3");
     }
+    if (config.enableSetBinding && !config.createGraphicsDevice) {
+        return makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "Descriptor Set binding requires a graphics device");
+    }
     if (config.enableDescriptorHeap &&
         (!config.createGraphicsDevice || version < VK_API_VERSION_1_4)) {
         return makeError(
@@ -281,6 +289,7 @@ struct RhiSession::Impl {
     VkQueue graphicsQueue = VK_NULL_HANDLE;
     std::optional<detail::Presentation> presenter;
     std::optional<detail::DeviceResources> resources;
+    std::optional<detail::SetBindingTable> setBinding;
     std::optional<GraphicsDeviceInfo> graphicsInfo;
     bool ownsProcess = false;
     bool volkInitialized = false;
@@ -895,6 +904,52 @@ struct RhiSession::Impl {
             address.pNext = &heap;
             extensions.push_back(VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME);
         }
+        VkPhysicalDeviceDescriptorIndexingFeatures indexing{};
+        detail::SetBindingLimits bindingLimits{};
+        if (config.enableSetBinding) {
+            indexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+            VkPhysicalDeviceFeatures2 features{};
+            features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            features.pNext = &indexing;
+            vkGetPhysicalDeviceFeatures2(physical, &features);
+            VkPhysicalDeviceProperties properties{};
+            vkGetPhysicalDeviceProperties(physical, &properties);
+            const auto& limits = properties.limits;
+            bindingLimits = {
+                indexing.shaderSampledImageArrayNonUniformIndexing == VK_TRUE,
+                std::min(
+                    limits.maxPerStageDescriptorSampledImages,
+                    limits.maxDescriptorSetSampledImages),
+                std::min(limits.maxPerStageDescriptorSamplers, limits.maxDescriptorSetSamplers),
+                limits.maxPerStageResources};
+            const auto check = detail::checkSetBinding(
+                bindingLimits, detail::kSetImageCount, detail::kSetSamplerCount);
+            if (check != detail::SetBindingCheck::Ready) {
+                const char* reason = "maxPerStageResources";
+                switch (check) {
+                case detail::SetBindingCheck::MissingFeature:
+                    reason = "shaderSampledImageArrayNonUniformIndexing";
+                    break;
+                case detail::SetBindingCheck::ImageLimit:
+                    reason = "sampled image descriptor limits";
+                    break;
+                case detail::SetBindingCheck::SamplerLimit:
+                    reason = "sampler descriptor limits";
+                    break;
+                case detail::SetBindingCheck::StageLimit:
+                case detail::SetBindingCheck::Ready:
+                    break;
+                }
+                return std::unexpected(makeError(
+                    core::ErrorCategory::RequestedApiUnsupported,
+                    core::ErrorStage::Capability,
+                    std::string("Descriptor Set binding requires ") + reason));
+            }
+            indexing = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES};
+            indexing.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+            indexing.pNext = core13.pNext;
+            core13.pNext = &indexing;
+        }
         VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR maintenance{};
         if (surface != VK_NULL_HANDLE) {
             maintenance.sType =
@@ -946,6 +1001,48 @@ struct RhiSession::Impl {
         }
         graphicsInfo =
             GraphicsDeviceInfo{families.graphics, debugMessenger != VK_NULL_HANDLE, heapLimits};
+        if (config.enableSetBinding) {
+            auto owner = resourcesForCreation();
+            if (!owner) {
+                return std::unexpected(std::move(owner.error()));
+            }
+            auto view = (*owner)->createDefaultSampledView();
+            if (!view) {
+                return std::unexpected(std::move(view.error()));
+            }
+            setBinding.emplace(graphicsDevice);
+            if (auto opened = setBinding->open(*view); !opened) {
+                return opened;
+            }
+            emitEvent(
+                *diagnostics,
+                core::LogLevel::Info,
+                "rhi.binding.set.ready",
+                "path=descriptor-set images=" + std::to_string(detail::kSetImageCount) +
+                    " samplers=" + std::to_string(detail::kSetSamplerCount) +
+                    " default_slot=0 shaderSampledImageArrayNonUniformIndexing=true" +
+                    " image_limit=" + std::to_string(bindingLimits.images) +
+                    " sampler_limit=" + std::to_string(bindingLimits.samplers) +
+                    " stage_limit=" + std::to_string(bindingLimits.total) + " log_level=" +
+                    core::toString(
+                        diagnostics->enabled(core::LogLevel::Debug) ? core::LogLevel::Debug
+                                                                    : core::LogLevel::Info) +
+                    " validation=" + (graphicsInfo->validationEnabled ? "enabled" : "disabled"));
+            if (diagnostics->enabled(core::LogLevel::Debug)) {
+                const auto reportSlots = [&](std::string_view kind, std::uint32_t count) {
+                    for (std::uint32_t slot = 0; slot < count; ++slot) {
+                        emitEvent(
+                            *diagnostics,
+                            core::LogLevel::Debug,
+                            "rhi.binding.set.slot-initialized",
+                            "type=" + std::string(kind) + " slot=" + std::to_string(slot) +
+                                " default_slot=0");
+                    }
+                };
+                reportSlots("image", detail::kSetImageCount);
+                reportSlots("sampler", detail::kSetSamplerCount);
+            }
+        }
         if (surface != VK_NULL_HANDLE) {
             VkQueue presentQueue = VK_NULL_HANDLE;
             vkGetDeviceQueue(graphicsDevice, families.present, 0, &presentQueue);
@@ -1118,6 +1215,10 @@ struct RhiSession::Impl {
                 resources->abandon();
             }
         }
+        if (setBinding && (retainPresentation || retainResources)) {
+            setBinding->abandon();
+        }
+        setBinding.reset();
         resources.reset();
         graphicsInfo.reset();
         if (graphicsDevice != VK_NULL_HANDLE && !retainPresentation && !retainResources) {

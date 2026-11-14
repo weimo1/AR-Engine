@@ -16,6 +16,8 @@
 #include "core/BuildInfo.h"
 #include "core/Diagnostics.h"
 #include "rhi/RhiSession.h"
+#include "vulkan/binding/SetBindingLimits.h"
+#include "vulkan/binding/SetBindingSlots.h"
 #include "vulkan/resources/ResourceLifetime.h"
 
 namespace core = ar::core;
@@ -51,11 +53,14 @@ std::filesystem::path freshRunDirectory(const std::string& runId) {
     return directory;
 }
 
-std::unique_ptr<core::DiagnosticSession>
-makeSession(const std::filesystem::path& directory, const std::string& runId) {
+std::unique_ptr<core::DiagnosticSession> makeSession(
+    const std::filesystem::path& directory,
+    const std::string& runId,
+    core::LogLevel level = core::LogLevel::Info) {
     core::DiagnosticConfig config;
     config.outputRoot = directory;
     config.runId = runId;
+    config.minLevel = level;
     auto created = core::DiagnosticSession::create(config, identity());
     REQUIRE(created.has_value());
     return std::move(*created);
@@ -1035,4 +1040,58 @@ TEST_CASE(
     // A finished diagnostic run does not lift the quarantine.
     finishSession(*session, runId);
     CHECK(rhi::detail::isProcessQuarantined());
+}
+
+TEST_CASE("descriptor set limits reject unsupported requests", "[rhi-set-binding-limits]") {
+    using rhi::detail::checkSetBinding;
+    using rhi::detail::SetBindingCheck;
+    using rhi::detail::SetBindingLimits;
+    const SetBindingLimits limits{true, 16, 8, 20};
+    CHECK(checkSetBinding(limits, 8, 4) == SetBindingCheck::Ready);
+    CHECK(checkSetBinding({false, 16, 8, 20}, 8, 4) == SetBindingCheck::MissingFeature);
+    CHECK(checkSetBinding(limits, 0, 4) == SetBindingCheck::ImageLimit);
+    CHECK(checkSetBinding(limits, 17, 4) == SetBindingCheck::ImageLimit);
+    CHECK(checkSetBinding(limits, 8, 0) == SetBindingCheck::SamplerLimit);
+    CHECK(checkSetBinding(limits, 8, 9) == SetBindingCheck::SamplerLimit);
+    CHECK(checkSetBinding(limits, 16, 8) == SetBindingCheck::StageLimit);
+
+    rhi::detail::SetBindingSlots<int, 3> slots{42};
+    CHECK(slots.descriptor(0) == 42);
+    CHECK(slots.descriptor(1) == 42);
+    CHECK(slots.descriptor(2) == 42);
+    CHECK(slots.reserve(51) == 1);
+    CHECK(slots.reserve(52) == 2);
+    CHECK_FALSE(slots.reserve(53));
+    CHECK(slots.descriptor(0) == 42);
+    CHECK(slots.descriptor(1) == 51);
+    CHECK(slots.descriptor(2) == 52);
+}
+
+TEST_CASE("descriptor set binding creates ready defaults", "[rhi-set-binding-device]") {
+    for (const auto level : {core::LogLevel::Info, core::LogLevel::Debug}) {
+        const bool debug = level == core::LogLevel::Debug;
+        const std::string runId = debug ? "rhi-set-binding-debug" : "rhi-set-binding-info";
+        const auto directory = freshRunDirectory(runId);
+        auto diagnostics = makeSession(directory, runId, level);
+        rhi::QueryConfig config;
+        config.requestedApi = rhi::makeApiVersion(1, 3);
+        config.createGraphicsDevice = true;
+        config.enableSetBinding = true;
+        auto opened = rhi::RhiSession::open(config, *diagnostics);
+        REQUIRE(opened);
+        const auto info = (*opened)->graphicsDeviceInfo();
+        REQUIRE(info);
+#ifdef _DEBUG
+        CHECK(info->validationEnabled);
+#else
+        CHECK_FALSE(info->validationEnabled);
+#endif
+        const auto closed = (*opened)->close();
+        CHECK(closed.resourcesReleased);
+        CHECK(closed.errors.empty());
+        finishSession(*diagnostics, runId);
+        CHECK(containsEvent(directory, runId, "rhi.binding.set.ready"));
+        CHECK(containsEvent(directory, runId, "rhi.binding.set.slot-initialized") == debug);
+        CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
+    }
 }

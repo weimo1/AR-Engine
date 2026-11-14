@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "objective": "P2b 验收 Descriptor Set 绑定能力、材质索引采样和在途槽位退役。",
+  "non_goals": ["Descriptor Heap", "资产加载与通用材质系统"],
+  "tags": ["native"],
+  "documents": [
+    {"path": "docs/实施路线与阶段计划.md", "purpose": "requirements", "status": "confirmed", "basis": "P2b 范围"},
+    {"path": "docs/modules/rhi/README.md", "purpose": "architecture", "status": "reference", "basis": "资源绑定职责与生命周期"}
+  ],
+  "skills": ["ar-cpp-oop-style", "ar-e2e-side-effect-safety", "ar-context7"],
+  "write_paths": ["TASK.md", "openspec/changes/p2b-set-bindless/**", "docs/modules/rhi/README.md", "engine/rhi/**", "engine/runtime/**", "examples/triangle/**", "tests/**", "workflow/p0-checks.json"]
+}

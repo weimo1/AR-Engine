@@ -99,7 +99,7 @@ flowchart LR
 
 Heap阶段额外核对描述符大小、步长、对齐、写入范围及可见性。工具能力登记实际版本、启用设置、验证场景、结果和缺口，支持/未运行/不支持分别记录。官方GPU-AV文档说明其通过Shader插桩和GPU资源检查覆盖运行时访问，并具有性能开销和使用限制。[官方GPU-AV文档](https://github.com/KhronosGroup/Vulkan-ValidationLayers/blob/main/docs/gpu_validation.md)
 
-资源切片先验证上传与回读、在途销毁及句柄失效，Set Bindless切片再验证索引/初始化/多帧更新/槽位复用，Heap切片用相同语义验证布局与输出。相关行为与验收由未来change的proposal承载，本节作为长期方案输入。
+RHI 持有设备级 Descriptor Set 绑定表、默认纹理与 sampler，以及槽位对底层资源的引用。上层持有类型化绑定句柄，录制时解析已发布索引。资源层拒绝销毁仍被槽位引用的 view 和 sampler。P2b 在最后一个槽位解除对底层 Image 的引用前拒绝其上传和读回，覆盖指向同一 Image 的多个 view。帧边界在相关提交完成后发布更新、解除退役引用并开放复用。INFO 记录表能力及汇总，按需 DEBUG 关联槽位、资源和提交。P2b 的固定容量表、发布时机和复现方法见 [P2b 技术方案](../../../openspec/changes/p2b-set-bindless/design.md)。Heap 阶段沿用同一资源绑定语义。
 
 P0技术方案修订：3，2026-11-04。模块职责与 P0 查询范围已确认。下文说明接口设计与关闭边界，具体实现进度见文末。
 
