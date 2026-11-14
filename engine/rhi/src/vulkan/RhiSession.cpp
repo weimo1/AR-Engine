@@ -1797,6 +1797,19 @@ RhiSession::presentFrame(std::uint32_t width, std::uint32_t height, FrameScreens
     return result;
 }
 
+std::expected<std::array<std::uint32_t, 2>, core::Error> RhiSession::verifyGpuCull(
+    std::span<const std::byte> planes,
+    std::span<const std::byte> objects,
+    std::span<const std::uint32_t> shader,
+    std::span<std::uint32_t> ids,
+    std::span<std::array<std::uint32_t, 4>> commands) {
+    auto resources = m_impl->resourcesForCreation();
+    if (!resources) {
+        return std::unexpected(std::move(resources.error()));
+    }
+    return (*resources)->verifyGpuCull(planes, objects, shader, ids, commands);
+}
+
 std::expected<BufferHandle, core::Error> RhiSession::createBuffer(BufferDesc desc) {
     auto resources = m_impl->resourcesForCreation();
     if (!resources) {

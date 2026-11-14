@@ -1,0 +1,50 @@
+#version 450
+
+layout(local_size_x = 64) in;
+
+struct CullObject {
+    vec4 sphere;
+    uvec4 draw;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer Planes {
+    vec4 planes[6];
+};
+layout(std430, set = 0, binding = 1) readonly buffer Objects {
+    CullObject objects[];
+};
+layout(std430, set = 0, binding = 2) writeonly buffer Visible {
+    uint ids[];
+};
+layout(std430, set = 0, binding = 3) writeonly buffer Commands {
+    uvec4 commands[];
+};
+layout(std430, set = 0, binding = 4) buffer Counters {
+    uint visibleCount;
+    uint commandCount;
+};
+layout(push_constant) uniform Config {
+    uint objectCount;
+    uint capacity;
+} config;
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= config.objectCount) {
+        return;
+    }
+    CullObject object = objects[index];
+    for (uint plane = 0; plane < 6; ++plane) {
+        if (dot(planes[plane], vec4(object.sphere.xyz, 1.0)) < -object.sphere.w) {
+            return;
+        }
+    }
+
+    uint slot = atomicAdd(visibleCount, 1);
+    if (slot >= config.capacity) {
+        return;
+    }
+    ids[slot] = object.draw.x;
+    commands[slot] = uvec4(object.draw.z, 1, object.draw.y, 0);
+    atomicAdd(commandCount, 1);
+}

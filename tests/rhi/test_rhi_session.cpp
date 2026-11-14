@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdlib>
@@ -16,6 +17,7 @@
 #include "core/BuildInfo.h"
 #include "core/Diagnostics.h"
 #include "rhi/RhiSession.h"
+#include "render/CullReference.h"
 #include "vulkan/binding/SetBindingLimits.h"
 #include "vulkan/binding/SetBindingSlots.h"
 #include "vulkan/resources/ResourceLifetime.h"
@@ -1128,4 +1130,66 @@ TEST_CASE(
     REQUIRE(slots.retire(*next));
     CHECK(slots.descriptor(1) == 0);
     CHECK(slots.registerPending(44));
+}
+
+TEST_CASE("GPU culling matches the fixed CPU reference", "[rhi-gpu-culling-reference]") {
+    const std::string runId = "rhi-gpu-culling-reference";
+    const auto directory = freshRunDirectory(runId);
+    auto diagnostics = makeSession(directory, runId);
+    rhi::QueryConfig config;
+    config.requestedApi = rhi::makeApiVersion(1, 3);
+    config.createGraphicsDevice = true;
+    auto session = rhi::RhiSession::open(config, *diagnostics);
+    REQUIRE(session);
+    const auto path = std::filesystem::path(AR_GPU_CULL_SHADER);
+    REQUIRE(std::filesystem::is_regular_file(path));
+    const auto bytes = std::filesystem::file_size(path);
+    REQUIRE(bytes > 0);
+    REQUIRE(bytes % 4 == 0);
+    std::vector<std::uint32_t> shader(bytes / 4);
+    std::ifstream file(path, std::ios::binary);
+    REQUIRE(file.read(reinterpret_cast<char*>(shader.data()), static_cast<std::streamsize>(bytes)));
+
+    const auto scene = ar::render::fixedCullScene();
+    const auto check = [&](std::span<const ar::render::CullObject> objects, std::size_t capacity) {
+        CAPTURE(objects.size(), capacity);
+        std::array<std::uint32_t, 4> expected{};
+        const auto reference = ar::render::cullReference(scene.frustum, objects, expected);
+        std::array<std::uint32_t, 4> ids{};
+        std::array<std::array<std::uint32_t, 4>, 4> commands{};
+        auto result = (*session)->verifyGpuCull(
+            std::as_bytes(std::span{scene.frustum}),
+            std::as_bytes(objects),
+            shader,
+            std::span{ids}.first(capacity),
+            std::span{commands}.first(capacity));
+        if (!result) {
+            INFO(result.error().message);
+            FAIL("GPU culling failed");
+        }
+        CHECK((*result)[0] == reference.visible);
+        REQUIRE((*result)[1] == (std::min)(reference.visible, capacity));
+        auto remaining = std::span{expected}.first(reference.written);
+        for (std::size_t i = 0; i < (*result)[1]; ++i) {
+            const auto found = std::ranges::find(remaining, ids[i]);
+            REQUIRE(found != remaining.end());
+            std::iter_swap(found, remaining.end() - 1);
+            remaining = remaining.first(remaining.size() - 1);
+            const auto object = std::ranges::find(objects, ids[i], &ar::render::CullObject::id);
+            REQUIRE(object != objects.end());
+            CHECK(
+                commands[i] ==
+                std::array<std::uint32_t, 4>{object->vertexCount, 1, object->firstVertex, 0});
+        }
+    };
+    check(scene.objects, 4);
+    check(scene.objects, 3);
+    check(scene.objects, 2);
+    check(scene.objects, 0);
+    check(std::span{scene.objects}.first(1), 1);
+    check(std::span{scene.objects}.subspan(1, 1), 1);
+    check({}, 4);
+    CHECK((*session)->close().resourcesReleased);
+    finishSession(*diagnostics, runId);
+    CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
 }

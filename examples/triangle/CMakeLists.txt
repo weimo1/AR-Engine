@@ -12,12 +12,17 @@ if(NOT image_constant OR NOT sampler_constant)
     message(FATAL_ERROR "Descriptor set capacities are missing")
 endif()
 
-foreach(shader IN ITEMS triangle.vert triangle.frag set_binding.vert set_binding.frag)
+foreach(shader IN ITEMS triangle.vert triangle.frag set_binding.vert set_binding.frag gpu_cull.comp)
     set(source "${PROJECT_SOURCE_DIR}/shaders/${shader}")
     set(output "${shader_dir}/${shader}.spv")
+    set(shader_options)
+    if(shader STREQUAL "gpu_cull.comp")
+        # Use literal LocalSize, without enabling maintenance4 for this path.
+        list(APPEND shader_options --target-spv=spv1.5)
+    endif()
     add_custom_command(OUTPUT "${output}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${shader_dir}"
-        COMMAND "${AR_GLSLC}" --target-env=vulkan1.3 "-DAR_SET_IMAGE_COUNT=${binding_images}" "-DAR_SET_SAMPLER_COUNT=${binding_samplers}" "${source}" -o "${output}.tmp"
+        COMMAND "${AR_GLSLC}" --target-env=vulkan1.3 ${shader_options} "-DAR_SET_IMAGE_COUNT=${binding_images}" "-DAR_SET_SAMPLER_COUNT=${binding_samplers}" "${source}" -o "${output}.tmp"
         COMMAND "${AR_SPIRV_VAL}" --target-env vulkan1.3 "${output}.tmp"
         COMMAND ${CMAKE_COMMAND} -E rename "${output}.tmp" "${output}"
         DEPENDS "${source}" "${binding_limits}" "${AR_GLSLC}" "${AR_SPIRV_VAL}"

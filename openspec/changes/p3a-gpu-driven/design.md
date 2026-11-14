@@ -105,3 +105,5 @@ sequenceDiagram
 进度见 [TASK.md](../../../TASK.md)。P3a 验收后将已验证的稳定边界合入 [render](../../../docs/modules/render/README.md) 与 [RHI](../../../docs/modules/rhi/README.md) 长期设计。
 
 T20 通过 RenderDoc 抓帧并回放。为 Compute 剔除、间接绘制以及命令和计数缓冲添加稳定的调试标签或名称，便于在 Event Browser 与资源视图中定位。
+
+T19 真机验证通过 RHI 同步入口提交 Compute，用 VMA host-visible 缓冲读回计数及有效前缀。由现有提交 fence 和关闭隔离保护资源。这条验证入口每次独立创建资源；T20 绘制路径再接入每帧持久缓冲及 DRAW_INDIRECT 同步。

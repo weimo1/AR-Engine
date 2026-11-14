@@ -91,6 +91,7 @@ DeviceResources::~DeviceResources() {
     if (m_transferFence) {
         vkDestroyFence(m_device, m_transferFence, nullptr);
     }
+    clearCullResources();
     freeStaging();
     for (const auto& slot : m_views) {
         if (slot.view) {
@@ -170,11 +171,11 @@ std::expected<BufferHandle, core::Error> DeviceResources::createBuffer(BufferDes
 }
 
 std::expected<DeviceResources::BufferSlot, core::Error>
-DeviceResources::allocateBuffer(BufferDesc desc) {
+DeviceResources::allocateBuffer(BufferDesc desc, VkBufferUsageFlags extraUsage) {
     VkBufferCreateInfo buffer{};
     buffer.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     buffer.size = desc.bytes;
-    buffer.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    buffer.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | extraUsage;
     VmaAllocationCreateInfo allocation{};
     allocation.usage = VMA_MEMORY_USAGE_AUTO;
     if (desc.memory == BufferMemory::HostVisible) {

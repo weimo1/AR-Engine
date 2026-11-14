@@ -1,5 +1,5 @@
-foreach(stage IN ITEMS vert frag)
-    set(shader "${SHADER_DIR}/triangle.${stage}.spv")
+foreach(name IN ITEMS triangle.vert triangle.frag gpu_cull.comp)
+    set(shader "${SHADER_DIR}/${name}.spv")
     if(NOT EXISTS "${shader}")
         message(FATAL_ERROR "Missing built shader: ${shader}")
     endif()

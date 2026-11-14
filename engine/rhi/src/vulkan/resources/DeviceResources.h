@@ -34,6 +34,12 @@ public:
     DeviceResources(const DeviceResources&) = delete;
     DeviceResources& operator=(const DeviceResources&) = delete;
 
+    std::expected<std::array<std::uint32_t, 2>, core::Error> verifyGpuCull(
+        std::span<const std::byte> planes,
+        std::span<const std::byte> objects,
+        std::span<const std::uint32_t> shader,
+        std::span<std::uint32_t> ids,
+        std::span<std::array<std::uint32_t, 4>> commands);
     std::expected<BufferHandle, core::Error> createBuffer(BufferDesc desc);
     std::expected<void, core::Error>
     writeBuffer(BufferHandle handle, std::uint64_t offset, std::span<const std::byte> bytes);
@@ -90,7 +96,8 @@ private:
 
     std::expected<void, core::Error> ensureAllocator();
     VkDeviceSize bufferSizeLimit();
-    std::expected<BufferSlot, core::Error> allocateBuffer(BufferDesc desc);
+    std::expected<BufferSlot, core::Error>
+    allocateBuffer(BufferDesc desc, VkBufferUsageFlags extraUsage = 0);
     void freeStaging() noexcept;
     void collectRetired() noexcept;
     std::expected<void, core::Error>
@@ -107,6 +114,13 @@ private:
         VkImageLayout finalImageLayout = VK_IMAGE_LAYOUT_UNDEFINED);
     std::expected<BufferSlot*, core::Error>
     validateAccess(BufferHandle handle, std::uint64_t offset, std::size_t bytes);
+
+    void clearCullResources() noexcept;
+    std::array<BufferSlot, 5> m_cullBuffers{};
+    VkDescriptorSetLayout m_cullSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_cullPool = VK_NULL_HANDLE;
+    VkPipelineLayout m_cullLayout = VK_NULL_HANDLE;
+    VkPipeline m_cullPipeline = VK_NULL_HANDLE;
 
     VkInstance m_instance;
     VkPhysicalDevice m_physical;

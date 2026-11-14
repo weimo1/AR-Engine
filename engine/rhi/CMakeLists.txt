@@ -7,6 +7,7 @@ add_library(ar_rhi STATIC
     src/vulkan/binding/SetBindingTable.cpp
     src/vulkan/resources/DeviceResources.cpp
     src/vulkan/resources/Transfers.cpp
+    src/vulkan/resources/GpuCull.cpp
     src/vulkan/resources/Vma.cpp
 )
 

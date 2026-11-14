@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 #include <cstdint>
 #include <expected>
 #include <memory>
@@ -139,6 +141,13 @@ public:
     [[nodiscard]] std::expected<PresentStatus, core::Error>
     presentFrame(std::uint32_t width, std::uint32_t height, FrameScreenshot* screenshot = nullptr);
 
+    // Explicit synchronous verification path. Object records use the 32-byte std430 layout.
+    std::expected<std::array<std::uint32_t, 2>, core::Error> verifyGpuCull(
+        std::span<const std::byte> planes,
+        std::span<const std::byte> objects,
+        std::span<const std::uint32_t> shader,
+        std::span<std::uint32_t> ids,
+        std::span<std::array<std::uint32_t, 4>> commands);
     [[nodiscard]] std::expected<BufferHandle, core::Error> createBuffer(BufferDesc desc);
     // Byte offsets refer to the logical size. Only HostVisible buffers allow direct CPU access.
     [[nodiscard]] std::expected<void, core::Error>
