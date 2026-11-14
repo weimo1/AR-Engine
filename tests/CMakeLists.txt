@@ -73,6 +73,7 @@ set(AR_REQUIRED_RHI_CASES
     rhi-resource-retirement
     rhi-upload-retirement
     rhi-set-binding-limits
+    rhi-set-binding-retirement
     rhi-set-binding-device
     rhi-device-enhanced-unavailable
     rhi-device-missing-feature
@@ -212,10 +213,14 @@ add_test(NAME sample-set-binding-pixels
         "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" set-binding
         "$<TARGET_FILE:ar_verify_screenshot>"
 )
+add_test(NAME sample-set-binding-retirement
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_clear_frames.py"
+        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" set-binding-retirement
+)
 add_test(NAME shader-build COMMAND ${CMAKE_COMMAND}
     "-DVALIDATOR=${AR_SPIRV_VAL}" "-DSHADER_DIR=${CMAKE_BINARY_DIR}/shaders"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_shaders.cmake")
-set_tests_properties(sample-clear-frames sample-triangle-frames sample-triangle-screenshot sample-set-binding-pixels PROPERTIES
+set_tests_properties(sample-clear-frames sample-triangle-frames sample-triangle-screenshot sample-set-binding-pixels sample-set-binding-retirement PROPERTIES
     LABELS gpu TIMEOUT 50 ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1"
 )
 

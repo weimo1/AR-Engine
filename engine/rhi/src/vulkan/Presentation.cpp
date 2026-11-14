@@ -1,4 +1,5 @@
 #include "Presentation.h"
+#include "core/Diagnostics.h"
 
 #include <algorithm>
 #include <cstring>
@@ -243,8 +244,10 @@ std::expected<bool, core::Error> Presentation::createSwapchain(VkExtent2D frameb
     }
 
     if (m_enableScreenshot) {
-        if (auto created = createReadback(m_physical); !created) {
-            return std::unexpected(std::move(created.error()));
+        for (auto& readback : m_swapchain.readbacks) {
+            if (auto created = createReadback(m_physical, readback); !created) {
+                return std::unexpected(std::move(created.error()));
+            }
         }
     }
     if (m_shaders) {
@@ -256,7 +259,8 @@ std::expected<bool, core::Error> Presentation::createSwapchain(VkExtent2D frameb
     return true;
 }
 
-std::expected<void, core::Error> Presentation::createReadback(VkPhysicalDevice physical) {
+std::expected<void, core::Error>
+Presentation::createReadback(VkPhysicalDevice physical, Readback& readback) {
     constexpr VkDeviceSize maxBytes = 128u * 1024u * 1024u;
     const auto pixels =
         static_cast<VkDeviceSize>(m_swapchain.extent.width) * m_swapchain.extent.height;
@@ -268,13 +272,12 @@ std::expected<void, core::Error> Presentation::createReadback(VkPhysicalDevice p
     buffer.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     buffer.size = m_swapchain.readbackBytes;
     buffer.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    if (auto created =
-            create(m_device, m_swapchain.readback, buffer, vkCreateBuffer, "vkCreateBuffer");
+    if (auto created = create(m_device, readback.buffer, buffer, vkCreateBuffer, "vkCreateBuffer");
         !created) {
         return created;
     }
     VkMemoryRequirements requirements{};
-    vkGetBufferMemoryRequirements(m_device, m_swapchain.readback, &requirements);
+    vkGetBufferMemoryRequirements(m_device, readback.buffer, &requirements);
     VkPhysicalDeviceMemoryProperties memory{};
     vkGetPhysicalDeviceMemoryProperties(physical, &memory);
     for (std::uint32_t index = 0; index < memory.memoryTypeCount; ++index) {
@@ -283,22 +286,17 @@ std::expected<void, core::Error> Presentation::createReadback(VkPhysicalDevice p
             !(flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
             continue;
         }
-        m_swapchain.hostCoherent = (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+        readback.coherent = (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
         VkMemoryAllocateInfo allocation{};
         allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocation.allocationSize = requirements.size;
         allocation.memoryTypeIndex = index;
-        if (auto allocated = create(
-                m_device,
-                m_swapchain.readbackMemory,
-                allocation,
-                vkAllocateMemory,
-                "vkAllocateMemory");
+        if (auto allocated =
+                create(m_device, readback.memory, allocation, vkAllocateMemory, "vkAllocateMemory");
             !allocated) {
             return allocated;
         }
-        const VkResult result =
-            vkBindBufferMemory(m_device, m_swapchain.readback, m_swapchain.readbackMemory, 0);
+        const VkResult result = vkBindBufferMemory(m_device, readback.buffer, readback.memory, 0);
         if (result != VK_SUCCESS) {
             return std::unexpected(failed("vkBindBufferMemory", result));
         }
@@ -314,26 +312,27 @@ Presentation::readScreenshot(Frame& frame, FrameScreenshot& screenshot) {
         return std::unexpected(failed("waiting for screenshot submission", result));
     }
     frame.submitted.pending = false;
+    const auto& readback = m_swapchain.readbacks[&frame - m_frames.data()];
     FrameScreenshot captured{
         m_swapchain.extent.width,
         m_swapchain.extent.height,
         std::vector<std::uint8_t>(m_swapchain.readbackBytes)};
     void* mapped = nullptr;
-    result = vkMapMemory(m_device, m_swapchain.readbackMemory, 0, VK_WHOLE_SIZE, 0, &mapped);
+    result = vkMapMemory(m_device, readback.memory, 0, VK_WHOLE_SIZE, 0, &mapped);
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkMapMemory", result));
     }
-    if (!m_swapchain.hostCoherent) {
+    if (!readback.coherent) {
         VkMappedMemoryRange range{};
         range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-        range.memory = m_swapchain.readbackMemory;
+        range.memory = readback.memory;
         range.size = VK_WHOLE_SIZE;
         result = vkInvalidateMappedMemoryRanges(m_device, 1, &range);
     }
     if (result == VK_SUCCESS) {
         std::memcpy(captured.rgba.data(), mapped, captured.rgba.size());
     }
-    vkUnmapMemory(m_device, m_swapchain.readbackMemory);
+    vkUnmapMemory(m_device, readback.memory);
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkInvalidateMappedMemoryRanges", result));
     }
@@ -478,7 +477,7 @@ Presentation::createFrame(Frame& frame, std::uint32_t graphicsFamily) {
 }
 
 std::expected<void, core::Error>
-Presentation::record(VkCommandBuffer commands, const Image& image, bool capture) {
+Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capture) {
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -550,8 +549,7 @@ Presentation::record(VkCommandBuffer commands, const Image& image, bool capture)
         VkBufferImageCopy region{};
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.imageExtent = {m_swapchain.extent.width, m_swapchain.extent.height, 1};
-        vkCmdCopyImageToBuffer(
-            commands, image.handle, barrier.newLayout, m_swapchain.readback, 1, &region);
+        vkCmdCopyImageToBuffer(commands, image.handle, barrier.newLayout, capture, 1, &region);
 
         host.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
         host.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
@@ -560,7 +558,7 @@ Presentation::record(VkCommandBuffer commands, const Image& image, bool capture)
         host.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
         host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        host.buffer = m_swapchain.readback;
+        host.buffer = capture;
         host.size = VK_WHOLE_SIZE;
         dependency.bufferMemoryBarrierCount = 1;
         dependency.pBufferMemoryBarriers = &host;
@@ -632,7 +630,10 @@ Presentation::draw(Frame& frame, bool capture) {
     }
     const bool suboptimalAcquire = result == VK_SUBOPTIMAL_KHR;
     frame.acquired.pending = true;
-    if (auto recorded = record(frame.commands, m_swapchain.images[imageIndex], capture);
+    if (auto recorded = record(
+            frame.commands,
+            m_swapchain.images[imageIndex],
+            capture ? m_swapchain.readbacks[&frame - m_frames.data()].buffer : VK_NULL_HANDLE);
         !recorded) {
         return std::unexpected(std::move(recorded.error()));
     }
@@ -658,6 +659,9 @@ Presentation::draw(Frame& frame, bool capture) {
     submit.pSignalSemaphoreInfos = &render;
     result = vkQueueSubmit2(m_graphicsQueue, 1, &submit, frame.submitted.handle);
     frame.submitted.pending = result == VK_SUCCESS || result == VK_ERROR_DEVICE_LOST;
+    if (frame.submitted.pending) {
+        frame.submission = ++m_submission;
+    }
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkQueueSubmit2", result));
     }
@@ -717,7 +721,7 @@ Presentation::presentFrame(VkExtent2D framebuffer, FrameScreenshot* screenshot) 
         m_rebuild = false;
     }
     auto& frame = m_frames[m_frameIndex];
-    auto result = draw(frame, screenshot != nullptr);
+    auto result = draw(frame, screenshot != nullptr || m_deferCapture);
     if (!result) {
         m_failed = true;
         return std::unexpected(std::move(result.error()));
@@ -726,6 +730,7 @@ Presentation::presentFrame(VkExtent2D framebuffer, FrameScreenshot* screenshot) 
     if (*result == DrawStatus::OutOfDate) {
         return PresentStatus::Retry;
     }
+    m_swapchain.readbacks[m_frameIndex].captured = screenshot != nullptr || m_deferCapture;
     if (screenshot) {
         if (auto captured = readScreenshot(frame, *screenshot); !captured) {
             m_failed = true;
@@ -734,6 +739,55 @@ Presentation::presentFrame(VkExtent2D framebuffer, FrameScreenshot* screenshot) 
     }
     m_frameIndex = (m_frameIndex + 1) % m_frames.size();
     return PresentStatus::Presented;
+}
+
+std::expected<void, core::Error>
+Presentation::collectCapture(std::size_t index, FrameScreenshot& output) {
+    if (index >= m_frames.size() || !m_swapchain.readbacks[index].captured) {
+        return std::unexpected(
+            unavailable("deferred capture is unavailable after swapchain rebuild"));
+    }
+    return readScreenshot(m_frames[index], output);
+}
+
+std::expected<void, core::Error>
+Presentation::waitForBindingFrames(core::DiagnosticSession& diagnostics, std::size_t& waits) {
+    for (auto& frame : m_frames) {
+        if (!frame.submitted.pending) {
+            continue;
+        }
+        const auto status = vkGetFenceStatus(m_device, frame.submitted.handle);
+        if (status == VK_SUCCESS) {
+            frame.submitted.pending = false;
+            continue;
+        }
+        if (status != VK_NOT_READY) {
+            return std::unexpected(failed("checking descriptor set users", status));
+        }
+        ++waits;
+        const auto trace = [&](std::string_view phase) {
+            if (!diagnostics.enabled(core::LogLevel::Debug)) {
+                return;
+            }
+            core::Event event;
+            event.level = core::LogLevel::Debug;
+            event.module = "rhi";
+            event.eventId = "rhi.binding.wait";
+            event.message = "reason=descriptor_update phase=" + std::string(phase) +
+                            " frame=" + std::to_string(&frame - m_frames.data()) +
+                            " submission=" + std::to_string(frame.submission);
+            (void)diagnostics.emit(event);
+        };
+        trace("begin");
+        const auto result =
+            vkWaitForFences(m_device, 1, &frame.submitted.handle, VK_TRUE, kFrameTimeout);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(failed("waiting for descriptor set users", result));
+        }
+        trace("complete");
+        frame.submitted.pending = false;
+    }
+    return {};
 }
 
 std::optional<core::Error> Presentation::drainFrames() {
@@ -791,11 +845,13 @@ void Presentation::destroySwapchain() noexcept {
     if (m_swapchain.pipeline) {
         vkDestroyPipeline(m_device, std::exchange(m_swapchain.pipeline, VK_NULL_HANDLE), nullptr);
     }
-    if (m_swapchain.readback) {
-        vkDestroyBuffer(m_device, m_swapchain.readback, nullptr);
-    }
-    if (m_swapchain.readbackMemory) {
-        vkFreeMemory(m_device, m_swapchain.readbackMemory, nullptr);
+    for (const auto& readback : m_swapchain.readbacks) {
+        if (readback.buffer) {
+            vkDestroyBuffer(m_device, readback.buffer, nullptr);
+        }
+        if (readback.memory) {
+            vkFreeMemory(m_device, readback.memory, nullptr);
+        }
     }
     if (m_swapchain.handle) {
         vkDestroySwapchainKHR(m_device, m_swapchain.handle, nullptr);

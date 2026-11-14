@@ -1059,9 +1059,14 @@ TEST_CASE("descriptor set limits reject unsupported requests", "[rhi-set-binding
     CHECK(slots.descriptor(0) == 42);
     CHECK(slots.descriptor(1) == 42);
     CHECK(slots.descriptor(2) == 42);
-    CHECK(slots.reserve(51) == 1);
-    CHECK(slots.reserve(52) == 2);
-    CHECK_FALSE(slots.reserve(53));
+    const auto first = slots.registerPending(51);
+    REQUIRE(first);
+    CHECK(first->slot == 1);
+    const auto second = slots.registerPending(52);
+    REQUIRE(second);
+    CHECK(second->slot == 2);
+    CHECK_FALSE(slots.registerPending(53));
+    REQUIRE(slots.applyCompleted(true, true));
     CHECK(slots.descriptor(0) == 42);
     CHECK(slots.descriptor(1) == 51);
     CHECK(slots.descriptor(2) == 52);
@@ -1094,4 +1099,33 @@ TEST_CASE("descriptor set binding creates ready defaults", "[rhi-set-binding-dev
         CHECK(containsEvent(directory, runId, "rhi.binding.set.slot-initialized") == debug);
         CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
     }
+}
+
+TEST_CASE(
+    "binding slots retain descriptors until both frames finish", "[rhi-set-binding-retirement]") {
+    rhi::detail::SetBindingSlots<int, 2> slots{0};
+    const auto first = slots.registerPending(42);
+    REQUIRE(first);
+    CHECK_FALSE(slots.resolve(*first));
+    CHECK(slots.descriptor(1) == 0);
+    CHECK_FALSE(slots.applyCompleted(false, true));
+    REQUIRE(slots.applyCompleted(true, true));
+    CHECK(slots.resolve(*first) == 1);
+    CHECK(slots.descriptor(1) == 42);
+    REQUIRE(slots.retire(*first));
+    CHECK_FALSE(slots.resolve(*first));
+    CHECK_FALSE(slots.applyCompleted(true, false));
+    CHECK_FALSE(slots.applyCompleted(false, true));
+    CHECK(slots.descriptor(1) == 42);
+    CHECK_FALSE(slots.registerPending(43));
+    REQUIRE(slots.applyCompleted(true, true));
+    CHECK(slots.descriptor(1) == 0);
+    const auto next = slots.registerPending(43);
+    REQUIRE(next);
+    CHECK(next->slot == first->slot);
+    CHECK(next->generation != first->generation);
+    CHECK_FALSE(slots.retire(*first));
+    REQUIRE(slots.retire(*next));
+    CHECK(slots.descriptor(1) == 0);
+    CHECK(slots.registerPending(44));
 }

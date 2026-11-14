@@ -24,6 +24,7 @@ struct Options {
     bool visible = true;
     bool clearOnly = false;
     bool setBinding = false;
+    bool verifyBindingRetirement = false;
     std::optional<std::filesystem::path> screenshot;
     std::filesystem::path output = AR_TRIANGLE_OUTPUT_ROOT;
 };
@@ -34,6 +35,9 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
         const std::wstring_view arg = argv[index];
         if (arg == L"--hidden") {
             options.visible = false;
+        } else if (arg == L"--set-binding-retirement") {
+            options.setBinding = true;
+            options.verifyBindingRetirement = true;
         } else if (arg == L"--set-binding") {
             options.setBinding = true;
         } else if (arg == L"--clear-only") {
@@ -64,6 +68,9 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
         }
     }
     if ((!options.visible || options.screenshot) && !options.frames) {
+        return std::nullopt;
+    }
+    if (options.verifyBindingRetirement && (options.frames != 3 || options.screenshot)) {
         return std::nullopt;
     }
     if (options.clearOnly && options.setBinding) {
@@ -136,9 +143,14 @@ int wmain(int argc, wchar_t** argv) {
     config.mode = ar::runtime::QueryMode::Development;
     config.query.requestedApi = ar::rhi::makeApiVersion(1, 3);
     config.query.createGraphicsDevice = true;
-    config.query.enableScreenshot = options->screenshot.has_value();
+    config.query.enableScreenshot =
+        options->screenshot.has_value() || options->verifyBindingRetirement;
     config.query.enableSetBinding = options->setBinding;
     config.query.enableSetBindingSample = options->setBinding;
+    config.query.verifyBindingRetirement = options->verifyBindingRetirement;
+    if (options->verifyBindingRetirement) {
+        config.diagnostics.minLevel = ar::core::LogLevel::Debug;
+    }
     if (!options->clearOnly) {
         const std::filesystem::path shaderDir = AR_TRIANGLE_SHADER_DIR;
         auto vertex = readShader(

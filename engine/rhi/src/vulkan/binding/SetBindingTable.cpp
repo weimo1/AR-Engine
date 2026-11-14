@@ -1,4 +1,5 @@
 #include "SetBindingTable.h"
+#include "resources/DeviceResources.h"
 
 #include <array>
 #include <string>
@@ -96,6 +97,40 @@ std::expected<void, core::Error> SetBindingTable::open(VkImageView defaultView) 
             VK_NULL_HANDLE, defaultView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
     m_samplers.emplace(
         VkDescriptorImageInfo{m_defaultSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED});
+    writeDescriptors();
+    return {};
+}
+
+std::optional<SetBindingTable::ImageBinding> SetBindingTable::registerImage(VkImageView view) {
+    return m_images->registerPending(
+        {VK_NULL_HANDLE, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+}
+
+std::optional<std::size_t> SetBindingTable::resolveImage(ImageBinding handle) const noexcept {
+    return m_images->resolve(handle);
+}
+
+bool SetBindingTable::retireImage(ImageBinding handle) {
+    return m_images->retire(handle, [this](const auto& descriptor) {
+        m_resources.releaseSampledView(descriptor.imageView);
+    });
+}
+
+bool SetBindingTable::publishCompleted(bool firstFrameComplete, bool secondFrameComplete) {
+    const bool samplersChanged =
+        m_samplers->applyCompleted(firstFrameComplete, secondFrameComplete);
+    const bool imagesChanged = m_images->applyCompleted(
+        firstFrameComplete,
+        secondFrameComplete,
+        [this] { writeDescriptors(); },
+        [this](const auto& descriptor) { m_resources.releaseSampledView(descriptor.imageView); });
+    if (samplersChanged && !imagesChanged) {
+        writeDescriptors();
+    }
+    return imagesChanged || samplersChanged;
+}
+
+void SetBindingTable::writeDescriptors() {
     std::array<VkDescriptorImageInfo, kSetImageCount> images;
     std::array<VkDescriptorImageInfo, kSetSamplerCount> samplers;
     for (std::size_t index = 0; index < images.size(); ++index) {
@@ -104,21 +139,22 @@ std::expected<void, core::Error> SetBindingTable::open(VkImageView defaultView) 
     for (std::size_t index = 0; index < samplers.size(); ++index) {
         samplers[index] = m_samplers->descriptor(index);
     }
-    std::array<VkWriteDescriptorSet, bindings.size()> writes{};
+    std::array<VkWriteDescriptorSet, 2> writes{};
+    constexpr std::array bindings{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_DESCRIPTOR_TYPE_SAMPLER};
+    constexpr std::array counts{kSetImageCount, kSetSamplerCount};
     const std::array<const VkDescriptorImageInfo*, bindings.size()> descriptors{
         images.data(), samplers.data()};
     for (std::size_t index = 0; index < bindings.size(); ++index) {
         auto& write = writes[index];
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.dstSet = m_set;
-        write.dstBinding = bindings[index].binding;
-        write.descriptorCount = bindings[index].descriptorCount;
-        write.descriptorType = bindings[index].descriptorType;
+        write.dstBinding = static_cast<std::uint32_t>(index);
+        write.descriptorCount = counts[index];
+        write.descriptorType = bindings[index];
         write.pImageInfo = descriptors[index];
     }
     vkUpdateDescriptorSets(
         m_device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
-    return {};
 }
 
 std::expected<void, core::Error>
@@ -136,24 +172,18 @@ SetBindingTable::populateSample(VkImageView stripes, VkImageView blue, VkImageVi
         return std::unexpected(bindingError("vkCreateSampler", result));
     }
     m_linearSampler = sampler;
-    const std::array images{
-        VkDescriptorImageInfo{VK_NULL_HANDLE, stripes, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        VkDescriptorImageInfo{VK_NULL_HANDLE, blue, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        VkDescriptorImageInfo{VK_NULL_HANDLE, secondView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-    };
-    const VkDescriptorImageInfo linear{sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
-    std::array<VkWriteDescriptorSet, 2> writes{};
-    writes[0].sType = writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = writes[1].dstSet = m_set;
-    writes[0].dstArrayElement = writes[1].dstArrayElement = 1;
-    writes[0].descriptorCount = static_cast<std::uint32_t>(images.size());
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-    writes[0].pImageInfo = images.data();
-    writes[1].dstBinding = 1;
-    writes[1].descriptorCount = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-    writes[1].pImageInfo = &linear;
-    vkUpdateDescriptorSets(m_device, 2, writes.data(), 0, nullptr);
+    m_sampleImages = {registerImage(stripes), registerImage(blue), registerImage(secondView)};
+    if (!m_sampleImages[0] || !m_sampleImages[1] || !m_sampleImages[2] ||
+        !m_samplers->registerPending({sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED})) {
+        return std::unexpected(
+            core::Error{
+                core::ErrorCategory::InvalidState,
+                core::ErrorStage::Capability,
+                "sample descriptor table capacity exhausted",
+                std::nullopt});
+    }
+    // Initialization runs before the first frame can reference the set.
+    publishCompleted(true, true);
     return {};
 }
 

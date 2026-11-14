@@ -79,6 +79,7 @@ struct QueryConfig {
     bool enableScreenshot = false;
     bool enableSetBinding = false;
     bool enableSetBindingSample = false;
+    bool verifyBindingRetirement = false;
 };
 
 struct DescriptorHeapLimits {

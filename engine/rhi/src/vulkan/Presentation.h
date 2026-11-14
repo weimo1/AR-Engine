@@ -10,6 +10,10 @@
 
 #include "core/Error.h"
 
+namespace ar::core {
+class DiagnosticSession;
+}
+
 namespace ar::rhi {
 struct TriangleShaders;
 struct FrameScreenshot;
@@ -39,6 +43,12 @@ public:
     std::expected<PresentStatus, core::Error>
     presentFrame(VkExtent2D framebuffer, FrameScreenshot* screenshot);
     std::optional<core::Error> close();
+    std::expected<void, core::Error>
+    waitForBindingFrames(core::DiagnosticSession& diagnostics, std::size_t& waits);
+    void deferCapture(bool enabled) noexcept {
+        m_deferCapture = enabled;
+    }
+    std::expected<void, core::Error> collectCapture(std::size_t index, FrameScreenshot& output);
     [[nodiscard]] bool hasSwapchain() const noexcept {
         return m_swapchain.handle != VK_NULL_HANDLE;
     }
@@ -52,16 +62,21 @@ private:
         VkImageView view = VK_NULL_HANDLE;
     };
 
+    struct Readback {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        bool coherent = false;
+        bool captured = false;
+    };
+
     struct SwapchainResources {
         VkSwapchainKHR handle = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
-        VkBuffer readback = VK_NULL_HANDLE;
-        VkDeviceMemory readbackMemory = VK_NULL_HANDLE;
+        std::array<Readback, 2> readbacks{};
         VkFormat format = VK_FORMAT_UNDEFINED;
         VkExtent2D extent{};
         std::vector<Image> images;
         std::size_t readbackBytes = 0;
-        bool hostCoherent = false;
     };
 
     enum class DrawStatus { Presented, Suboptimal, OutOfDate };
@@ -78,6 +93,7 @@ private:
         VkSemaphore renderingFinished = VK_NULL_HANDLE;
         Fence acquired;
         Fence submitted;
+        std::uint64_t submission = 0;
         Fence presented;
     };
 
@@ -86,11 +102,11 @@ private:
     void destroySwapchain() noexcept;
     std::expected<void, core::Error>
     createTrianglePipeline(VkFormat format, const TriangleShaders& shaders);
-    std::expected<void, core::Error> createReadback(VkPhysicalDevice physical);
+    std::expected<void, core::Error> createReadback(VkPhysicalDevice physical, Readback& readback);
     std::expected<void, core::Error> readScreenshot(Frame& frame, FrameScreenshot& screenshot);
     std::expected<DrawStatus, core::Error> draw(Frame& frame, bool capture);
     std::expected<void, core::Error>
-    record(VkCommandBuffer commands, const Image& image, bool capture);
+    record(VkCommandBuffer commands, const Image& image, VkBuffer capture);
     VkResult drain(Frame& frame, std::uint64_t timeout);
     std::optional<core::Error> drainFrames();
 
@@ -104,11 +120,13 @@ private:
     // The RHI session owns the bytecode for the full lifetime of Presentation.
     const TriangleShaders* m_shaders = nullptr;
     bool m_enableScreenshot = false;
+    bool m_deferCapture = false;
     VkExtent2D m_requestedExtent{};
     SwapchainResources m_swapchain;
     VkDescriptorSet m_bindingSet = VK_NULL_HANDLE;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     std::array<Frame, 2> m_frames{};
+    std::uint64_t m_submission = 0;
     std::size_t m_frameIndex = 0;
     bool m_failed = false;
     bool m_rebuild = false;

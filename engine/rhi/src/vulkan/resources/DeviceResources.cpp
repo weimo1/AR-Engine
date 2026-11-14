@@ -419,6 +419,15 @@ std::expected<VkImageView, core::Error> DeviceResources::retainSampledView(Image
     return view->view;
 }
 
+void DeviceResources::releaseSampledView(VkImageView handle) noexcept {
+    const auto view = std::ranges::find(m_views, handle, &ViewSlot::view);
+    if (view != m_views.end() && view->bindingReferences != 0) {
+        auto* image = findSlot(m_images, view->image);
+        --view->bindingReferences;
+        --image->bindingReferences;
+    }
+}
+
 std::expected<void, core::Error> DeviceResources::destroyImageView(ImageViewHandle handle) {
     auto* slot = findSlot(m_views, handle);
     if (!slot) {

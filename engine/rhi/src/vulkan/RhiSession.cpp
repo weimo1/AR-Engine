@@ -201,6 +201,13 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorStage::Validation,
             "a graphics device requires a Vulkan API request of at least 1.3");
     }
+    if (config.verifyBindingRetirement &&
+        (!config.enableSetBindingSample || !config.enableScreenshot)) {
+        return makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "binding retirement verification requires sample and capture");
+    }
     if (config.enableSetBindingSample &&
         (!config.enableSetBinding || !config.presentation || !config.triangleShaders)) {
         return makeError(
@@ -297,6 +304,27 @@ struct RhiSession::Impl {
     std::optional<detail::Presentation> presenter;
     std::optional<detail::DeviceResources> resources;
     std::optional<detail::SetBindingTable> setBinding;
+    ImageHandle retirementImage;
+    VkImageView replacementView = VK_NULL_HANDLE;
+    unsigned retirementFrame = 0;
+    std::size_t bindingPublications = 0;
+    std::size_t bindingRetirements = 0;
+    std::size_t bindingReuses = 0;
+    std::size_t bindingWaits = 0;
+
+    void traceBinding(
+        std::string_view event,
+        detail::SetBindingTable::ImageBinding handle,
+        std::string_view mapping) {
+        if (diagnostics->enabled(core::LogLevel::Debug)) {
+            emitEvent(
+                *diagnostics,
+                core::LogLevel::Debug,
+                event,
+                "type=image slot=" + std::to_string(handle.slot) + " generation=" +
+                    std::to_string(handle.generation) + " " + std::string(mapping));
+        }
+    }
     std::optional<GraphicsDeviceInfo> graphicsInfo;
     bool ownsProcess = false;
     bool volkInitialized = false;
@@ -1031,7 +1059,7 @@ struct RhiSession::Impl {
             if (!view) {
                 return std::unexpected(std::move(view.error()));
             }
-            setBinding.emplace(graphicsDevice);
+            setBinding.emplace(graphicsDevice, **owner);
             if (auto opened = setBinding->open(*view); !opened) {
                 return opened;
             }
@@ -1051,6 +1079,7 @@ struct RhiSession::Impl {
                 if (!stripesImage) {
                     return std::unexpected(std::move(stripesImage.error()));
                 }
+                retirementImage = *stripesImage;
                 auto stripesView = makeBoundView(*stripesImage);
                 if (!stripesView) {
                     return std::unexpected(std::move(stripesView.error()));
@@ -1084,6 +1113,13 @@ struct RhiSession::Impl {
                 };
                 if (auto checked = checkTransfers(); !checked) {
                     return checked;
+                }
+                if (config.verifyBindingRetirement) {
+                    auto replacement = makeBoundView(*blueImage);
+                    if (!replacement) {
+                        return std::unexpected(std::move(replacement.error()));
+                    }
+                    replacementView = *replacement;
                 }
                 if (auto populated =
                         setBinding->populateSample(*stripesView, *blueView, *secondView);
@@ -1146,6 +1182,7 @@ struct RhiSession::Impl {
                 !opened) {
                 return opened;
             }
+            presenter->deferCapture(config.verifyBindingRetirement);
             if (config.triangleShaders) {
                 emitEvent(
                     *diagnostics,
@@ -1292,13 +1329,23 @@ struct RhiSession::Impl {
                 error.category = core::ErrorCategory::CleanupFailed;
                 noteCleanup(std::move(error));
             }
-            retainResources = resources->hasPendingTransfer();
+            retainResources =
+                resources->hasPendingTransfer() || (retainPresentation && setBinding.has_value());
             if (retainResources) {
                 resources->abandon();
             }
         }
         if (setBinding && (retainPresentation || retainResources)) {
             setBinding->abandon();
+        }
+        if (setBinding) {
+            emitEvent(
+                *diagnostics,
+                core::LogLevel::Info,
+                "rhi.binding.summary",
+                "published=" + std::to_string(bindingPublications) +
+                    " retired=" + std::to_string(bindingRetirements) + " reused=" +
+                    std::to_string(bindingReuses) + " waits=" + std::to_string(bindingWaits));
         }
         setBinding.reset();
         resources.reset();
@@ -1620,7 +1667,134 @@ RhiSession::presentFrame(std::uint32_t width, std::uint32_t height, FrameScreens
             core::ErrorStage::Capability,
             "this RHI session has no active swapchain"));
     }
-    return m_impl->presenter->presentFrame({width, height}, screenshot);
+    if (m_impl->config.verifyBindingRetirement && m_impl->retirementFrame == 2) {
+        auto& table = *m_impl->setBinding;
+        auto& presenter = *m_impl->presenter;
+        auto& resources = *m_impl->resources;
+        const auto first = *table.sampleImages()[0];
+        const auto second = *table.sampleImages()[2];
+        const auto failure = [](const char* message) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::InternalError, core::ErrorStage::Capability, message));
+        };
+        if (!table.retireImage(first) || table.resolveImage(first)) {
+            return failure("retired binding remained visible");
+        }
+        if (m_impl->diagnostics->enabled(core::LogLevel::Debug)) {
+            emitEvent(
+                *m_impl->diagnostics,
+                core::LogLevel::Debug,
+                "rhi.binding.retirement.request",
+                "slot=" + std::to_string(first.slot) +
+                    " generation=" + std::to_string(first.generation) + " image=" +
+                    std::to_string(m_impl->retirementImage.slot) + " submitted_frames=2");
+        }
+        ++m_impl->bindingRetirements;
+        std::array<std::byte, 8> pixels{};
+        auto protectedImage = resources.readbackImage(m_impl->retirementImage, pixels);
+        if (protectedImage ||
+            protectedImage.error().category != core::ErrorCategory::InvalidState) {
+            return failure("retiring image lost transfer protection");
+        }
+        if (auto waited =
+                presenter.waitForBindingFrames(*m_impl->diagnostics, m_impl->bindingWaits);
+            !waited) {
+            return std::unexpected(std::move(waited.error()));
+        }
+        for (std::size_t frame = 0; frame < 2; ++frame) {
+            FrameScreenshot old;
+            if (auto captured = presenter.collectCapture(frame, old); !captured) {
+                return std::unexpected(std::move(captured.error()));
+            }
+            const auto offset =
+                (static_cast<std::size_t>(old.height / 2) * old.width + old.width * 3 / 8) * 4;
+            if (old.rgba[offset] != 255 || old.rgba[offset + 1] != 0 || old.rgba[offset + 2] != 0) {
+                return failure("old frame did not preserve its red texture");
+            }
+        }
+        table.publishCompleted(true, true);
+        ++m_impl->bindingPublications;
+        m_impl->traceBinding("rhi.binding.publish", first, "before=stripes_view_1 after=default");
+        protectedImage = resources.readbackImage(m_impl->retirementImage, pixels);
+        if (protectedImage ||
+            protectedImage.error().category != core::ErrorCategory::InvalidState) {
+            return failure("remaining image binding lost transfer protection");
+        }
+        if (!table.retireImage(second) || !table.publishCompleted(true, true)) {
+            return failure("second view did not retire");
+        }
+        ++m_impl->bindingRetirements;
+        ++m_impl->bindingPublications;
+        m_impl->traceBinding("rhi.binding.retirement.request", second, "resource=stripes_view_2");
+        m_impl->traceBinding("rhi.binding.publish", second, "before=stripes_view_2 after=default");
+        if (auto read = resources.readbackImage(m_impl->retirementImage, pixels); !read) {
+            return std::unexpected(std::move(read.error()));
+        }
+        if (auto uploaded = resources.uploadImage(m_impl->retirementImage, pixels); !uploaded) {
+            return std::unexpected(std::move(uploaded.error()));
+        } else if (auto finished = resources.waitTransfer(*uploaded); !finished) {
+            return std::unexpected(std::move(finished.error()));
+        }
+        const auto reused = table.registerImage(m_impl->replacementView);
+        if (!reused || reused->slot != first.slot || reused->generation == first.generation ||
+            table.resolveImage(*reused)) {
+            return failure("descriptor slot was not safely reserved");
+        }
+        m_impl->traceBinding("rhi.binding.register", *reused, "resource=blue_replacement_view");
+        if (!table.publishCompleted(true, true) || table.resolveImage(*reused) != reused->slot) {
+            return failure("descriptor slot was not safely reused");
+        }
+        if (m_impl->diagnostics->enabled(core::LogLevel::Debug)) {
+            emitEvent(
+                *m_impl->diagnostics,
+                core::LogLevel::Debug,
+                "rhi.binding.retirement.reused",
+                "slot=" + std::to_string(reused->slot) +
+                    " generation=" + std::to_string(reused->generation) + " completed_frames=2");
+        }
+        ++m_impl->bindingPublications;
+        ++m_impl->bindingReuses;
+        m_impl->traceBinding(
+            "rhi.binding.publish", *reused, "before=default after=blue_replacement_view");
+        ++m_impl->retirementFrame;
+    }
+    if (m_impl->setBinding && m_impl->setBinding->hasChanges() && width != 0 && height != 0) {
+        if (auto completed =
+                m_impl->presenter->waitForBindingFrames(*m_impl->diagnostics, m_impl->bindingWaits);
+            !completed) {
+            return std::unexpected(std::move(completed.error()));
+        }
+        if (m_impl->setBinding->publishCompleted(true, true)) {
+            ++m_impl->bindingPublications;
+        }
+    }
+    auto result = m_impl->presenter->presentFrame({width, height}, screenshot);
+    if (!m_impl->config.verifyBindingRetirement || !result || *result != PresentStatus::Presented) {
+        return result;
+    }
+    if (m_impl->retirementFrame++ == 3) {
+        FrameScreenshot replacement;
+        if (auto captured = m_impl->presenter->collectCapture(0, replacement); !captured) {
+            return std::unexpected(std::move(captured.error()));
+        }
+        const auto offset = (static_cast<std::size_t>(replacement.height / 2) * replacement.width +
+                             replacement.width * 3 / 8) *
+                            4;
+        if (replacement.rgba[offset] != 0 || replacement.rgba[offset + 1] != 0 ||
+            replacement.rgba[offset + 2] != 255) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::InternalError,
+                core::ErrorStage::Capability,
+                "reused descriptor slot did not sample the replacement blue texture"));
+        }
+        emitEvent(
+            *m_impl->diagnostics,
+            core::LogLevel::Info,
+            "rhi.binding.retirement.verified",
+            "old_frames=2 replacement_frames=1");
+        m_impl->presenter->deferCapture(false);
+    }
+    return result;
 }
 
 std::expected<BufferHandle, core::Error> RhiSession::createBuffer(BufferDesc desc) {

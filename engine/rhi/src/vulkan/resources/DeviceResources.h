@@ -45,6 +45,7 @@ public:
     std::expected<ImageHandle, core::Error>
     createSampledImage(ImageDesc desc, std::span<const std::byte> pixels);
     std::expected<VkImageView, core::Error> retainSampledView(ImageViewHandle view);
+    void releaseSampledView(VkImageView view) noexcept;
     std::expected<void, core::Error> destroyImageView(ImageViewHandle handle);
     std::expected<void, core::Error> destroyImage(ImageHandle handle);
     std::expected<TransferToken, core::Error>
