@@ -75,4 +75,29 @@ sequenceDiagram
 
 ## 实施边界
 
+### T24 真机呈现切片
+
+沿用现有 Vulkan Dynamic Rendering 和截图入口。render 将不可变 CPU mesh 转为 RHI 的顶点、索引、RGBA8 与绘制值输入。设备级静态呈现资源持有每个网格的顶点缓冲、索引缓冲、纹理、视图和独立描述符集；同一 CPU mesh 的实例共享这些资源。首版用不可变常规 descriptor set，采样使用 nearest；显式采样颜色空间。每个交换链帧槽独立持有深度附件，使用 Reverse-Z 的 0 清除值与 GREATER 深度比较。
+
+```mermaid
+sequenceDiagram
+  participant App as 样例
+  participant Runtime as runtime
+  participant Render as render
+  participant R as RHI 呈现
+  App->>Runtime: 请求打开或重开场景
+  Runtime->>Runtime: 解析并提取 CPU 候选
+  Runtime->>Render: 组装有所有权的候选绘制输入
+  Render->>R: 上传新网格和纹理，复用活动网格
+  alt 候选完全就绪
+    R->>R: 等待引用旧场景的帧完成，再替换 GPU 绘制列表
+    Runtime->>Runtime: 发布 CPU 候选
+  else 候选部分上传失败
+    R->>R: 释放候选独占资源，保留活动列表
+    R-->>Runtime: 返回失败，旧场景继续出图
+  end
+```
+
+上传和场景切换是同步冷路径。资源仍被 fence 引用时沿用 RHI 保留规则。回归用例保留一组红蓝双实例作为基准；第二个候选由不同颜色网格组成，在首份候选上传完成后注入失败。截图依次检查初始、回滚、保存重开和重试成功四种状态。Suzanne 可用作另行加载的展示模型。
+
 先做 CPU 资产加载，再做场景保存和提取，最后接 GPU 像素闭环。暂缓一般 glTF 节点层级、PBR、动画、热重载、数据库和异步流送，也不在本切片合并 P3a 与所有资产绘制路径。P3a 样例入口继续用于回归与故障隔离。

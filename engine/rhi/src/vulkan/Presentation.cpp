@@ -3,6 +3,7 @@
 #include "core/Diagnostics.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -62,7 +63,8 @@ std::expected<void, core::Error> Presentation::open(
     const TriangleShaders* shaders,
     bool enableScreenshot,
     VkDescriptorSetLayout bindingLayout,
-    VkDescriptorSet bindingSet) {
+    VkDescriptorSet bindingSet,
+    StaticSceneDraw* staticScene) {
     if (!vkGetPhysicalDeviceSurfaceCapabilitiesKHR || !vkGetPhysicalDeviceSurfaceFormatsKHR ||
         !vkCreateSwapchainKHR || !vkDestroySwapchainKHR || !vkGetSwapchainImagesKHR ||
         !vkAcquireNextImageKHR || !vkQueuePresentKHR) {
@@ -80,6 +82,7 @@ std::expected<void, core::Error> Presentation::open(
     m_shaders = shaders;
     m_enableScreenshot = enableScreenshot;
     m_bindingSet = bindingSet;
+    m_staticScene = staticScene;
     for (Frame& frame : m_frames) {
         if (auto created = createFrame(frame, graphicsFamily); !created) {
             return created;
@@ -91,6 +94,11 @@ std::expected<void, core::Error> Presentation::open(
         if (bindingLayout) {
             layout.setLayoutCount = 1;
             layout.pSetLayouts = &bindingLayout;
+        }
+        const VkPushConstantRange matrix{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(std::array<float, 16>)};
+        if (m_staticScene) {
+            layout.pushConstantRangeCount = 1;
+            layout.pPushConstantRanges = &matrix;
         }
         if (auto created = create(
                 m_device,
@@ -251,6 +259,15 @@ std::expected<bool, core::Error> Presentation::createSwapchain(VkExtent2D frameb
             }
         }
     }
+    if (m_staticScene) {
+        for (auto& depth : m_swapchain.depths) {
+            auto created = m_staticScene->createDepth(m_swapchain.extent);
+            if (!created) {
+                return std::unexpected(created.error());
+            }
+            depth = *created;
+        }
+    }
     if (m_shaders) {
         if (auto created = createTrianglePipeline(*format, *m_shaders); !created) {
             return std::unexpected(std::move(created.error()));
@@ -384,11 +401,21 @@ Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& sha
     vertex.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     const VkVertexInputBindingDescription positions{0, 3 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
     const VkVertexInputAttributeDescription position{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0};
+    const VkVertexInputBindingDescription meshBinding{0, sizeof(StaticVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+    const std::array meshAttributes{
+        VkVertexInputAttributeDescription{0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(StaticVertex, position)},
+        VkVertexInputAttributeDescription{1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(StaticVertex, uv)}};
     if (m_cullFrames.front()) {
         vertex.vertexBindingDescriptionCount = 1;
         vertex.pVertexBindingDescriptions = &positions;
         vertex.vertexAttributeDescriptionCount = 1;
         vertex.pVertexAttributeDescriptions = &position;
+    }
+    if (m_staticScene) {
+        vertex.vertexBindingDescriptionCount = 1;
+        vertex.pVertexBindingDescriptions = &meshBinding;
+        vertex.vertexAttributeDescriptionCount = static_cast<std::uint32_t>(meshAttributes.size());
+        vertex.pVertexAttributeDescriptions = meshAttributes.data();
     }
     VkPipelineInputAssemblyStateCreateInfo assembly{};
     assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -426,6 +453,13 @@ Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& sha
     rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachmentFormats = &format;
+    VkPipelineDepthStencilStateCreateInfo depth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    if (m_staticScene) {
+        rendering.depthAttachmentFormat = StaticSceneDraw::depthFormat;
+        depth.depthTestEnable = VK_TRUE;
+        depth.depthWriteEnable = VK_TRUE;
+        depth.depthCompareOp = VK_COMPARE_OP_GREATER;
+    }
     VkGraphicsPipelineCreateInfo pipeline{};
     pipeline.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     pipeline.pNext = &rendering;
@@ -437,6 +471,9 @@ Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& sha
     pipeline.pRasterizationState = &raster;
     pipeline.pMultisampleState = &multisample;
     pipeline.pColorBlendState = &blend;
+    if (m_staticScene) {
+        pipeline.pDepthStencilState = &depth;
+    }
     pipeline.layout = m_pipelineLayout;
     const VkResult result = vkCreateGraphicsPipelines(
         m_device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &m_swapchain.pipeline);
@@ -526,6 +563,33 @@ Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capt
     rendering.layerCount = 1;
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachments = &color;
+    VkRenderingAttachmentInfo depthAttachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    if (m_staticScene) {
+        const auto& depth = m_swapchain.depths[m_frameIndex];
+        VkImageMemoryBarrier2 transition{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        transition.srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                  VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        transition.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        transition.dstStageMask = transition.srcStageMask;
+        transition.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                   VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        transition.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        transition.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        transition.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        transition.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        transition.image = depth.image;
+        transition.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        depthDependency.imageMemoryBarrierCount = 1;
+        depthDependency.pImageMemoryBarriers = &transition;
+        vkCmdPipelineBarrier2(commands, &depthDependency);
+        depthAttachment.imageView = depth.view;
+        depthAttachment.imageLayout = transition.newLayout;
+        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.clearValue.depthStencil = {0.F, 0};
+        rendering.pDepthAttachment = &depthAttachment;
+    }
     const auto* cull = m_cullFrames[m_frameIndex];
     if (cull) {
         cull->recordCull(commands, m_cullObjects, true);
@@ -546,6 +610,10 @@ Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capt
         }
         if (cull) {
             cull->drawCull(commands);
+        } else if (m_staticScene) {
+            m_staticScene->record(commands, m_pipelineLayout,
+                                  static_cast<float>(m_swapchain.extent.height) /
+                                      static_cast<float>(m_swapchain.extent.width));
         } else {
             vkCmdDraw(commands, 3, 1, 0, 0);
         }
@@ -825,6 +893,15 @@ std::optional<core::Error> Presentation::drainFrames() {
     return error;
 }
 
+std::expected<void, core::Error>
+Presentation::publishStaticScene(std::vector<StaticSceneDraw::Draw> draws) {
+    if (auto error = drainFrames()) {
+        return std::unexpected(std::move(*error));
+    }
+    m_staticScene->publish(std::move(draws));
+    return {};
+}
+
 std::optional<core::Error> Presentation::close() {
     auto error = drainFrames();
     if (error && (!error->origin || error->origin->code != VK_ERROR_DEVICE_LOST)) {
@@ -854,6 +931,11 @@ std::optional<core::Error> Presentation::close() {
 }
 
 void Presentation::destroySwapchain() noexcept {
+    if (m_staticScene) {
+        for (auto& depth : m_swapchain.depths) {
+            m_staticScene->destroyDepth(depth);
+        }
+    }
     for (const Image& image : m_swapchain.images) {
         if (image.view) {
             vkDestroyImageView(m_device, image.view, nullptr);

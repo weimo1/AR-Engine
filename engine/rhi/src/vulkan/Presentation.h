@@ -9,6 +9,7 @@
 #include <volk.h>
 
 #include "core/Error.h"
+#include "resources/StaticSceneDraw.h"
 
 namespace ar::core {
 class DiagnosticSession;
@@ -40,7 +41,9 @@ public:
         const TriangleShaders* shaders,
         bool enableScreenshot,
         VkDescriptorSetLayout bindingLayout,
-        VkDescriptorSet bindingSet);
+        VkDescriptorSet bindingSet,
+        StaticSceneDraw* staticScene = nullptr);
+    std::expected<void, core::Error> publishStaticScene(std::vector<StaticSceneDraw::Draw> draws);
     std::expected<PresentStatus, core::Error>
     presentFrame(VkExtent2D framebuffer, FrameScreenshot* screenshot);
     std::optional<core::Error> close();
@@ -78,6 +81,7 @@ private:
         VkSwapchainKHR handle = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
         std::array<Readback, 2> readbacks{};
+        std::array<StaticSceneDraw::Depth, 2> depths{};
         VkFormat format = VK_FORMAT_UNDEFINED;
         VkExtent2D extent{};
         std::vector<Image> images;
@@ -129,6 +133,7 @@ private:
     VkExtent2D m_requestedExtent{};
     SwapchainResources m_swapchain;
     VkDescriptorSet m_bindingSet = VK_NULL_HANDLE;
+    StaticSceneDraw* m_staticScene = nullptr;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     std::array<Frame, 2> m_frames{};
     std::uint64_t m_submission = 0;

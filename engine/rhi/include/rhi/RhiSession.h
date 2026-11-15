@@ -18,6 +18,7 @@
 #include "rhi/Image.h"
 #include "rhi/Buffer.h"
 #include "rhi/LoaderSource.h"
+#include "rhi/StaticSceneDraw.h"
 
 namespace ar::rhi {
 
@@ -90,6 +91,7 @@ struct QueryConfig {
     bool enableSetBinding = false;
     bool enableSetBindingSample = false;
     bool verifyBindingRetirement = false;
+    bool enableStaticScene = false;
 };
 
 struct DescriptorHeapLimits {
@@ -148,6 +150,10 @@ public:
     // A failed frame stops further submissions until the session is closed.
     [[nodiscard]] std::expected<PresentStatus, core::Error>
     presentFrame(std::uint32_t width, std::uint32_t height, FrameScreenshot* screenshot = nullptr);
+
+    [[nodiscard]] std::expected<void, core::Error> replaceStaticScene(
+        std::span<const StaticMeshUpload> meshes, std::span<const StaticInstanceDraw> draws,
+        bool verifyRollback = false);
 
     // Explicit synchronous verification path. Object records use the 32-byte std430 layout.
     std::expected<std::array<std::uint32_t, 2>, core::Error> verifyGpuCull(

@@ -11,7 +11,9 @@
 #include "core/Error.h"
 #include "rhi/Capabilities.h"
 #include "rhi/RhiSession.h"
+#include "render/StaticSceneRenderer.h"
 #include "runtime/RuntimeConfig.h"
+#include "runtime/StaticSceneSession.h"
 
 namespace ar::runtime {
 namespace {
@@ -103,6 +105,7 @@ struct RuntimeSession::Impl {
     std::unique_ptr<core::DiagnosticSession> diagnostics;
     std::unique_ptr<platform::Window> window;
     std::unique_ptr<rhi::RhiSession> rhi;
+    std::unique_ptr<StaticSceneSession> staticScene;
     // Runtime-owned snapshot: survives close and never aliases the rhi report.
     rhi::CapabilityReport report;
     std::optional<core::Error> frameError;
@@ -184,6 +187,10 @@ RuntimeSession::start(const RuntimeConfig& config) {
     session->diagnostics = std::move(*diagnostics);
 
     auto query = config.query;
+    if (config.staticAssetRoot) {
+        query.enableStaticScene = true;
+        session->staticScene = std::make_unique<StaticSceneSession>(*config.staticAssetRoot);
+    }
     auto rhi = [&]() -> std::expected<std::unique_ptr<rhi::RhiSession>, rhi::QueryFailure> {
         if (auto opened = session->openWindow(query); !opened) {
             rhi::QueryFailure failure;
@@ -292,6 +299,48 @@ RuntimeSession::presentFrame(rhi::FrameScreenshot* screenshot) {
         return window.shouldClose() ? FrameStatus::Closed : FrameStatus::Paused;
     }
     return FrameStatus::Presented;
+}
+
+std::expected<void, core::Error>
+RuntimeSession::openStaticScene(const std::filesystem::path& source, bool verifyRollback) {
+    if (m_impl->closed || !m_impl->staticScene) {
+        return std::unexpected(makeError(core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability, "no active static scene session"));
+    }
+    std::optional<core::Error> gpuError;
+    auto opened = m_impl->staticScene->open(source, [&](const render::StaticRenderInput& input)
+                                              -> std::expected<void, StaticSceneError> {
+        auto ready = render::publishStaticScene(*m_impl->rhi, input, verifyRollback);
+        if (!ready) {
+            gpuError = std::move(ready.error());
+            return std::unexpected(StaticSceneError{
+                StaticSceneStage::Asset, source, gpuError->message});
+        }
+        return {};
+    });
+    if (!opened) {
+        if (gpuError) {
+            return std::unexpected(std::move(*gpuError));
+        }
+        const auto path = opened.error().source.u8string();
+        return std::unexpected(makeError(core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation, std::string(path.begin(), path.end()) +
+                ": " + opened.error().message));
+    }
+    return {};
+}
+
+std::expected<void, core::Error>
+RuntimeSession::saveStaticScene(const std::filesystem::path& destination) const {
+    if (m_impl->closed || !m_impl->staticScene) {
+        return std::unexpected(makeError(core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability, "no active static scene session"));
+    }
+    if (auto saved = m_impl->staticScene->save(destination); !saved) {
+        return std::unexpected(makeError(core::ErrorCategory::OutputFailed,
+            core::ErrorStage::Output, saved.error().message));
+    }
+    return {};
 }
 
 core::EndResult RuntimeSession::close() {

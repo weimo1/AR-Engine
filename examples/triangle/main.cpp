@@ -28,6 +28,9 @@ struct Options {
     bool gpuEmpty = false;
     bool setBinding = false;
     bool verifyBindingRetirement = false;
+    std::optional<std::filesystem::path> scene;
+    std::optional<std::filesystem::path> assetRoot;
+    std::optional<std::filesystem::path> sceneCandidate;
     std::optional<std::filesystem::path> screenshot;
     std::filesystem::path output = AR_TRIANGLE_OUTPUT_ROOT;
 };
@@ -48,6 +51,12 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
             options.setBinding = true;
         } else if (arg == L"--clear-only") {
             options.clearOnly = true;
+        } else if (arg == L"--static-scene" && !options.scene && index + 1 < argc) {
+            options.scene = argv[++index];
+        } else if (arg == L"--asset-root" && !options.assetRoot && index + 1 < argc) {
+            options.assetRoot = argv[++index];
+        } else if (arg == L"--static-scene-test" && !options.sceneCandidate && index + 1 < argc) {
+            options.sceneCandidate = argv[++index];
         } else if (arg == L"--frames" && !options.frames && index + 1 < argc) {
             const std::wstring_view value = argv[++index];
             if (value.empty() || value.find_first_not_of(L"0123456789") != value.npos) {
@@ -83,6 +92,12 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
         return std::nullopt;
     }
     if (options.gpuDriven && (options.clearOnly || options.setBinding)) {
+        return std::nullopt;
+    }
+    if (options.scene.has_value() != options.assetRoot.has_value() ||
+        (options.scene && (options.scene->empty() || options.assetRoot->empty() ||
+                           options.gpuDriven || options.clearOnly || options.setBinding)) ||
+        (options.sceneCandidate && (!options.scene || !options.screenshot || options.frames != 4))) {
         return std::nullopt;
     }
     return options;
@@ -143,7 +158,8 @@ int wmain(int argc, wchar_t** argv) {
     if (!options) {
         std::fputs(
             "usage: ar_triangle [--frames N] [--hidden] [--clear-only] "
-            "[--set-binding] [--screenshot PATH] [--output DIRECTORY]\n",
+            "[--set-binding] [--static-scene JSON --asset-root DIRECTORY] "
+            "[--screenshot PATH] [--output DIRECTORY]\n",
             stderr);
         return 2;
     }
@@ -157,17 +173,20 @@ int wmain(int argc, wchar_t** argv) {
     config.query.enableSetBinding = options->setBinding;
     config.query.enableSetBindingSample = options->setBinding;
     config.query.verifyBindingRetirement = options->verifyBindingRetirement;
+    config.staticAssetRoot = options->assetRoot;
     if (options->verifyBindingRetirement) {
         config.diagnostics.minLevel = ar::core::LogLevel::Debug;
     }
     if (!options->clearOnly) {
         const std::filesystem::path shaderDir = AR_TRIANGLE_SHADER_DIR;
         auto vertex = readShader(
-            shaderDir / (options->gpuDriven    ? "gpu_draw.vert.spv"
+            shaderDir / (options->scene        ? "static_scene.vert.spv"
+                         : options->gpuDriven  ? "gpu_draw.vert.spv"
                          : options->setBinding ? "set_binding.vert.spv"
                                                : "triangle.vert.spv"));
         auto fragment = readShader(
-            shaderDir / (options->gpuDriven    ? "gpu_draw.frag.spv"
+            shaderDir / (options->scene        ? "static_scene.frag.spv"
+                         : options->gpuDriven  ? "gpu_draw.frag.spv"
                          : options->setBinding ? "set_binding.frag.spv"
                                                : "triangle.frag.spv"));
         if (options->gpuDriven) {
@@ -214,17 +233,51 @@ int wmain(int argc, wchar_t** argv) {
         }
         return 1;
     }
+    if (options->scene) {
+        if (auto loaded = (*session)->openStaticScene(*options->scene); !loaded) {
+            printError(loaded.error());
+            return 1;
+        }
+    }
 
     unsigned long long presented = 0;
     ar::rhi::FrameScreenshot screenshot;
     while (!options->frames || presented < *options->frames) {
-        const bool capture = options->screenshot && presented + 1 == *options->frames;
+        const bool capture = options->sceneCandidate ||
+                             (options->screenshot && presented + 1 == *options->frames);
         const auto frame = (*session)->presentFrame(capture ? &screenshot : nullptr);
         if (!frame || *frame == ar::runtime::FrameStatus::Closed) {
             break;
         }
         if (*frame == ar::runtime::FrameStatus::Presented) {
             ++presented;
+            if (options->sceneCandidate && presented < 4) {
+                constexpr std::array names{"before.png", "rollback.png", "reopened.png"};
+                const auto directory = options->screenshot->parent_path();
+                if (!writeScreenshot(directory / names[presented - 1], screenshot)) {
+                    return 1;
+                }
+                std::expected<void, ar::core::Error> change;
+                if (presented == 1) {
+                    auto rejected = (*session)->openStaticScene(*options->sceneCandidate, true);
+                    if (rejected || rejected.error().message != "injected failure after first candidate mesh upload") {
+                        std::fputs("expected failure after first candidate mesh upload\n", stderr);
+                        return 1;
+                    }
+                } else if (presented == 2) {
+                    const auto saved = directory / "saved.json";
+                    change = (*session)->saveStaticScene(saved);
+                    if (change) {
+                        change = (*session)->openStaticScene(saved);
+                    }
+                } else {
+                    change = (*session)->openStaticScene(*options->sceneCandidate);
+                }
+                if (!change) {
+                    printError(change.error());
+                    return 1;
+                }
+            }
         }
     }
     const ar::core::EndResult result = (*session)->close();

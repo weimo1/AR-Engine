@@ -49,6 +49,11 @@ public:
     [[nodiscard]] std::expected<FrameStatus, core::Error>
     presentFrame(rhi::FrameScreenshot* screenshot = nullptr);
 
+    [[nodiscard]] std::expected<void, core::Error>
+    openStaticScene(const std::filesystem::path& source, bool verifyRollback = false);
+    [[nodiscard]] std::expected<void, core::Error>
+    saveStaticScene(const std::filesystem::path& destination) const;
+
     // First call closes rhi, then finishes the diagnostic run. Repeated calls return the cached
     // result without cleaning again or writing a second summary.
     core::EndResult close();

@@ -76,6 +76,7 @@ public:
     }
 
 private:
+    friend class StaticSceneDraw;
     struct BufferSlot {
         VkBuffer buffer = VK_NULL_HANDLE;
         VmaAllocation_T* allocation = nullptr;

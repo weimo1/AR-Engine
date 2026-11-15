@@ -14,7 +14,11 @@ namespace {
 bool matches(const unsigned char* pixel, const std::array<double, 3>& color, bool srgb) {
     for (std::size_t channel = 0; channel < color.size(); ++channel) {
         const double linear = color[channel];
-        const double encoded = srgb ? 1.055 * std::pow(linear, 1.0 / 2.4) - 0.055 : linear;
+        double encoded = linear;
+        if (srgb) {
+            encoded = linear <= 0.0031308 ? 12.92 * linear :
+                                            1.055 * std::pow(linear, 1.0 / 2.4) - 0.055;
+        }
         if (std::abs(pixel[channel] - std::round(encoded * 255.0)) > 3.0) {
             return false;
         }
@@ -27,7 +31,9 @@ bool matches(const unsigned char* pixel, const std::array<double, 3>& color, boo
 int wmain(int argc, wchar_t** argv) {
     if (argc != 2 && (argc != 3 || (std::wstring_view{argv[2]} != L"set-binding" &&
                                     std::wstring_view{argv[2]} != L"gpu-driven" &&
-                                    std::wstring_view{argv[2]} != L"gpu-driven-empty"))) {
+                                    std::wstring_view{argv[2]} != L"gpu-driven-empty" &&
+                                    std::wstring_view{argv[2]} != L"static-scene" &&
+                                    std::wstring_view{argv[2]} != L"static-scene-retry"))) {
         return 2;
     }
     std::FILE* file = nullptr;
@@ -47,6 +53,33 @@ int wmain(int argc, wchar_t** argv) {
     const auto at = [&](int x, int y) {
         return pixels.get() + (static_cast<std::size_t>(y) * width + x) * 4;
     };
+    if (argc == 3 && std::wstring_view{argv[2]}.starts_with(L"static-scene")) {
+        constexpr std::array clear{0.025, 0.06, 0.14};
+        const bool srgb = matches(at(0, 0), clear, true);
+        const bool retry = std::wstring_view{argv[2]} == L"static-scene-retry";
+        constexpr std::array left{0., 1., 0.};
+        constexpr std::array right{1., 1., 0.};
+        constexpr std::array red{1., 0., 0.};
+        constexpr std::array blue{0., 0., 1.};
+        const int leftId = retry ? 4 : 1;
+        const int rightId = retry ? 5 : 2;
+        const auto check = [&](int id, int x, int y, const std::array<double, 3>& expected) {
+            const auto* pixel = at(x, y);
+            if (matches(pixel, expected, srgb)) {
+                return true;
+            }
+            std::fprintf(stderr, "object=%d pixel=(%d,%d) expected=(%.3f,%.3f,%.3f) actual=(%u,%u,%u,%u)\n",
+                         id, x, y, expected[0], expected[1], expected[2],
+                         pixel[0], pixel[1], pixel[2], pixel[3]);
+            return false;
+        };
+        return check(0, width / 2, height / 2, clear) &&
+                       check(leftId, width / 4, 2 * height / 5, retry ? left : red) &&
+                       check(leftId, 3 * width / 8, 3 * height / 5, retry ? left : blue) &&
+                       check(rightId, 5 * width / 8, 2 * height / 5, retry ? right : red) &&
+                       check(rightId, 3 * width / 4, 3 * height / 5, retry ? right : blue)
+                   ? 0 : 1;
+    }
     if (argc == 3 && std::wstring_view{argv[2]} != L"set-binding") {
         constexpr std::array clear{0.025, 0.06, 0.14};
         const bool srgb = matches(at(0, 0), clear, true);

@@ -2,6 +2,7 @@
 
 #include <expected>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -22,7 +23,10 @@ public:
     explicit StaticSceneSession(std::filesystem::path assetRoot);
     ~StaticSceneSession();
 
-    std::expected<void, StaticSceneError> open(const std::filesystem::path& source);
+    using PrepareRender = std::function<std::expected<void, StaticSceneError>(
+        const render::StaticRenderInput&)>;
+    std::expected<void, StaticSceneError> open(
+        const std::filesystem::path& source, const PrepareRender& prepareRender = {});
     std::expected<void, StaticSceneError> save(const std::filesystem::path& destination) const;
     std::shared_ptr<const render::StaticRenderInput> input() const;
 

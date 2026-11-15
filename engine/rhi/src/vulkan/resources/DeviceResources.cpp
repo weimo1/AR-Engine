@@ -398,9 +398,11 @@ DeviceResources::createSampledImage(ImageDesc desc, std::span<const std::byte> p
         false,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     if (!uploaded) {
+        static_cast<void>(destroyImage(*image));
         return std::unexpected(std::move(uploaded.error()));
     }
     if (auto ready = waitTransfer(*uploaded); !ready) {
+        static_cast<void>(destroyImage(*image));
         return std::unexpected(std::move(ready.error()));
     }
     return *image;

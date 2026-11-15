@@ -290,6 +290,14 @@ set_target_properties(ar_core_tests ar_rhi_tests ar_runtime_tests ar_platform_te
 set_target_properties(ar_rhi_fixture ar_identity_probe ar_public_header_probe
     PROPERTIES FOLDER "TestSupport")
 
+add_test(NAME sample-static-scene-pixels
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_static_scene.py"
+        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>"
+        "$<TARGET_FILE:ar_verify_screenshot>")
+set_tests_properties(sample-static-scene-pixels PROPERTIES
+    LABELS "gpu"
+    ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1")
+
 add_executable(ar_render_tests render/test_cull_reference.cpp)
 target_link_libraries(ar_render_tests PRIVATE ar_render Catch2::Catch2WithMain)
 add_test(NAME render-culling-reference COMMAND ar_render_tests "[render-culling-reference]")

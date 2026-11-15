@@ -24,6 +24,7 @@
 #include "binding/SetBindingLimits.h"
 #include "binding/SetBindingTable.h"
 #include "resources/DeviceResources.h"
+#include "resources/StaticSceneDraw.h"
 
 namespace ar::rhi {
 
@@ -201,6 +202,13 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorStage::Validation,
             "a graphics device requires a Vulkan API request of at least 1.3");
     }
+    if (config.enableStaticScene &&
+        (!config.presentation || !config.triangleShaders || config.gpuDriven ||
+         config.enableSetBindingSample)) {
+        return makeError(
+            core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation,
+            "static scene requires presentation and dedicated graphics shaders");
+    }
     if (config.verifyBindingRetirement &&
         (!config.enableSetBindingSample || !config.enableScreenshot)) {
         return makeError(
@@ -310,6 +318,7 @@ struct RhiSession::Impl {
     VkQueue graphicsQueue = VK_NULL_HANDLE;
     std::optional<detail::Presentation> presenter;
     std::optional<detail::DeviceResources> resources;
+    std::optional<detail::StaticSceneDraw> staticScene;
     std::array<std::optional<detail::DeviceResources>, 2> cullFrames;
     std::optional<detail::SetBindingTable> setBinding;
     ImageHandle retirementImage;
@@ -1238,6 +1247,16 @@ struct RhiSession::Impl {
                 presenter->setCullFrames(
                     {&*cullFrames[0], &*cullFrames[1]}, static_cast<std::uint32_t>(count));
             }
+            if (config.enableStaticScene) {
+                auto owner = resourcesForCreation();
+                if (!owner) {
+                    return std::unexpected(owner.error());
+                }
+                staticScene.emplace(**owner);
+                if (auto ready = staticScene->open(); !ready) {
+                    return ready;
+                }
+            }
             if (auto opened = presenter->open(
                     physical,
                     surface,
@@ -1246,8 +1265,10 @@ struct RhiSession::Impl {
                     {config.presentation->width, config.presentation->height},
                     config.triangleShaders ? &*config.triangleShaders : nullptr,
                     config.enableScreenshot,
-                    config.enableSetBindingSample ? setBinding->layout() : VK_NULL_HANDLE,
-                    config.enableSetBindingSample ? setBinding->set() : VK_NULL_HANDLE);
+                    staticScene ? staticScene->layout()
+                        : config.enableSetBindingSample ? setBinding->layout() : VK_NULL_HANDLE,
+                    config.enableSetBindingSample ? setBinding->set() : VK_NULL_HANDLE,
+                    staticScene ? &*staticScene : nullptr);
                 !opened) {
                 return opened;
             }
@@ -1399,7 +1420,12 @@ struct RhiSession::Impl {
                 noteCleanup(std::move(error));
             }
             retainResources =
-                resources->hasPendingTransfer() || (retainPresentation && setBinding.has_value());
+                resources->hasPendingTransfer() ||
+                (retainPresentation && (setBinding.has_value() || staticScene.has_value()));
+            if (staticScene && retainResources) {
+                staticScene->abandon();
+            }
+            staticScene.reset();
             if (retainResources) {
                 resources->abandon();
             }
@@ -1883,6 +1909,35 @@ std::expected<std::array<std::uint32_t, 2>, core::Error> RhiSession::verifyGpuCu
         return std::unexpected(std::move(resources.error()));
     }
     return (*resources)->verifyGpuCull(planes, objects, shader, ids, commands);
+}
+
+std::expected<void, core::Error> RhiSession::replaceStaticScene(
+    std::span<const StaticMeshUpload> meshes, std::span<const StaticInstanceDraw> draws,
+    bool verifyRollback) {
+    if (m_impl->closed || !m_impl->staticScene || !m_impl->presenter) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState, core::ErrorStage::Capability,
+            "no active static scene presenter"));
+    }
+#ifndef AR_ENABLE_TEST_HOOKS
+    if (verifyRollback) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation,
+            "static scene rollback verification requires test hooks"));
+    }
+#endif
+    auto candidate = m_impl->staticScene->prepare(meshes, draws, verifyRollback);
+    if (!candidate) {
+        emitEvent(*m_impl->diagnostics, core::LogLevel::Info, "rhi.static-scene.rollback",
+                  candidate.error().message);
+        return std::unexpected(candidate.error());
+    }
+    if (auto published = m_impl->presenter->publishStaticScene(std::move(*candidate)); !published) {
+        return published;
+    }
+    emitEvent(*m_impl->diagnostics, core::LogLevel::Info, "rhi.static-scene.ready",
+              "draws=" + std::to_string(draws.size()));
+    return {};
 }
 
 std::expected<BufferHandle, core::Error> RhiSession::createBuffer(BufferDesc desc) {

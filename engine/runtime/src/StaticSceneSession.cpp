@@ -56,7 +56,8 @@ StaticSceneSession::StaticSceneSession(std::filesystem::path assetRoot)
     : m_state(std::make_unique<State>(std::move(assetRoot))) {}
 StaticSceneSession::~StaticSceneSession() = default;
 
-std::expected<void, StaticSceneError> StaticSceneSession::open(const std::filesystem::path& source) {
+std::expected<void, StaticSceneError> StaticSceneSession::open(
+    const std::filesystem::path& source, const PrepareRender& prepareRender) {
     auto candidate = scene::StaticScene::load(source);
     if (!candidate) {
         return std::unexpected(sceneError(std::move(candidate.error())));
@@ -82,8 +83,14 @@ std::expected<void, StaticSceneError> StaticSceneSession::open(const std::filesy
         }
         input.draws.push_back({instance.id, model, std::move(*mesh)});
     }
-    m_state->active = std::make_unique<State::Active>(State::Active{
+    auto ready = std::make_unique<State::Active>(State::Active{
         std::move(*candidate), std::make_shared<const render::StaticRenderInput>(std::move(input))});
+    if (prepareRender) {
+        if (auto prepared = prepareRender(*ready->input); !prepared) {
+            return prepared;
+        }
+    }
+    m_state->active = std::move(ready);
     return {};
 }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <optional>
 
 #include "core/Diagnostics.h"
@@ -24,6 +25,7 @@ struct RuntimeConfig {
     core::DiagnosticConfig diagnostics;
     rhi::QueryConfig query;
     std::optional<platform::WindowConfig> window;
+    std::optional<std::filesystem::path> staticAssetRoot;
 };
 
 } // namespace ar::runtime
