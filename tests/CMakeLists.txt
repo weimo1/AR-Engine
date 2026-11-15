@@ -294,6 +294,12 @@ add_executable(ar_render_tests render/test_cull_reference.cpp)
 target_link_libraries(ar_render_tests PRIVATE ar_render Catch2::Catch2WithMain)
 add_test(NAME render-culling-reference COMMAND ar_render_tests "[render-culling-reference]")
 
+add_executable(ar_assets_tests assets/test_static_asset.cpp)
+target_link_libraries(ar_assets_tests PRIVATE ar_assets Catch2::Catch2WithMain)
+add_test(NAME assets-static-gltf COMMAND ar_assets_tests "[assets-static-gltf]")
+set_tests_properties(assets-static-gltf PROPERTIES
+    ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>")
+
 target_link_libraries(ar_rhi_tests PRIVATE ar_render)
 add_dependencies(ar_rhi_tests ar_triangle_shaders)
 target_compile_definitions(ar_rhi_tests PRIVATE

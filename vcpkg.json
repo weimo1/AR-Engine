@@ -11,6 +11,7 @@
     "volk",
     "glfw3",
     "stb",
-    "vulkan-memory-allocator"
+    "vulkan-memory-allocator",
+    "fastgltf"
   ]
 }

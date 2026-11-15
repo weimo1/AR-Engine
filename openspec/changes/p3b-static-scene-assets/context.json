@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "objective": "P3b 静态 glTF/PNG 加载、场景保存重开和真机静态场景验证。",
+  "non_goals": ["PBR 与动画", "编辑器、资产数据库与异步加载"],
+  "tags": ["native"],
+  "documents": [
+    {"path": "docs/modules/assets/README.md", "purpose": "architecture", "status": "reference", "basis": "CPU 资产边界与生命周期"},
+    {"path": "docs/modules/scene/README.md", "purpose": "architecture", "status": "reference", "basis": "已确认的场景权威数据与提取边界"}
+  ],
+  "skills": ["ar-cpp-oop-style", "ar-e2e-side-effect-safety"],
+  "write_paths": ["TASK.md", "openspec/changes/p3b-static-scene-assets/**", "docs/modules/**", "engine/assets/**", "engine/scene/**", "engine/render/**", "engine/runtime/**", "engine/rhi/**", "examples/**", "tests/**", "shaders/**", "CMakeLists.txt", "vcpkg.json", "workflow/p0-checks.json"]
+}

@@ -9,6 +9,7 @@
 | runtime | [runtime](runtime/README.md) | 模块组合及scene到render的提取边界已确认；详细接口未交付 |
 | platform | [platform](platform/README.md) | 窗口、事件及呈现所需的平台接入 |
 | scene | [scene](scene/README.md) | 权威场景数据与render分离已确认；未实施 |
+| assets | [assets](assets/README.md) | P3b 首批 CPU 资产加载与共享；方案已准备，未实施 |
 | render | [render](render/README.md) | 持久场景、视图、缓存及未来GI扩展边界已确认；未实施 |
 
 构建、工作流和跨模块变更见 [模块与变更索引](../workflow/模块与变更索引.md)。tools/probe 是可执行探针工具，不因为有目录就认定为运行时模块。其他模块按已确认方案和实际工作建立，不预建一排空文档。
