@@ -23,6 +23,7 @@ enum class PresentStatus;
 namespace ar::rhi::detail {
 
 // Owns the swapchain and its frame resources. The parent closes it before releasing the device.
+class DeviceResources;
 class Presentation {
 public:
     Presentation(VkDevice device, VkQueue graphicsQueue, VkQueue presentQueue) noexcept;
@@ -43,6 +44,10 @@ public:
     std::expected<PresentStatus, core::Error>
     presentFrame(VkExtent2D framebuffer, FrameScreenshot* screenshot);
     std::optional<core::Error> close();
+    void setCullFrames(std::array<DeviceResources*, 2> frames, std::uint32_t objects) noexcept {
+        m_cullFrames = frames;
+        m_cullObjects = objects;
+    }
     std::expected<void, core::Error>
     waitForBindingFrames(core::DiagnosticSession& diagnostics, std::size_t& waits);
     void deferCapture(bool enabled) noexcept {
@@ -127,6 +132,8 @@ private:
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     std::array<Frame, 2> m_frames{};
     std::uint64_t m_submission = 0;
+    std::array<DeviceResources*, 2> m_cullFrames{};
+    std::uint32_t m_cullObjects = 0;
     std::size_t m_frameIndex = 0;
     bool m_failed = false;
     bool m_rebuild = false;

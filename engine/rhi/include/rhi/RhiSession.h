@@ -66,7 +66,15 @@ struct Win32Presentation {
 
 // Everything open needs. Query mode (inspect / require-product / development) is runtime policy
 // and deliberately absent here.
+struct GpuDrivenInput {
+    std::vector<std::byte> planes;
+    std::vector<std::byte> objects;
+    std::vector<std::uint32_t> compute;
+    std::vector<float> positions;
+};
+
 struct QueryConfig {
+    std::optional<GpuDrivenInput> gpuDriven;
     LoaderSource loader = SystemLoader{};
     std::uint32_t requestedApi = kApiVersion1_4;
     DeviceSelection device = FirstEnumerated{};

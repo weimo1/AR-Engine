@@ -13,10 +13,12 @@ def check(executable: str, output_root: Path, configuration: str, mode: str,
         if mode == "clear":
             args.append("--clear-only")
         image = Path(directory) / "frame.png"
-        if mode in {"screenshot", "set-binding"}:
+        if mode in {"screenshot", "set-binding", "gpu-driven", "gpu-driven-empty"}:
             args.extend(["--screenshot", str(image)])
         if mode == "set-binding":
             args.append("--set-binding")
+        if mode.startswith("gpu-driven"):
+            args.append(f"--{mode}")
         if mode == "set-binding-retirement":
             args = [executable, "--frames", "3", "--hidden", "--output", directory,
                     "--set-binding-retirement"]
@@ -54,11 +56,11 @@ def check(executable: str, output_root: Path, configuration: str, mode: str,
         errors = [event for event in events if event["event_id"] == "rhi.validation.error"]
         if errors:
             raise RuntimeError(f"Vulkan Validation errors: {errors}")
-        if mode in {"screenshot", "set-binding"}:
+        if mode in {"screenshot", "set-binding", "gpu-driven", "gpu-driven-empty"}:
             if not verifier or not image.is_file():
                 raise RuntimeError("screenshot or PNG verifier missing")
             verifier_args = [verifier, str(image)]
-            if mode == "set-binding":
+            if mode in {"set-binding", "gpu-driven", "gpu-driven-empty"}:
                 verifier_args.append(mode)
             subprocess.run(verifier_args, check=True, timeout=5)
         if mode == "set-binding-retirement" and "rhi.binding.retirement.verified" not in ids:
@@ -93,3 +95,5 @@ def check(executable: str, output_root: Path, configuration: str, mode: str,
 
 if __name__ == "__main__":
     check(sys.argv[1], Path(sys.argv[2]), sys.argv[3], sys.argv[4], *sys.argv[5:])
+    if sys.argv[4] == "gpu-driven":
+        check(sys.argv[1], Path(sys.argv[2]), sys.argv[3], "gpu-driven-empty", *sys.argv[5:])

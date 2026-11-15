@@ -228,6 +228,13 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorStage::Validation,
             "Descriptor Heap requires a Vulkan 1.4 graphics device request");
     }
+    if (config.gpuDriven && (!config.presentation || !config.triangleShaders ||
+                             config.enableSetBinding || config.enableDescriptorHeap)) {
+        return makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "GPU-driven draw requires presentation and shaders");
+    }
     if (config.triangleShaders &&
         (!config.presentation || config.triangleShaders->vertex.size() < 5 ||
          config.triangleShaders->fragment.size() < 5 ||
@@ -303,6 +310,7 @@ struct RhiSession::Impl {
     VkQueue graphicsQueue = VK_NULL_HANDLE;
     std::optional<detail::Presentation> presenter;
     std::optional<detail::DeviceResources> resources;
+    std::array<std::optional<detail::DeviceResources>, 2> cullFrames;
     std::optional<detail::SetBindingTable> setBinding;
     ImageHandle retirementImage;
     VkImageView replacementView = VK_NULL_HANDLE;
@@ -479,6 +487,8 @@ struct RhiSession::Impl {
             createInfo.pNext = &debugInfo;
             createInfo.enabledLayerCount = 1;
             createInfo.ppEnabledLayerNames = &validationLayer;
+        }
+        if (enableValidation || config.gpuDriven) {
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
         std::ranges::sort(extensions, {}, [](const char* name) { return std::string_view(name); });
@@ -939,6 +949,27 @@ struct RhiSession::Impl {
             address.pNext = &heap;
             extensions.push_back(VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME);
         }
+        VkPhysicalDeviceVulkan12Features draw12{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+        VkPhysicalDeviceFeatures drawFeatures{};
+        if (config.gpuDriven) {
+            VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            features.pNext = &draw12;
+            vkGetPhysicalDeviceFeatures2(physical, &features);
+            if (!draw12.drawIndirectCount || !features.features.multiDrawIndirect) {
+                return std::unexpected(makeError(
+                    core::ErrorCategory::RequestedApiUnsupported,
+                    core::ErrorStage::Capability,
+                    "GPU-driven draw requires drawIndirectCount and multiDrawIndirect"));
+            }
+            drawFeatures.multiDrawIndirect = VK_TRUE;
+            info.pEnabledFeatures = &drawFeatures;
+            draw12 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+            draw12.drawIndirectCount = VK_TRUE;
+            draw12.bufferDeviceAddress = config.enableDescriptorHeap ? VK_TRUE : VK_FALSE;
+            draw12.pNext = config.enableDescriptorHeap ? address.pNext : core13.pNext;
+            core13.pNext = &draw12;
+        }
         VkPhysicalDeviceDescriptorIndexingFeatures indexing{};
         detail::SetBindingLimits bindingLimits{};
         if (config.enableSetBinding) {
@@ -1169,6 +1200,44 @@ struct RhiSession::Impl {
                     "vkGetDeviceQueue did not return the present queue"));
             }
             presenter.emplace(graphicsDevice, graphicsQueue, presentQueue);
+            if (config.gpuDriven) {
+                const auto& input = *config.gpuDriven;
+                const auto count = input.objects.size() / 32;
+                if (input.positions.empty() || input.positions.size() % 3 != 0) {
+                    return std::unexpected(makeError(
+                        core::ErrorCategory::InvalidArguments,
+                        core::ErrorStage::Capability,
+                        "GPU-driven draw requires packed XYZ vertex positions"));
+                }
+                VkPhysicalDeviceProperties properties{};
+                vkGetPhysicalDeviceProperties(physical, &properties);
+                if (count > properties.limits.maxDrawIndirectCount || count > UINT32_MAX) {
+                    return std::unexpected(makeError(
+                        core::ErrorCategory::InvalidArguments,
+                        core::ErrorStage::Capability,
+                        "GPU-driven capacity exceeds maxDrawIndirectCount"));
+                }
+                for (auto& frame : cullFrames) {
+                    frame.emplace(
+                        instance,
+                        physical,
+                        graphicsDevice,
+                        graphicsQueue,
+                        families.graphics,
+                        compatibilityVersion(config.requestedApi));
+                    if (auto ready = frame->prepareCull(
+                            input.planes,
+                            input.objects,
+                            input.compute,
+                            static_cast<std::uint32_t>(count),
+                            input.positions);
+                        !ready) {
+                        return ready;
+                    }
+                }
+                presenter->setCullFrames(
+                    {&*cullFrames[0], &*cullFrames[1]}, static_cast<std::uint32_t>(count));
+            }
             if (auto opened = presenter->open(
                     physical,
                     surface,
@@ -1348,6 +1417,12 @@ struct RhiSession::Impl {
                     std::to_string(bindingReuses) + " waits=" + std::to_string(bindingWaits));
         }
         setBinding.reset();
+        for (auto& frame : cullFrames) {
+            if (retainPresentation && frame) {
+                frame->abandon();
+            }
+            frame.reset();
+        }
         resources.reset();
         graphicsInfo.reset();
         if (graphicsDevice != VK_NULL_HANDLE && !retainPresentation && !retainResources) {

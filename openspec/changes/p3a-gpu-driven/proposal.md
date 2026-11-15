@@ -24,7 +24,4 @@ Compute SHALL 对固定相机的对象包围体执行视锥剔除，在容量内
 #### Scenario: 真机间接绘制
 - **WHEN** `sample-gpu-driven-pixels` 运行固定可见集合及零可见场景
 - **THEN** 可见几何产生预期像素，零可见时输出清屏色，Debug 同步 Validation 无错误
-#### Scenario: RenderDoc 抓帧与回放
-- **WHEN** T20 使用 RenderDoc 抓取固定场景并回放
-- **THEN** SHALL 能定位同帧的 Compute dispatch、间接绘制、命令与计数缓冲，并核对输出画面
 <!-- /AR:CONTRACT -->

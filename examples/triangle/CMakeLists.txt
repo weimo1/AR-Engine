@@ -12,7 +12,7 @@ if(NOT image_constant OR NOT sampler_constant)
     message(FATAL_ERROR "Descriptor set capacities are missing")
 endif()
 
-foreach(shader IN ITEMS triangle.vert triangle.frag set_binding.vert set_binding.frag gpu_cull.comp)
+foreach(shader IN ITEMS triangle.vert triangle.frag set_binding.vert set_binding.frag gpu_cull.comp gpu_draw.vert gpu_draw.frag)
     set(source "${PROJECT_SOURCE_DIR}/shaders/${shader}")
     set(output "${shader_dir}/${shader}.spv")
     set(shader_options)
@@ -36,7 +36,7 @@ add_executable(ar_triangle main.cpp)
 find_package(Stb REQUIRED)
 target_include_directories(ar_triangle SYSTEM PRIVATE "${Stb_INCLUDE_DIR}")
 add_dependencies(ar_triangle ar_triangle_shaders)
-target_link_libraries(ar_triangle PRIVATE ar_runtime)
+target_link_libraries(ar_triangle PRIVATE ar_runtime ar_render)
 target_compile_definitions(ar_triangle PRIVATE
     AR_TRIANGLE_OUTPUT_ROOT=u8"${CMAKE_BINARY_DIR}/sample-output/$<CONFIG>"
     AR_TRIANGLE_SHADER_DIR=u8"${shader_dir}"

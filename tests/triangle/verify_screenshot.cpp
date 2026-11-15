@@ -25,7 +25,9 @@ bool matches(const unsigned char* pixel, const std::array<double, 3>& color, boo
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 2 && (argc != 3 || std::wstring_view{argv[2]} != L"set-binding")) {
+    if (argc != 2 && (argc != 3 || (std::wstring_view{argv[2]} != L"set-binding" &&
+                                    std::wstring_view{argv[2]} != L"gpu-driven" &&
+                                    std::wstring_view{argv[2]} != L"gpu-driven-empty"))) {
         return 2;
     }
     std::FILE* file = nullptr;
@@ -45,6 +47,28 @@ int wmain(int argc, wchar_t** argv) {
     const auto at = [&](int x, int y) {
         return pixels.get() + (static_cast<std::size_t>(y) * width + x) * 4;
     };
+    if (argc == 3 && std::wstring_view{argv[2]} != L"set-binding") {
+        constexpr std::array clear{0.025, 0.06, 0.14};
+        const bool srgb = matches(at(0, 0), clear, true);
+        const bool empty = std::wstring_view{argv[2]} == L"gpu-driven-empty";
+        const auto* probe = at(width / 4, height / 2);
+
+        if ((!matches(at(0, 0), clear, srgb)) ||
+            (empty ? !matches(probe, clear, srgb)
+                   : (probe[0] != 255 || probe[1] != 0 || probe[2] != 0 || probe[3] != 255))) {
+            std::fprintf(
+                stderr,
+                "unexpected GPU-driven pixel at (%d,%d): %u %u %u %u\n",
+                width / 4,
+                height / 2,
+                probe[0],
+                probe[1],
+                probe[2],
+                probe[3]);
+            return 1;
+        }
+        return 0;
+    }
     if (argc == 3) {
         // Each vertical region varies only the texture or sampler index relative to region 1.
         constexpr std::array<std::array<unsigned char, 4>, 4> expected{{

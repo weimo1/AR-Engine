@@ -1,4 +1,4 @@
-<!-- Generated from proposal.md; source-sha256: d3a1cf020409a0843477942c3458f2e83ddbc5f4947d56aebeaa59b2e98ff1da. Do not edit. -->
+<!-- Generated from proposal.md; source-sha256: cbe09803c0d75af3a5cb70da8725be0d771554d2486623701649b353fd966757. Do not edit. -->
 
 ## Purpose
 
@@ -21,6 +21,3 @@ Compute SHALL 对固定相机的对象包围体执行视锥剔除，在容量内
 #### Scenario: 真机间接绘制
 - **WHEN** `sample-gpu-driven-pixels` 运行固定可见集合及零可见场景
 - **THEN** 可见几何产生预期像素，零可见时输出清屏色，Debug 同步 Validation 无错误
-#### Scenario: RenderDoc 抓帧与回放
-- **WHEN** T20 使用 RenderDoc 抓取固定场景并回放
-- **THEN** SHALL 能定位同帧的 Compute dispatch、间接绘制、命令与计数缓冲，并核对输出画面

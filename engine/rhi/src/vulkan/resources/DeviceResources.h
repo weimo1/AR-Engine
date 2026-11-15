@@ -34,6 +34,12 @@ public:
     DeviceResources(const DeviceResources&) = delete;
     DeviceResources& operator=(const DeviceResources&) = delete;
 
+    std::expected<void, core::Error> prepareCull(
+        std::span<const std::byte> planes, std::span<const std::byte> objects,
+        std::span<const std::uint32_t> shader, std::uint32_t capacity,
+        std::span<const float> positions = {});
+    void recordCull(VkCommandBuffer commands, std::uint32_t objectCount, bool draw) const;
+    void drawCull(VkCommandBuffer commands) const;
     std::expected<std::array<std::uint32_t, 2>, core::Error> verifyGpuCull(
         std::span<const std::byte> planes,
         std::span<const std::byte> objects,
@@ -117,9 +123,12 @@ private:
 
     void clearCullResources() noexcept;
     std::array<BufferSlot, 5> m_cullBuffers{};
+    BufferSlot m_cullVertices{};
     VkDescriptorSetLayout m_cullSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_cullPool = VK_NULL_HANDLE;
     VkPipelineLayout m_cullLayout = VK_NULL_HANDLE;
+    VkDescriptorSet m_cullSet = VK_NULL_HANDLE;
+    std::uint32_t m_cullCapacity = 0;
     VkPipeline m_cullPipeline = VK_NULL_HANDLE;
 
     VkInstance m_instance;

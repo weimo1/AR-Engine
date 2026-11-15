@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "runtime/RuntimeSession.h"
+#include "render/CullReference.h"
 
 #define STBI_WRITE_NO_STDIO
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -23,6 +24,8 @@ struct Options {
     std::optional<std::uint32_t> frames;
     bool visible = true;
     bool clearOnly = false;
+    bool gpuDriven = false;
+    bool gpuEmpty = false;
     bool setBinding = false;
     bool verifyBindingRetirement = false;
     std::optional<std::filesystem::path> screenshot;
@@ -38,6 +41,9 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
         } else if (arg == L"--set-binding-retirement") {
             options.setBinding = true;
             options.verifyBindingRetirement = true;
+        } else if (arg == L"--gpu-driven" || arg == L"--gpu-driven-empty") {
+            options.gpuDriven = true;
+            options.gpuEmpty = arg == L"--gpu-driven-empty";
         } else if (arg == L"--set-binding") {
             options.setBinding = true;
         } else if (arg == L"--clear-only") {
@@ -74,6 +80,9 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
         return std::nullopt;
     }
     if (options.clearOnly && options.setBinding) {
+        return std::nullopt;
+    }
+    if (options.gpuDriven && (options.clearOnly || options.setBinding)) {
         return std::nullopt;
     }
     return options;
@@ -154,9 +163,36 @@ int wmain(int argc, wchar_t** argv) {
     if (!options->clearOnly) {
         const std::filesystem::path shaderDir = AR_TRIANGLE_SHADER_DIR;
         auto vertex = readShader(
-            shaderDir / (options->setBinding ? "set_binding.vert.spv" : "triangle.vert.spv"));
+            shaderDir / (options->gpuDriven    ? "gpu_draw.vert.spv"
+                         : options->setBinding ? "set_binding.vert.spv"
+                                               : "triangle.vert.spv"));
         auto fragment = readShader(
-            shaderDir / (options->setBinding ? "set_binding.frag.spv" : "triangle.frag.spv"));
+            shaderDir / (options->gpuDriven    ? "gpu_draw.frag.spv"
+                         : options->setBinding ? "set_binding.frag.spv"
+                                               : "triangle.frag.spv"));
+        if (options->gpuDriven) {
+            auto compute = readShader(shaderDir / "gpu_cull.comp.spv");
+            if (!compute) {
+                return 1;
+            }
+            auto scene = ar::render::fixedCullScene();
+            auto objects = std::span<const ar::render::CullObject>{scene.objects};
+            if (options->gpuEmpty) {
+                objects = objects.subspan(1, 1);
+            }
+            const auto planes = std::as_bytes(std::span{scene.frustum});
+            const auto records = std::as_bytes(objects);
+            std::vector<float> positions;
+            positions.reserve(scene.vertices.size() * 3);
+            for (const auto& position : scene.vertices) {
+                positions.insert(positions.end(), position.begin(), position.end());
+            }
+            config.query.gpuDriven = ar::rhi::GpuDrivenInput{
+                {planes.begin(), planes.end()},
+                {records.begin(), records.end()},
+                std::move(*compute),
+                std::move(positions)};
+        }
         if (!vertex || !fragment) {
             return 1;
         }

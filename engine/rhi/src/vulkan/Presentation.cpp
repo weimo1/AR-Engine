@@ -1,4 +1,5 @@
 #include "Presentation.h"
+#include "resources/DeviceResources.h"
 #include "core/Diagnostics.h"
 
 #include <algorithm>
@@ -381,6 +382,14 @@ Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& sha
 
     VkPipelineVertexInputStateCreateInfo vertex{};
     vertex.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    const VkVertexInputBindingDescription positions{0, 3 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
+    const VkVertexInputAttributeDescription position{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0};
+    if (m_cullFrames.front()) {
+        vertex.vertexBindingDescriptionCount = 1;
+        vertex.pVertexBindingDescriptions = &positions;
+        vertex.vertexAttributeDescriptionCount = 1;
+        vertex.pVertexAttributeDescriptions = &position;
+    }
     VkPipelineInputAssemblyStateCreateInfo assembly{};
     assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -517,6 +526,10 @@ Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capt
     rendering.layerCount = 1;
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachments = &color;
+    const auto* cull = m_cullFrames[m_frameIndex];
+    if (cull) {
+        cull->recordCull(commands, m_cullObjects, true);
+    }
     vkCmdBeginRendering(commands, &rendering);
     if (m_swapchain.pipeline) {
         vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, m_swapchain.pipeline);
@@ -531,7 +544,11 @@ Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capt
                 0,
                 nullptr);
         }
-        vkCmdDraw(commands, 3, 1, 0, 0);
+        if (cull) {
+            cull->drawCull(commands);
+        } else {
+            vkCmdDraw(commands, 3, 1, 0, 0);
+        }
     }
     vkCmdEndRendering(commands);
 
