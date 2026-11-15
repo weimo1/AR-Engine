@@ -13,3 +13,5 @@ scene持有权威场景数据：对象、层级、变换、相机、灯光及资
 ## P3b 静态场景
 
 首批方案覆盖稳定对象标识、实例变换、资产引用和保存重开。runtime 在同步阶段提取独立值数据，场景加载失败保留当前场景。类型关系、读写时序及验收详见 [P3b 技术方案](../../../openspec/changes/p3b-static-scene-assets/design.md)。
+
+`scene::StaticScene` 封装 EnTT 和 JSON 文件读写，对调用方提供排序后的实例及相机值。`runtime::StaticSceneSession` 持有当前场景和不可变渲染输入，使用 T22 的 CPU 缓存解析资产。T23 的 CPU 提交点和 T24 的 GPU 就绪条件见同一技术方案。

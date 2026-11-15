@@ -1,0 +1,106 @@
+#include "runtime/StaticSceneSession.h"
+
+#include <algorithm>
+#include <cmath>
+#include <utility>
+
+#include <glm/ext/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
+#include "assets/StaticAssetCache.h"
+#include "scene/StaticScene.h"
+
+namespace ar::runtime {
+namespace {
+
+StaticSceneError sceneError(scene::FileError error) {
+    using enum scene::FileStage;
+    StaticSceneStage stage = StaticSceneStage::Validate;
+    switch (error.stage) {
+    case Read: stage = StaticSceneStage::Read; break;
+    case Parse: stage = StaticSceneStage::Parse; break;
+    case Validate: break;
+    case Save: stage = StaticSceneStage::Save; break;
+    }
+    return {stage, std::move(error.source), std::move(error.message)};
+}
+
+std::array<float, 16> modelMatrix(const scene::Transform& transform) {
+    const auto& [px, py, pz] = transform.position;
+    const auto& [x, y, z, w] = transform.rotation;
+    const auto& [sx, sy, sz] = transform.scale;
+    const auto rotation = glm::normalize(glm::quat(w, x, y, z));
+    const auto matrix = glm::translate(glm::mat4(1.F), {px, py, pz}) *
+                        glm::mat4_cast(rotation) *
+                        glm::scale(glm::mat4(1.F), {sx, sy, sz});
+    std::array<float, 16> result{};
+    std::copy_n(glm::value_ptr(matrix), result.size(), result.begin());
+    return result;
+}
+} // namespace
+
+struct StaticSceneSession::State {
+    struct Active {
+        scene::StaticScene scene;
+        std::shared_ptr<const render::StaticRenderInput> input;
+    };
+
+    explicit State(std::filesystem::path assetRoot) : assets(std::move(assetRoot)) {}
+
+    assets::StaticAssetCache assets;
+    std::unique_ptr<Active> active;
+};
+
+StaticSceneSession::StaticSceneSession(std::filesystem::path assetRoot)
+    : m_state(std::make_unique<State>(std::move(assetRoot))) {}
+StaticSceneSession::~StaticSceneSession() = default;
+
+std::expected<void, StaticSceneError> StaticSceneSession::open(const std::filesystem::path& source) {
+    auto candidate = scene::StaticScene::load(source);
+    if (!candidate) {
+        return std::unexpected(sceneError(std::move(candidate.error())));
+    }
+    const auto camera = candidate->camera();
+    render::StaticRenderInput input{
+        {camera.position, camera.orientation, camera.verticalFovRadians, camera.nearPlane,
+         camera.farPlane}, {}};
+    const auto instances = candidate->instances();
+    input.draws.reserve(instances.size());
+    for (const auto& instance : instances) {
+        const auto model = modelMatrix(instance.transform);
+        if (!std::ranges::all_of(model, [](float value) { return std::isfinite(value); })) {
+            return std::unexpected(StaticSceneError{
+                StaticSceneStage::Validate, source,
+                "non-finite model matrix for object " + std::to_string(instance.id)});
+        }
+        auto mesh = m_state->assets.load(instance.asset);
+        if (!mesh) {
+            return std::unexpected(StaticSceneError{
+                StaticSceneStage::Asset, mesh.error().source,
+                "object " + std::to_string(instance.id) + ": " + mesh.error().message});
+        }
+        input.draws.push_back({instance.id, model, std::move(*mesh)});
+    }
+    m_state->active = std::make_unique<State::Active>(State::Active{
+        std::move(*candidate), std::make_shared<const render::StaticRenderInput>(std::move(input))});
+    return {};
+}
+
+std::expected<void, StaticSceneError>
+StaticSceneSession::save(const std::filesystem::path& destination) const {
+    if (!m_state->active) {
+        return std::unexpected(StaticSceneError{
+            StaticSceneStage::Save, destination, "there is no active scene to save"});
+    }
+    if (auto saved = m_state->active->scene.save(destination); !saved) {
+        return std::unexpected(sceneError(std::move(saved.error())));
+    }
+    return {};
+}
+
+std::shared_ptr<const render::StaticRenderInput> StaticSceneSession::input() const {
+    return m_state->active ? m_state->active->input : nullptr;
+}
+
+} // namespace ar::runtime

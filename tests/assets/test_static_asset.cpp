@@ -1,4 +1,5 @@
 #include "assets/StaticAssetCache.h"
+#include "runtime/StaticSceneSession.h"
 
 #include <array>
 #include <chrono>
@@ -53,9 +54,7 @@ void writeModel(const fs::path& path, std::string buffer = "quad.bin",
         << R"("textures":[{"source":0}],"images":[{"uri":")" << image << R"("}]})";
     REQUIRE(out.good());
 }
-} // namespace
-
-TEST_CASE("Static glTF resolves external files and only caches complete assets", "[assets-static-gltf]") {
+fs::path testOutput() {
 #ifdef _WIN32
     wchar_t output[4096]{};
     std::size_t length = 0;
@@ -65,9 +64,10 @@ TEST_CASE("Static glTF resolves external files and only caches complete assets",
     const auto output = std::getenv("AR_TEST_OUTPUT_ROOT");
     REQUIRE(output != nullptr);
 #endif
-    const Fixture fixture(output);
-    const auto root = fixture.directory / "assets";
-    const auto models = root / "models";
+    return output;
+}
+
+void writeQuad(const fs::path& models) {
     // Two triangles share four vertices. PNG is a locally generated 2x1 RGBA red/blue fixture.
     const std::array positions{0.F, 0.F, 0.F, 1.F, 0.F, 0.F, 1.F, 1.F, 0.F, 0.F, 1.F, 0.F};
     const std::array uv{0.F, 0.F, 1.F, 0.F, 1.F, 1.F, 0.F, 1.F};
@@ -81,6 +81,14 @@ TEST_CASE("Static glTF resolves external files and only caches complete assets",
     writeBytes(models / "quad.bin", indices, true);
     writeBytes(models / "colors.png", png);
     writeModel(models / "quad.gltf");
+}
+} // namespace
+
+TEST_CASE("Static glTF resolves external files and only caches complete assets", "[assets-static-gltf]") {
+    const Fixture fixture(testOutput());
+    const auto root = fixture.directory / "assets";
+    const auto models = root / "models";
+    writeQuad(models);
     ar::assets::StaticAssetCache cache(root);
     auto loaded = cache.load("models/quad.gltf");
     REQUIRE(loaded.has_value());
@@ -113,4 +121,63 @@ TEST_CASE("Static glTF resolves external files and only caches complete assets",
     }
     writeModel(bad);
     CHECK(cache.load(badRef).has_value());
+}
+
+
+TEST_CASE("Static scene keeps the active input until a candidate fully loads", "[scene-static-roundtrip]") {
+    const Fixture fixture(testOutput());
+    const auto root = fixture.directory / "assets";
+    writeQuad(root / "models");
+    const auto source = fixture.directory / "source.json";
+    const auto saved = fixture.directory / "saved.json";
+    const auto camera = R"({"position":[0,0,5],"orientation":[0,0,0,1],"fov_y":1,"near":0.25,"far":40})";
+    const auto objects = R"([{"id":9,"asset":"models/quad.gltf","position":[2,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]},{"id":3,"asset":"models/quad.gltf","position":[-2,0,0],"rotation":[0,0,0,1],"scale":[2,1,1]}])";
+    const auto writeScene = [&](int version, std::string_view instances) {
+        std::ofstream out(source);
+        out << "{\"version\":" << version << ",\"camera\":" << camera << ",\"objects\":" << instances << '}';
+        REQUIRE(out.good());
+    };
+    writeScene(1, objects);
+    std::shared_ptr<const ar::render::StaticRenderInput> retained;
+    {
+        ar::runtime::StaticSceneSession session(root);
+        REQUIRE(session.open(source).has_value());
+        retained = session.input();
+        REQUIRE(retained);
+        REQUIRE(retained->draws.size() == 2);
+        CHECK(retained->draws[0].objectId == 3);
+        CHECK(retained->draws[1].objectId == 9);
+        CHECK(retained->draws[0].mesh == retained->draws[1].mesh);
+        CHECK(retained->draws[0].modelMatrix[0] == 2.F);
+        CHECK(retained->draws[0].modelMatrix[12] == -2.F);
+        CHECK(retained->draws[1].modelMatrix[12] == 2.F);
+        CHECK(retained->camera.position[2] == 5.F);
+        CHECK(retained->camera.nearPlane == 0.25F);
+        REQUIRE(session.save(saved).has_value());
+        REQUIRE(session.save(saved).has_value());
+        REQUIRE(session.open(saved).has_value());
+        const auto reopened = session.input();
+        REQUIRE(reopened->draws.size() == 2);
+        CHECK(reopened->camera == retained->camera);
+        for (std::size_t i = 0; i < reopened->draws.size(); ++i) {
+            CHECK(reopened->draws[i].objectId == retained->draws[i].objectId);
+            CHECK(reopened->draws[i].modelMatrix == retained->draws[i].modelMatrix);
+            CHECK(reopened->draws[i].mesh == retained->draws[i].mesh);
+        }
+        writeScene(2, objects);
+        CHECK_FALSE(session.open(source).has_value());
+        CHECK(session.input() == reopened);
+        auto duplicate = std::string(objects);
+        duplicate.replace(duplicate.find("\"id\":9") + 5, 1, "3");
+        writeScene(1, duplicate);
+        CHECK_FALSE(session.open(source).has_value());
+        CHECK(session.input() == reopened);
+        auto missing = std::string(objects);
+        missing.replace(missing.find("quad.gltf"), 9, "missing.gltf");
+        writeScene(1, missing);
+        CHECK_FALSE(session.open(source).has_value());
+        CHECK(session.input() == reopened);
+    }
+    REQUIRE(retained->draws[0].mesh);
+    CHECK(retained->draws[0].mesh->indices.size() == 6);
 }

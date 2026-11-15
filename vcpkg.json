@@ -12,6 +12,8 @@
     "glfw3",
     "stb",
     "vulkan-memory-allocator",
-    "fastgltf"
+    "fastgltf",
+    "entt",
+    "glm"
   ]
 }

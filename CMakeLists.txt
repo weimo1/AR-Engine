@@ -91,6 +91,7 @@ add_subdirectory(engine/assets)
 add_subdirectory(engine/platform)
 add_subdirectory(engine/rhi)
 add_subdirectory(engine/render)
+add_subdirectory(engine/scene)
 add_subdirectory(engine/runtime)
 add_subdirectory(examples/triangle)
 
