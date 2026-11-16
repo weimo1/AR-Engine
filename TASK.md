@@ -87,6 +87,21 @@
 - [x] T25 [人工] P3b 里程碑验收：用户查看真机画面及保存重开、回滚证据后确认继续。
   - 用户确认实际画面、重开结果与回归证据。
 
+### P3c 材质与基础画面
+
+参见 [P3c 技术方案](openspec/changes/p3c-materials-lighting/design.md)。
+
+- [x] T26 不透明 glTF 材质输入：默认值、显式因子、sRGB/线性通道与 P3b 兼容通过；双配置各 78/78，零编译警告，DSH 委托评审覆盖 17/17。
+  - 验收：`assets-opaque-material` 核对默认值、显式因子、贴图解释及 P3b 兼容。
+- [ ] T27 GBuffer 与深度读回
+  - 验收：`sample-gbuffer-probes` 核对基础颜色、法线、材质通道和近片遮挡。
+- [ ] T28 延迟直接光与 HDR 转 SDR
+  - 验收：`sample-hdr-lighting-probes` 对照光照、曝光和颜色编码参考。
+- [ ] T29 环境光与子资源状态
+  - 验收：`sample-ibl-probes` 核对立方体方向、Mip/layer 与环境取样。
+- [ ] T30 [人工] P3c 里程碑验收
+  - 用户确认展示画面、材质诊断视图及回归证据。
+
 ## 人工待办（不阻塞队列）
 
 - 云端 “Engine CPU build and test” 首跑（2026-11-10，run 42821435014，`49b5633`，4 分 52 秒）：工具链检查、依赖恢复、两配置编译通过，Debug CTest 47/49；失败的 `runtime-system-inspect`、`runtime-system-development` 需要真实 Vulkan 加载器。两项已标 `gpu`，云端改用 `build_checks.py --no-gpu`；推送后用 `gh workflow run` 再跑一次确认，绿了再决定是否改成推送触发 + vcpkg 缓存。
@@ -94,6 +109,8 @@
 - 首次使用自动循环前：修正 Codex CLI 的默认模型（见 [自动运行](docs/workflow/自动运行.md) 的注意事项），设置 `CLAUDE_CODE_GIT_BASH_PATH`，然后用 `--max-tasks 1` 试跑 T01。
 
 ## 待办池（建议级，不阻塞）
+
+- T26 评审建议：按材质覆盖需要补 TEXCOORD_1、MASK、内嵌图片拒绝及更大贴图的用例；评估同源纹理的 CPU 像素复用。T27 的 GPU 纹理身份按采样用途区分。
 
 - T24 评审建议：用重叠几何补 Reverse-Z 遮挡像素验收；增加候选回滚的 GPU 资源释放计数，并核对销毁失败的诊断。
 

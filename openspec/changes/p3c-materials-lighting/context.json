@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "objective": "实现不透明延迟材质、HDR 输出和有子资源状态记录的环境光。",
+  "non_goals": ["方向光阴影", "透明、通用 Render Graph、HDR 显示输出"],
+  "tags": ["native"],
+  "documents": [
+    {"path": "docs/modules/render/README.md", "purpose": "architecture", "status": "reference", "basis": "表面与光照边界"}
+  ],
+  "skills": ["ar-cpp-oop-style", "ar-cpp-hpc-optimization", "ar-e2e-side-effect-safety"],
+  "write_paths": ["TASK.md", "openspec/changes/p3c-materials-lighting/**", "docs/modules/**", "engine/assets/**", "engine/render/**", "engine/rhi/**", "engine/runtime/**", "examples/**", "tests/**", "shaders/**", "workflow/p0-checks.json"]
+}

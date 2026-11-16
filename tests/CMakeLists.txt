@@ -305,7 +305,8 @@ add_test(NAME render-culling-reference COMMAND ar_render_tests "[render-culling-
 add_executable(ar_assets_tests assets/test_static_asset.cpp)
 target_link_libraries(ar_assets_tests PRIVATE ar_assets ar_runtime Catch2::Catch2WithMain)
 add_test(NAME assets-static-gltf COMMAND ar_assets_tests "[assets-static-gltf]")
-set_tests_properties(assets-static-gltf PROPERTIES
+add_test(NAME assets-opaque-material COMMAND ar_assets_tests "[assets-opaque-material]")
+set_tests_properties(assets-static-gltf assets-opaque-material PROPERTIES
     ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>")
 add_test(NAME scene-static-roundtrip COMMAND ar_assets_tests "[scene-static-roundtrip]")
 set_tests_properties(scene-static-roundtrip PROPERTIES

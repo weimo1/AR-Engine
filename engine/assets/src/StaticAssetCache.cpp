@@ -167,7 +167,7 @@ std::expected<void, AssetError> loadGeometry(
     return {};
 }
 
-std::expected<void, AssetError> decodePng(StaticMesh& mesh, const fs::path& path) {
+std::expected<TexturePixels, AssetError> decodePng(const fs::path& path) {
     auto bytes = readFile(path, maxExternalBytes);
     if (!bytes) {
         return std::unexpected(bytes.error());
@@ -187,13 +187,49 @@ std::expected<void, AssetError> decodePng(StaticMesh& mesh, const fs::path& path
     if (!image) {
         return failure(AssetStage::Decode, path, "could not decode PNG pixels");
     }
-    mesh.width = static_cast<std::uint32_t>(width);
-    mesh.height = static_cast<std::uint32_t>(height);
-    mesh.rgba.assign(image.get(), image.get() + static_cast<std::size_t>(width) * height * 4);
+    return TexturePixels{
+        static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height),
+        {image.get(), image.get() + static_cast<std::size_t>(width) * height * 4}, path};
+}
+
+std::expected<fs::path, AssetError> resolveTexture(
+    const fs::path& root, const fs::path& model, const fastgltf::Asset& asset,
+    const fastgltf::TextureInfo& info, const char* role) {
+    if (info.texCoordIndex != 0 || info.textureIndex >= asset.textures.size()) {
+        return failure(AssetStage::Decode, model, std::string(role) + " requires a valid TEXCOORD_0 texture");
+    }
+    const auto& texture = asset.textures[info.textureIndex];
+    if (!texture.imageIndex || *texture.imageIndex >= asset.images.size()) {
+        return failure(AssetStage::Decode, model, std::string(role) + " image reference is invalid");
+    }
+    return resolveExternal(root, model, asset.images[*texture.imageIndex].data, ".png");
+}
+
+std::expected<void, AssetError> readFactors(
+    OpaqueMaterial& target, const fastgltf::Material& material, const fs::path& model) {
+    if (material.alphaMode != fastgltf::AlphaMode::Opaque) {
+        return failure(AssetStage::Material, model, "static PBR material requires opaque alpha mode");
+    }
+    const auto& pbr = material.pbrData;
+    const auto valid = [](fastgltf::num value) {
+        return std::isfinite(value) && value >= 0 && value <= 1;
+    };
+    for (std::size_t i = 0; i < target.baseColorFactor.size(); ++i) {
+        if (!valid(pbr.baseColorFactor[i])) {
+            return failure(AssetStage::Material, model, "base color factor must be finite and within [0, 1]");
+        }
+        target.baseColorFactor[i] = static_cast<float>(pbr.baseColorFactor[i]);
+    }
+    if (!valid(pbr.metallicFactor) || !valid(pbr.roughnessFactor)) {
+        return failure(AssetStage::Material, model, "metallic and roughness factors must be finite and within [0, 1]");
+    }
+    target.metallicFactor = static_cast<float>(pbr.metallicFactor);
+    target.roughnessFactor = static_cast<float>(pbr.roughnessFactor);
     return {};
 }
 
-std::expected<StaticMesh, AssetError> loadMesh(const fs::path& root, const fs::path& model) {
+std::expected<StaticMesh, AssetError> loadMesh(
+    const fs::path& root, const fs::path& model, StaticMaterialMode mode) {
     auto json = readFile(model, maxGltfBytes);
     if (!json) {
         return std::unexpected(json.error());
@@ -222,26 +258,43 @@ std::expected<StaticMesh, AssetError> loadMesh(const fs::path& root, const fs::p
         return failure(AssetStage::Geometry, model, "unsupported static scene, node or mesh layout");
     }
     const auto& primitive = asset.meshes.front().primitives.front();
-    if (primitive.type != fastgltf::PrimitiveType::Triangles || !primitive.targets.empty() ||
-        !primitive.materialIndex || *primitive.materialIndex >= asset.materials.size()) {
-        return failure(AssetStage::Geometry, model, "expected TRIANGLES with a base-color material");
+    if (primitive.type != fastgltf::PrimitiveType::Triangles || !primitive.targets.empty()) {
+        return failure(AssetStage::Geometry, model, "expected TRIANGLES without morph targets");
     }
-    const auto& baseColor = asset.materials[*primitive.materialIndex].pbrData.baseColorTexture;
-    if (!baseColor || baseColor->texCoordIndex != 0 || baseColor->textureIndex >= asset.textures.size()) {
-        return failure(AssetStage::Decode, model, "base-color texture must use TEXCOORD_0");
+    if (primitive.materialIndex && *primitive.materialIndex >= asset.materials.size()) {
+        return failure(AssetStage::Material, model, "primitive material index is invalid");
     }
-    const auto& texture = asset.textures[baseColor->textureIndex];
-    if (!texture.imageIndex || *texture.imageIndex >= asset.images.size()) {
-        return failure(AssetStage::Decode, model, "base-color texture image is missing");
+    const auto* material = primitive.materialIndex ? &asset.materials[*primitive.materialIndex] : nullptr;
+    if (mode == StaticMaterialMode::BaseColorOnly && (!material || !material->pbrData.baseColorTexture)) {
+        return failure(AssetStage::Decode, model, "base-color texture is required for this loading mode");
+    }
+    StaticMesh mesh;
+    if (mode == StaticMaterialMode::Opaque && material) {
+        if (auto factors = readFactors(mesh.material, *material, model); !factors) {
+            return std::unexpected(factors.error());
+        }
+    }
+    std::optional<fs::path> basePath;
+    std::optional<fs::path> dataPath;
+    if (material && material->pbrData.baseColorTexture) {
+        auto path = resolveTexture(root, model, asset, *material->pbrData.baseColorTexture, "base color");
+        if (!path) {
+            return std::unexpected(path.error());
+        }
+        basePath = std::move(*path);
+    }
+    if (mode == StaticMaterialMode::Opaque && material && material->pbrData.metallicRoughnessTexture) {
+        auto path = resolveTexture(
+            root, model, asset, *material->pbrData.metallicRoughnessTexture, "metallic roughness");
+        if (!path) {
+            return std::unexpected(path.error());
+        }
+        dataPath = std::move(*path);
     }
     const auto& source = asset.buffers.front();
     auto bin = resolveExternal(root, model, source.data, ".bin");
     if (!bin) {
         return std::unexpected(bin.error());
-    }
-    auto png = resolveExternal(root, model, asset.images[*texture.imageIndex].data, ".png");
-    if (!png) {
-        return std::unexpected(png.error());
     }
     auto bytes = readFile(*bin, maxExternalBytes);
     if (!bytes) {
@@ -250,20 +303,40 @@ std::expected<StaticMesh, AssetError> loadMesh(const fs::path& root, const fs::p
     if (source.byteLength > bytes->size()) {
         return failure(AssetStage::Geometry, *bin, "buffer is shorter than its declared length");
     }
-    StaticMesh mesh;
     if (auto geometry = loadGeometry(mesh, asset, primitive,
                                      std::span(*bytes).first(source.byteLength), model);
         !geometry) {
         return std::unexpected(geometry.error());
     }
-    if (auto image = decodePng(mesh, *png); !image) {
-        return std::unexpected(image.error());
+    TexturePixels base{1, 1, {255, 255, 255, 255}, {}};
+    if (basePath) {
+        auto decoded = decodePng(*basePath);
+        if (!decoded) {
+            return std::unexpected(decoded.error());
+        }
+        base = std::move(*decoded);
     }
+    if (dataPath) {
+        if (dataPath == basePath) {
+            mesh.material.metallicRoughness = base;
+        } else {
+            auto decoded = decodePng(*dataPath);
+            if (!decoded) {
+                return std::unexpected(decoded.error());
+            }
+            mesh.material.metallicRoughness = std::move(*decoded);
+        }
+    }
+    mesh.width = base.width;
+    mesh.height = base.height;
+    mesh.rgba = std::move(base.rgba);
+    mesh.baseColorSource = std::move(base.source);
     return mesh;
 }
 } // namespace
 
-StaticAssetCache::StaticAssetCache(std::filesystem::path root) : m_root(std::move(root)) {}
+StaticAssetCache::StaticAssetCache(std::filesystem::path root, StaticMaterialMode materialMode)
+    : m_root(std::move(root)), m_materialMode(materialMode) {}
 
 std::expected<std::shared_ptr<const StaticMesh>, AssetError>
 StaticAssetCache::load(const std::filesystem::path& reference) {
@@ -282,7 +355,7 @@ StaticAssetCache::load(const std::filesystem::path& reference) {
     if (const auto cached = m_meshes.find(*path); cached != m_meshes.end()) {
         return cached->second;
     }
-    auto loaded = loadMesh(root, *path);
+    auto loaded = loadMesh(root, *path, m_materialMode);
     if (!loaded) {
         return std::unexpected(loaded.error());
     }

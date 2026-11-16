@@ -1,4 +1,5 @@
 #include "assets/StaticAssetCache.h"
+#include "render/OpaqueMaterial.h"
 #include "runtime/StaticSceneSession.h"
 
 #include <array>
@@ -7,9 +8,11 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <string_view>
 #include <tuple>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 namespace {
 namespace fs = std::filesystem;
@@ -39,21 +42,24 @@ void writeBytes(const fs::path& path, const std::array<T, N>& data, bool append 
 
 void writeModel(const fs::path& path, std::string buffer = "quad.bin",
                 std::string image = "colors.png", std::string node = R"({"mesh":0})",
-                std::string positionOffset = "0") {
+                std::string positionOffset = "0",
+                std::string_view material = R"({"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}})",
+                std::string_view materialRef = R"(,"material":0)") {
     std::ofstream out(path, std::ios::binary);
     out << R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[)"
         << node << R"(],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1},)"
-        << R"("indices":2,"material":0,"mode":4}]}],"buffers":[{"uri":")" << buffer
+        << R"("indices":2)" << materialRef << R"(,"mode":4}]}],"buffers":[{"uri":")" << buffer
         << R"(","byteLength":92}],"bufferViews":[{"buffer":0,"byteLength":48},)"
         << R"({"buffer":0,"byteOffset":48,"byteLength":32},{"buffer":0,"byteOffset":80,"byteLength":12}],)"
         << R"("accessors":[{"bufferView":0,"byteOffset":)" << positionOffset
         << R"(,"componentType":5126,"count":4,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},)"
         << R"({"bufferView":1,"componentType":5126,"count":4,"type":"VEC2"},)"
         << R"({"bufferView":2,"componentType":5123,"count":6,"type":"SCALAR"}],)"
-        << R"("materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],)"
+        << R"("materials":[)" << material << R"(],)"
         << R"("textures":[{"source":0}],"images":[{"uri":")" << image << R"("}]})";
     REQUIRE(out.good());
 }
+
 fs::path testOutput() {
 #ifdef _WIN32
     wchar_t output[4096]{};
@@ -123,6 +129,95 @@ TEST_CASE("Static glTF resolves external files and only caches complete assets",
     CHECK(cache.load(badRef).has_value());
 }
 
+
+TEST_CASE("Opaque glTF keeps factors and texture roles", "[assets-opaque-material]") {
+    const Fixture fixture(testOutput());
+    const auto root = fixture.directory / "assets";
+    const auto models = root / "models";
+    writeQuad(models);
+    using ar::assets::StaticMaterialMode;
+    ar::assets::StaticAssetCache cache(root, StaticMaterialMode::Opaque);
+    const auto missingTexture = models / "default.gltf";
+    writeModel(missingTexture, "quad.bin", "missing.png", R"({"mesh":0})", "0", "{}");
+    const auto defaults = cache.load("models/default.gltf");
+    REQUIRE(defaults.has_value());
+    CHECK((*defaults)->material.baseColorFactor == std::array{1.F, 1.F, 1.F, 1.F});
+    CHECK((*defaults)->material.metallicFactor == 1.F);
+    CHECK((*defaults)->material.roughnessFactor == 1.F);
+    CHECK_FALSE((*defaults)->material.metallicRoughness);
+    CHECK((*defaults)->width == 1);
+    CHECK((*defaults)->height == 1);
+    CHECK((*defaults)->rgba == std::vector<std::uint8_t>{255, 255, 255, 255});
+    CHECK((*defaults)->baseColorSource.empty());
+    writeModel(models / "no-material.gltf", "quad.bin", "missing.png", R"({"mesh":0})", "0", "{}", "");
+    const auto noMaterial = cache.load("models/no-material.gltf");
+    REQUIRE(noMaterial.has_value());
+    CHECK((*noMaterial)->rgba == (*defaults)->rgba);
+
+    // Non-endpoint RGB/alpha and distinct G/B detect color decoding and swapped channels.
+    constexpr std::array<std::uint8_t, 70> png{
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0,
+        0, 1, 8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156,
+        99, 104, 112, 56, 176, 0, 0, 4, 229, 2, 33, 24, 57, 169, 78, 0, 0, 0, 0, 73,
+        69, 78, 68, 174, 66, 96, 130};
+    writeBytes(models / "material.png", png);
+    const auto explicitPath = models / "explicit.gltf";
+    constexpr std::string_view material = R"({"pbrMetallicRoughness":{"baseColorFactor":[0.5,0.6,0.7,0.8],"metallicFactor":0.4,"roughnessFactor":0.7,"baseColorTexture":{"index":0},"metallicRoughnessTexture":{"index":0}}})";
+    writeModel(explicitPath, "quad.bin", "material.png", R"({"mesh":0})", "0", material);
+    const auto mesh = cache.load("models/explicit.gltf");
+    REQUIRE(mesh.has_value());
+    const auto& values = (*mesh)->material;
+    CHECK(values.baseColorFactor == std::array{0.5F, 0.6F, 0.7F, 0.8F});
+    CHECK(values.metallicFactor == 0.4F);
+    CHECK(values.roughnessFactor == 0.7F);
+    REQUIRE(values.metallicRoughness);
+    CHECK(values.metallicRoughness->width == 1);
+    CHECK(values.metallicRoughness->height == 1);
+    CHECK((*mesh)->rgba == std::vector<std::uint8_t>{128, 64, 192, 160});
+    CHECK(values.metallicRoughness->rgba == (*mesh)->rgba);
+    CHECK_FALSE((*mesh)->baseColorSource.empty());
+    CHECK((*mesh)->baseColorSource == values.metallicRoughness->source);
+    const auto texel = [](const std::vector<std::uint8_t>& px) {
+        REQUIRE(px.size() == 4);
+        return std::array{px[0], px[1], px[2], px[3]};
+    };
+    const auto evaluated = ar::render::evaluateOpaqueMaterial(
+        values, texel((*mesh)->rgba), texel(values.metallicRoughness->rgba));
+    CHECK(evaluated.baseColor[0] == Catch::Approx(0.10793025));
+    CHECK(evaluated.baseColor[1] == Catch::Approx(0.03076168));
+    CHECK(evaluated.baseColor[2] == Catch::Approx(0.36898059));
+    CHECK(evaluated.baseColor[3] == Catch::Approx(0.50196078));
+    CHECK(evaluated.metallic == Catch::Approx(0.30117647));
+    CHECK(evaluated.roughness == Catch::Approx(0.17568627));
+    const auto white = ar::render::evaluateOpaqueMaterial(values);
+    CHECK(white.baseColor == values.baseColorFactor);
+    CHECK(white.metallic == values.metallicFactor);
+    CHECK(white.roughness == values.roughnessFactor);
+
+    const auto bad = models / "bad-material.gltf";
+    for (const auto invalid : {R"({"pbrMetallicRoughness":{"metallicFactor":1.2}})",
+                               R"({"pbrMetallicRoughness":{"baseColorFactor":[1,1,-0.5,1]}})",
+                               R"({"pbrMetallicRoughness":{"metallicRoughnessTexture":{"index":5}}})",
+                               R"({"alphaMode":"BLEND"})"}) {
+        writeModel(bad, "quad.bin", "material.png", R"({"mesh":0})", "0", invalid);
+        const auto result = cache.load("models/bad-material.gltf");
+        REQUIRE_FALSE(result.has_value());
+        CHECK_FALSE(result.error().source.empty());
+        CHECK_FALSE(result.error().message.empty());
+    }
+    writeModel(bad, "quad.bin", "missing.png", R"({"mesh":0})", "0",
+               R"({"pbrMetallicRoughness":{"metallicRoughnessTexture":{"index":0}}})");
+    CHECK_FALSE(cache.load("models/bad-material.gltf").has_value());
+    writeModel(bad, "quad.bin", "material.png", R"({"mesh":0})", "0", material, R"(,"material":4)");
+    CHECK_FALSE(cache.load("models/bad-material.gltf").has_value());
+    ar::assets::StaticAssetCache legacy(root);
+    writeModel(bad, "quad.bin", "material.png", R"({"mesh":0})", "0",
+               R"({"pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicRoughnessTexture":{"index":5}}})");
+    REQUIRE(legacy.load("models/bad-material.gltf").has_value());
+    CHECK_FALSE(cache.load("models/bad-material.gltf").has_value());
+    writeModel(bad, "quad.bin", "material.png", R"({"mesh":0})", "0", material);
+    CHECK(cache.load("models/bad-material.gltf").has_value());
+}
 
 TEST_CASE("Static scene keeps the active input until a candidate fully loads", "[scene-static-roundtrip]") {
     const Fixture fixture(testOutput());
