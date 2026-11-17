@@ -124,7 +124,8 @@ std::expected<TransferToken, core::Error> DeviceResources::transfer(
     std::span<const std::byte> input,
     std::span<std::byte> output,
     bool hostVisibleDestination,
-    VkImageLayout finalImageLayout) {
+    VkImageLayout finalImageLayout,
+    std::span<const VkBufferImageCopy> uploadRegions) {
     if (auto settled = settleTransfer(true); !settled) {
         return std::unexpected(std::move(settled.error()));
     }
@@ -204,23 +205,45 @@ std::expected<TransferToken, core::Error> DeviceResources::transfer(
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.image = image->image;
-        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        dependency.imageMemoryBarrierCount = 1;
-        dependency.pImageMemoryBarriers = &barrier;
-        vkCmdPipelineBarrier2(m_transferCommands, &dependency);
         VkBufferImageCopy region{};
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.imageExtent = {image->desc.width, image->desc.height, 1};
+        const auto regions =
+            uploadRegions.empty() ? std::span<const VkBufferImageCopy>(&region, 1) : uploadRegions;
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        std::span<VkImageMemoryBarrier2> barriers(&barrier, 1);
+        std::vector<VkImageMemoryBarrier2> subresourceBarriers;
+        if (!uploadRegions.empty()) {
+            subresourceBarriers.reserve(regions.size());
+            for (const auto& copy : regions) {
+                const auto& layers = copy.imageSubresource;
+                auto subresource = barrier;
+                subresource.subresourceRange = {
+                    layers.aspectMask,
+                    layers.mipLevel,
+                    1,
+                    layers.baseArrayLayer,
+                    layers.layerCount};
+                subresourceBarriers.push_back(subresource);
+            }
+            barriers = subresourceBarriers;
+        }
+        const auto count = static_cast<std::uint32_t>(regions.size());
+        dependency.imageMemoryBarrierCount = count;
+        dependency.pImageMemoryBarriers = barriers.data();
+        vkCmdPipelineBarrier2(m_transferCommands, &dependency);
         if (upload) {
             vkCmdCopyBufferToImage(
-                m_transferCommands, stagingBuffer, image->image, layout, 1, &region);
+                m_transferCommands, stagingBuffer, image->image, layout, count, regions.data());
             if (finalImageLayout != VK_IMAGE_LAYOUT_UNDEFINED) {
-                barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-                barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-                barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                barrier.oldLayout = layout;
-                barrier.newLayout = finalImageLayout;
+                for (auto& completed : barriers) {
+                    completed.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+                    completed.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                    completed.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                    completed.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    completed.oldLayout = layout;
+                    completed.newLayout = finalImageLayout;
+                }
                 vkCmdPipelineBarrier2(m_transferCommands, &dependency);
             }
         } else {

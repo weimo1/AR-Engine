@@ -110,7 +110,10 @@ std::expected<void, core::Error> publishStaticScene(
     const auto inverse = glm::inverse(projection);
     std::array<float, 16> inverseProjection;
     std::copy_n(glm::value_ptr(inverse), inverseProjection.size(), inverseProjection.begin());
-    return rhi.replaceStaticScene(meshes, draws, verifyRollback, inverseProjection);
+    const auto cameraRotation = glm::mat4_cast(orientation);
+    std::array<float, 12> viewToWorld;
+    std::copy_n(glm::value_ptr(cameraRotation), viewToWorld.size(), viewToWorld.begin());
+    return rhi.replaceStaticScene(meshes, draws, verifyRollback, inverseProjection, viewToWorld);
 }
 
 } // namespace ar::render

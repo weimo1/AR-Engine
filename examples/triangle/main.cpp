@@ -14,6 +14,7 @@
 
 #include "runtime/RuntimeSession.h"
 #include "render/CullReference.h"
+#include "render/EnvironmentLighting.h"
 
 #define STBI_WRITE_NO_STDIO
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -31,6 +32,8 @@ struct Options {
     bool verifyBindingRetirement = false;
     bool gbuffer = false;
     bool hdrLighting = false;
+    bool verifyIblRollback = false;
+    std::optional<ar::render::EnvironmentPreset> ibl;
     std::optional<float> exposureEV;
     std::optional<std::filesystem::path> gbufferProbes;
     std::optional<std::filesystem::path> scene;
@@ -56,6 +59,19 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
             options.setBinding = true;
         } else if (arg == L"--clear-only") {
             options.clearOnly = true;
+        } else if (arg == L"--ibl" && !options.ibl && index + 1 < argc) {
+            const std::wstring_view preset = argv[++index];
+            if (preset == L"constant") {
+                options.ibl = ar::render::EnvironmentPreset::Constant;
+            } else if (preset == L"directional") {
+                options.ibl = ar::render::EnvironmentPreset::Directional;
+            } else {
+                return std::nullopt;
+            }
+            options.hdrLighting = true;
+            options.gbuffer = true;
+        } else if (arg == L"--verify-ibl-rollback") {
+            options.verifyIblRollback = true;
         } else if (arg == L"--hdr-lighting") {
             options.hdrLighting = true;
             options.gbuffer = true;
@@ -117,12 +133,14 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
     if (options.gpuDriven && (options.clearOnly || options.setBinding)) {
         return std::nullopt;
     }
-    if ((options.exposureEV && !options.hdrLighting) || (options.gbuffer && !options.scene) ||
+    if ((options.verifyIblRollback && (!options.ibl || !options.frames || *options.frames < 2)) ||
+        (options.exposureEV && !options.hdrLighting) || (options.gbuffer && !options.scene) ||
         (options.gbufferProbes && options.gbufferProbes->empty()) ||
         options.scene.has_value() != options.assetRoot.has_value() ||
         (options.scene && (options.scene->empty() || options.assetRoot->empty() ||
                            options.gpuDriven || options.clearOnly || options.setBinding)) ||
-        (options.sceneCandidate && (!options.scene || !options.screenshot || options.frames != 4))) {
+        (options.sceneCandidate &&
+         (!options.scene || !options.screenshot || options.frames != 4))) {
         return std::nullopt;
     }
     return options;
@@ -237,7 +255,7 @@ int wmain(int argc, wchar_t** argv) {
             "usage: ar_triangle [--frames N] [--hidden] [--clear-only] "
             "[--set-binding] [--static-scene JSON --asset-root DIRECTORY] "
             "[--gbuffer [--gbuffer-probes PATH]] [--hdr-lighting [--exposure-ev EV]] "
-            "[--screenshot PATH] [--output DIRECTORY]\n",
+            "[--ibl constant|directional] [--screenshot PATH] [--output DIRECTORY]\n",
             stderr);
         return 2;
     }
@@ -273,14 +291,19 @@ int wmain(int argc, wchar_t** argv) {
                                                : "triangle.frag.spv"));
         if (options->hdrLighting) {
             auto fullscreen = readShader(shaderDir / "fullscreen.vert.spv");
-            auto direct = readShader(shaderDir / "deferred_direct.frag.spv");
+            auto direct = readShader(
+                shaderDir / (options->ibl ? "deferred_ibl.frag.spv" : "deferred_direct.frag.spv"));
             auto display = readShader(shaderDir / "display_sdr.frag.spv");
             if (!fullscreen || !direct || !display) {
                 return 1;
             }
-            config.query.deferredLighting.emplace(ar::rhi::DeferredLighting{
-                std::move(*fullscreen), std::move(*direct), std::move(*display),
-                options->exposureEV.value_or(0.F)});
+            config.query.deferredLighting.emplace(
+                ar::rhi::DeferredLighting{
+                    std::move(*fullscreen),
+                    std::move(*direct),
+                    std::move(*display),
+                    options->exposureEV.value_or(0.F),
+                    options->ibl.has_value()});
         }
         if (options->gpuDriven) {
             auto compute = readShader(shaderDir / "gpu_cull.comp.spv");
@@ -333,6 +356,19 @@ int wmain(int argc, wchar_t** argv) {
         }
     }
 
+    const auto replaceEnvironment = [&](ar::render::EnvironmentPreset preset, bool verifyRollback) {
+        const auto packed =
+            ar::render::packEnvironmentLighting(ar::render::bakeEnvironmentLighting(preset));
+        return (*session)->replaceEnvironment(
+            {packed.diffuse, packed.specular, packed.brdf}, verifyRollback);
+    };
+    if (options->ibl) {
+        if (auto loaded = replaceEnvironment(*options->ibl, false); !loaded) {
+            printError(loaded.error());
+            return 1;
+        }
+    }
+
     unsigned long long presented = 0;
     ar::rhi::FrameScreenshot screenshot;
     while (!options->frames || presented < *options->frames) {
@@ -344,6 +380,18 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (*frame == ar::runtime::FrameStatus::Presented) {
             ++presented;
+            if (options->verifyIblRollback && presented == 1) {
+                const auto replacement = *options->ibl == ar::render::EnvironmentPreset::Constant
+                                             ? ar::render::EnvironmentPreset::Directional
+                                             : ar::render::EnvironmentPreset::Constant;
+                auto rejected = replaceEnvironment(replacement, true);
+                if (rejected || rejected.error().message !=
+                                    "environment diffuse: injected failure after diffuse upload") {
+                    std::fputs(
+                        "expected failure after candidate environment diffuse upload\n", stderr);
+                    return 1;
+                }
+            }
             if (options->sceneCandidate && presented < 4) {
                 constexpr std::array names{"before.png", "rollback.png", "reopened.png"};
                 const auto directory = options->screenshot->parent_path();

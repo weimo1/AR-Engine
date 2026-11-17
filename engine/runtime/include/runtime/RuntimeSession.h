@@ -54,6 +54,9 @@ public:
     [[nodiscard]] std::expected<void, core::Error>
     saveStaticScene(const std::filesystem::path& destination) const;
 
+    [[nodiscard]] std::expected<void, core::Error>
+    replaceEnvironment(const rhi::EnvironmentUpload& upload, bool verifyRollback = false);
+
     // First call closes rhi, then finishes the diagnostic run. Repeated calls return the cached
     // result without cleaning again or writing a second summary.
     core::EndResult close();

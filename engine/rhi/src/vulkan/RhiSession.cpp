@@ -1932,8 +1932,11 @@ std::expected<std::array<std::uint32_t, 2>, core::Error> RhiSession::verifyGpuCu
 }
 
 std::expected<void, core::Error> RhiSession::replaceStaticScene(
-    std::span<const StaticMeshUpload> meshes, std::span<const StaticInstanceDraw> draws,
-    bool verifyRollback, std::array<float, 16> inverseProjection) {
+    std::span<const StaticMeshUpload> meshes,
+    std::span<const StaticInstanceDraw> draws,
+    bool verifyRollback,
+    std::array<float, 16> inverseProjection,
+    std::array<float, 12> viewToWorld) {
     if (m_impl->closed || !m_impl->staticScene || !m_impl->presenter) {
         return std::unexpected(makeError(
             core::ErrorCategory::InvalidState, core::ErrorStage::Capability,
@@ -1952,12 +1955,40 @@ std::expected<void, core::Error> RhiSession::replaceStaticScene(
                   candidate.error().message);
         return std::unexpected(candidate.error());
     }
-    if (auto published = m_impl->presenter->publishStaticScene(std::move(*candidate), inverseProjection); !published) {
+    if (auto published = m_impl->presenter->publishStaticScene(
+            std::move(*candidate), inverseProjection, viewToWorld);
+        !published) {
         return published;
     }
     emitEvent(*m_impl->diagnostics, core::LogLevel::Info, "rhi.static-scene.ready",
               "draws=" + std::to_string(draws.size()));
     return {};
+}
+
+std::expected<void, core::Error>
+RhiSession::replaceEnvironment(const EnvironmentUpload& upload, bool verifyRollback) {
+    if (m_impl->closed || !m_impl->presenter || !m_impl->config.deferredLighting ||
+        !m_impl->config.deferredLighting->environmentLighting) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "environment lighting is not enabled"));
+    }
+#ifndef AR_ENABLE_TEST_HOOKS
+    if (verifyRollback) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "environment rollback verification requires test hooks"));
+    }
+#endif
+    auto published = m_impl->presenter->publishEnvironment(upload, verifyRollback);
+    emitEvent(
+        *m_impl->diagnostics,
+        core::LogLevel::Info,
+        published ? "rhi.environment.ready" : "rhi.environment.rollback",
+        published ? "diffuse=6 specular=30 brdf=1" : published.error().message);
+    return published;
 }
 
 std::expected<BufferHandle, core::Error> RhiSession::createBuffer(BufferDesc desc) {

@@ -312,9 +312,17 @@ set_tests_properties(sample-hdr-lighting-probes PROPERTIES
     LABELS "gpu"
     ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1")
 
-add_executable(ar_render_tests render/test_cull_reference.cpp)
+add_test(NAME sample-ibl-probes
+    COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_ibl.py"
+        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>")
+set_tests_properties(sample-ibl-probes PROPERTIES
+    LABELS "gpu"
+    ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1")
+
+add_executable(ar_render_tests render/test_cull_reference.cpp render/test_environment_lighting.cpp)
 target_link_libraries(ar_render_tests PRIVATE ar_render Catch2::Catch2WithMain)
 add_test(NAME render-culling-reference COMMAND ar_render_tests "[render-culling-reference]")
+add_test(NAME render-environment-lighting COMMAND ar_render_tests "[render-environment-lighting]")
 
 add_executable(ar_assets_tests assets/test_static_asset.cpp)
 target_link_libraries(ar_assets_tests PRIVATE ar_assets ar_runtime Catch2::Catch2WithMain)

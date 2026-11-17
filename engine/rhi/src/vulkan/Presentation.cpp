@@ -373,19 +373,38 @@ std::expected<void, core::Error> Presentation::createLightingLayout() {
         !created) {
         return created;
     }
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
-    for (std::uint32_t i = 0; i < bindings.size(); ++i) {
-        bindings[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                       VK_SHADER_STAGE_FRAGMENT_BIT, &m_lightingSampler};
+    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
+    const std::uint32_t bindingCount = m_lighting->environmentLighting ? 7u : 4u;
+    if (m_lighting->environmentLighting) {
+        sampler.magFilter = VK_FILTER_LINEAR;
+        sampler.minFilter = VK_FILTER_LINEAR;
+        sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sampler.maxLod = 4.F;
+        if (auto created = create(
+                m_device, m_environmentSampler, sampler, vkCreateSampler, "environment sampler");
+            !created) {
+            return created;
+        }
+    }
+    for (std::uint32_t i = 0; i < bindingCount; ++i) {
+        bindings[i] = {
+            i,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            1,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            i < 4 ? &m_lightingSampler : &m_environmentSampler};
     }
     VkDescriptorSetLayoutCreateInfo set{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    set.bindingCount = static_cast<std::uint32_t>(bindings.size());
+    set.bindingCount = bindingCount;
     set.pBindings = bindings.data();
     if (auto created = create(m_device, m_lightingSetLayout, set, vkCreateDescriptorSetLayout,
                               "lighting descriptor layout"); !created) {
         return created;
     }
-    const VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(m_inverseProjection)};
+    const VkPushConstantRange push{
+        VK_SHADER_STAGE_FRAGMENT_BIT,
+        0,
+        static_cast<std::uint32_t>(sizeof(m_inverseProjection) + sizeof(m_viewToWorld))};
     VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layout.setLayoutCount = 1;
     layout.pSetLayouts = &m_lightingSetLayout;
@@ -396,7 +415,8 @@ std::expected<void, core::Error> Presentation::createLightingLayout() {
 
 std::expected<void, core::Error> Presentation::createLightingResources(VkImageUsageFlags usage) {
     constexpr std::uint32_t setsPerSlot = 2;
-    constexpr std::uint32_t bindingsPerSet = 4;
+    constexpr std::uint32_t gbufferBindings = 4;
+    const std::uint32_t bindingsPerSet = m_lighting->environmentLighting ? 7u : gbufferBindings;
     const auto setCount = setsPerSlot * static_cast<std::uint32_t>(m_swapchain.attachments.size());
     const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, setCount * bindingsPerSet};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -435,15 +455,42 @@ std::expected<void, core::Error> Presentation::createLightingResources(VkImageUs
             images[i] = {VK_NULL_HANDLE, views[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             auto& write = writes[i];
             write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = i < bindingsPerSet ? slot.directSet : slot.displaySet;
-            write.dstBinding = i < bindingsPerSet ? i : 0;
+            write.dstSet = i < gbufferBindings ? slot.directSet : slot.displaySet;
+            write.dstBinding = i < gbufferBindings ? i : 0;
             write.descriptorCount = 1;
             write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             write.pImageInfo = &images[i];
         }
         vkUpdateDescriptorSets(m_device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
+    if (m_environmentReady) {
+        writeEnvironmentDescriptors();
+    }
     return {};
+}
+
+void Presentation::writeEnvironmentDescriptors() const {
+    for (const auto& slot : m_swapchain.attachments) {
+        std::array<VkDescriptorImageInfo, 3> images{};
+        std::array<VkWriteDescriptorSet, 3> writes{};
+        for (std::uint32_t i = 0; i < writes.size(); ++i) {
+            images[i] = {
+                VK_NULL_HANDLE, m_environment[i].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            writes[i] = {
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                nullptr,
+                slot.directSet,
+                4u + i,
+                0,
+                1,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                &images[i],
+                nullptr,
+                nullptr};
+        }
+        vkUpdateDescriptorSets(
+            m_device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    }
 }
 
 void Presentation::recordLighting(VkCommandBuffer commands, VkImageView output) const {
@@ -516,7 +563,12 @@ void Presentation::recordLighting(VkCommandBuffer commands, VkImageView output) 
     auto inverse = m_inverseProjection;
     inverse[0] *= static_cast<float>(m_swapchain.extent.width) /
                   static_cast<float>(m_swapchain.extent.height);
-    draw(slot.hdr.view, m_swapchain.directPipeline, slot.directSet, sizeof(inverse), inverse.data());
+    const struct DirectPush {
+        std::array<float, 16> inverseProjection;
+        std::array<float, 12> viewToWorld;
+    } direct{inverse, m_viewToWorld};
+    static_assert(sizeof(DirectPush) == 112);
+    draw(slot.hdr.view, m_swapchain.directPipeline, slot.directSet, sizeof(direct), &direct);
 
     const auto hdrBarrier = colorToSample(slot.hdr.image);
     dependency.imageMemoryBarrierCount = 1;
@@ -1170,6 +1222,9 @@ Presentation::draw(Frame& frame, bool capture) {
 
 std::expected<PresentStatus, core::Error>
 Presentation::presentFrame(VkExtent2D framebuffer, FrameScreenshot* screenshot) {
+    if (m_lighting && m_lighting->environmentLighting && !m_environmentReady) {
+        return std::unexpected(unavailable("environment lighting is waiting for its first upload"));
+    }
     if (m_failed || (screenshot && !m_enableScreenshot)) {
         return std::unexpected(
             core::Error{
@@ -1286,14 +1341,35 @@ std::optional<core::Error> Presentation::drainFrames() {
     return error;
 }
 
-std::expected<void, core::Error>
-Presentation::publishStaticScene(std::vector<StaticSceneDraw::Draw> draws,
-                                 const std::array<float, 16>& inverseProjection) {
+std::expected<void, core::Error> Presentation::publishStaticScene(
+    std::vector<StaticSceneDraw::Draw> draws,
+    const std::array<float, 16>& inverseProjection,
+    const std::array<float, 12>& viewToWorld) {
     if (auto error = drainFrames()) {
         return std::unexpected(std::move(*error));
     }
     m_staticScene->publish(std::move(draws));
     m_inverseProjection = inverseProjection;
+    m_viewToWorld = viewToWorld;
+    return {};
+}
+
+std::expected<void, core::Error>
+Presentation::publishEnvironment(const EnvironmentUpload& upload, bool verifyRollback) {
+    auto candidate = m_staticScene->prepareEnvironment(upload, verifyRollback);
+    if (!candidate) {
+        return std::unexpected(candidate.error());
+    }
+    if (auto error = drainFrames()) {
+        m_staticScene->destroyEnvironment(*candidate);
+        return std::unexpected(std::move(*error));
+    }
+    std::swap(m_environment, *candidate);
+    m_environmentReady = true;
+    if (m_swapchain.handle) {
+        writeEnvironmentDescriptors();
+    }
+    m_staticScene->destroyEnvironment(*candidate);
     return {};
 }
 
@@ -1319,6 +1395,9 @@ std::optional<core::Error> Presentation::close() {
         frame = {};
     }
     destroySwapchain();
+    if (m_staticScene) {
+        m_staticScene->destroyEnvironment(m_environment);
+    }
     if (m_pipelineLayout) {
         vkDestroyPipelineLayout(m_device, std::exchange(m_pipelineLayout, VK_NULL_HANDLE), nullptr);
     }
@@ -1330,6 +1409,9 @@ std::optional<core::Error> Presentation::close() {
     }
     if (m_lightingSampler) {
         vkDestroySampler(m_device, std::exchange(m_lightingSampler, VK_NULL_HANDLE), nullptr);
+    }
+    if (m_environmentSampler) {
+        vkDestroySampler(m_device, std::exchange(m_environmentSampler, VK_NULL_HANDLE), nullptr);
     }
     return error;
 }

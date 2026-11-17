@@ -118,7 +118,8 @@ private:
         std::span<const std::byte> input,
         std::span<std::byte> output,
         bool hostVisibleDestination = false,
-        VkImageLayout finalImageLayout = VK_IMAGE_LAYOUT_UNDEFINED);
+        VkImageLayout finalImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        std::span<const VkBufferImageCopy> uploadRegions = {});
     std::expected<BufferSlot*, core::Error>
     validateAccess(BufferHandle handle, std::uint64_t offset, std::size_t bytes);
 

@@ -46,8 +46,12 @@ public:
         StaticSceneDraw* staticScene = nullptr,
         bool enableGBuffer = false,
         const DeferredLighting* lighting = nullptr);
-    std::expected<void, core::Error> publishStaticScene(std::vector<StaticSceneDraw::Draw> draws,
-                       const std::array<float, 16>& inverseProjection);
+    std::expected<void, core::Error> publishStaticScene(
+        std::vector<StaticSceneDraw::Draw> draws,
+        const std::array<float, 16>& inverseProjection,
+        const std::array<float, 12>& viewToWorld);
+    std::expected<void, core::Error>
+    publishEnvironment(const EnvironmentUpload& upload, bool verifyRollback);
     std::expected<PresentStatus, core::Error>
     presentFrame(VkExtent2D framebuffer, FrameScreenshot* screenshot);
     std::optional<core::Error> close();
@@ -129,6 +133,7 @@ private:
                            bool fullscreen = false);
     std::expected<void, core::Error> createLightingLayout();
     std::expected<void, core::Error> createLightingResources(VkImageUsageFlags usage);
+    void writeEnvironmentDescriptors() const;
     void recordLighting(VkCommandBuffer commands, VkImageView output) const;
     std::expected<void, core::Error> createReadback(VkPhysicalDevice physical, Readback& readback);
     std::expected<void, core::Error> readScreenshot(Frame& frame, FrameScreenshot& screenshot);
@@ -154,9 +159,13 @@ private:
     bool m_enableGBuffer = false;
     const DeferredLighting* m_lighting = nullptr;
     VkSampler m_lightingSampler = VK_NULL_HANDLE;
+    VkSampler m_environmentSampler = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_lightingSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_lightingLayout = VK_NULL_HANDLE;
     std::array<float, 16> m_inverseProjection{};
+    std::array<float, 12> m_viewToWorld{};
+    StaticSceneDraw::Environment m_environment{};
+    bool m_environmentReady = false;
     VkExtent2D m_requestedExtent{};
     SwapchainResources m_swapchain;
     VkDescriptorSet m_bindingSet = VK_NULL_HANDLE;

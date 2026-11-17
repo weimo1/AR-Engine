@@ -70,6 +70,7 @@ StaticSceneDraw::StaticSceneDraw(DeviceResources& resources, bool enableGBuffer)
 StaticSceneDraw::~StaticSceneDraw() {
     m_active.clear();
     if (!m_abandoned) {
+        destroyEnvironment(m_pendingEnvironment);
         if (m_sampler) {
             vkDestroySampler(m_resources.m_device, m_sampler, nullptr);
         }
@@ -107,16 +108,31 @@ std::expected<void, core::Error> StaticSceneDraw::open() {
 }
 
 std::expected<StaticSceneDraw::Attachment, core::Error> StaticSceneDraw::createAttachment(
-    VkExtent2D extent, VkFormat format, VkImageAspectFlags aspect, VkImageUsageFlags usage) {
+    VkExtent2D extent,
+    VkFormat format,
+    VkImageAspectFlags aspect,
+    VkImageUsageFlags usage,
+    std::uint32_t mipCount,
+    bool cube) {
+    const std::uint32_t layers = cube ? 6u : 1u;
+    const VkImageCreateFlags flags =
+        cube ? VkImageCreateFlags{VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT} : 0;
     VkImageFormatProperties properties{};
     const auto supported = vkGetPhysicalDeviceImageFormatProperties(
-        m_resources.m_physical, format, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,
-        usage, 0, &properties);
+        m_resources.m_physical,
+        format,
+        VK_IMAGE_TYPE_2D,
+        VK_IMAGE_TILING_OPTIMAL,
+        usage,
+        flags,
+        &properties);
     if (supported != VK_SUCCESS) {
         return failed("static scene attachment format and usage unavailable", supported);
     }
     if (!extent.width || !extent.height || extent.width > properties.maxExtent.width ||
-        extent.height > properties.maxExtent.height) {
+        extent.height > properties.maxExtent.height || !mipCount ||
+        mipCount > properties.maxMipLevels || layers > properties.maxArrayLayers ||
+        (cube && extent.width != extent.height)) {
         return invalid("static scene attachment extent is out of range");
     }
     if (auto ready = m_resources.ensureAllocator(); !ready) {
@@ -127,8 +143,9 @@ std::expected<StaticSceneDraw::Attachment, core::Error> StaticSceneDraw::createA
     image.imageType = VK_IMAGE_TYPE_2D;
     image.format = format;
     image.extent = {extent.width, extent.height, 1};
-    image.mipLevels = 1;
-    image.arrayLayers = 1;
+    image.flags = flags;
+    image.mipLevels = mipCount;
+    image.arrayLayers = layers;
     image.samples = VK_SAMPLE_COUNT_1_BIT;
     image.tiling = VK_IMAGE_TILING_OPTIMAL;
     image.usage = usage;
@@ -142,9 +159,9 @@ std::expected<StaticSceneDraw::Attachment, core::Error> StaticSceneDraw::createA
     }
     VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     view.image = attachment.image;
-    view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view.viewType = cube ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
     view.format = format;
-    view.subresourceRange = {aspect, 0, 1, 0, 1};
+    view.subresourceRange = {aspect, 0, mipCount, 0, layers};
     if (auto result = vkCreateImageView(m_resources.m_device, &view, nullptr, &attachment.view);
         result != VK_SUCCESS) {
         destroyAttachment(attachment);
@@ -161,6 +178,102 @@ void StaticSceneDraw::destroyAttachment(Attachment& attachment) noexcept {
         vmaDestroyImage(m_resources.m_allocator, attachment.image, attachment.allocation);
     }
     attachment = {};
+}
+
+void StaticSceneDraw::destroyEnvironment(Environment& environment) noexcept {
+    for (auto& attachment : environment) {
+        destroyAttachment(attachment);
+    }
+}
+
+std::expected<StaticSceneDraw::Environment, core::Error>
+StaticSceneDraw::prepareEnvironment(const EnvironmentUpload& upload, bool verifyRollback) {
+    struct Texture {
+        const char* name;
+        std::span<const std::uint16_t> texels;
+        VkFormat format;
+        std::uint32_t extent;
+        std::uint32_t mips;
+        std::uint32_t layers;
+        std::uint32_t channels;
+    };
+    const std::array textures{
+        Texture{"diffuse", upload.diffuse, VK_FORMAT_R16G16B16A16_SFLOAT, 16, 1, 6, 4},
+        Texture{"specular", upload.specular, VK_FORMAT_R16G16B16A16_SFLOAT, 16, 5, 6, 4},
+        Texture{"BRDF", upload.brdf, VK_FORMAT_R16G16_SFLOAT, 32, 1, 1, 2},
+    };
+    if (auto ready = m_resources.settleTransfer(true); !ready) {
+        return std::unexpected(ready.error());
+    }
+    destroyEnvironment(m_pendingEnvironment);
+    Environment candidate{};
+    const auto rollback = [&](core::Error error, const Texture& texture) {
+        error.message = std::string("environment ") + texture.name + ": " + error.message;
+        if (m_resources.hasPendingTransfer()) {
+            m_pendingEnvironment = candidate;
+        } else {
+            destroyEnvironment(candidate);
+        }
+        return std::unexpected(std::move(error));
+    };
+    for (std::size_t i = 0; i < textures.size(); ++i) {
+        const auto& texture = textures[i];
+        const auto bytes = std::as_bytes(texture.texels);
+        std::vector<VkBufferImageCopy> regions;
+        regions.reserve(texture.mips * texture.layers);
+        VkDeviceSize offset = 0;
+        for (std::uint32_t mip = 0; mip < texture.mips; ++mip) {
+            const auto extent = texture.extent >> mip;
+            for (std::uint32_t layer = 0; layer < texture.layers; ++layer) {
+                VkBufferImageCopy copy{};
+                copy.bufferOffset = offset;
+                copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip, layer, 1};
+                copy.imageExtent = {extent, extent, 1};
+                regions.push_back(copy);
+                offset += VkDeviceSize{extent} * extent * texture.channels * sizeof(std::uint16_t);
+            }
+        }
+        if (offset != bytes.size()) {
+            return rollback(invalid("unexpected packed subresource size").error(), texture);
+        }
+        VkFormatProperties properties{};
+        vkGetPhysicalDeviceFormatProperties(m_resources.m_physical, texture.format, &properties);
+        if (!(properties.optimalTilingFeatures &
+              VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
+            return rollback(invalid("format does not support linear sampling").error(), texture);
+        }
+        auto image = createAttachment(
+            {texture.extent, texture.extent},
+            texture.format,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            texture.mips,
+            texture.layers == 6);
+        if (!image) {
+            return rollback(image.error(), texture);
+        }
+        candidate[i] = *image;
+        DeviceResources::ImageSlot target{};
+        target.image = image->image;
+        auto submitted = m_resources.transfer(
+            VK_NULL_HANDLE,
+            &target,
+            bytes,
+            {},
+            false,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            regions);
+        if (!submitted) {
+            return rollback(submitted.error(), texture);
+        }
+        if (auto completed = m_resources.waitTransfer(*submitted); !completed) {
+            return rollback(completed.error(), texture);
+        }
+        if (verifyRollback && i == 0) {
+            return rollback(invalid("injected failure after diffuse upload").error(), texture);
+        }
+    }
+    return candidate;
 }
 
 std::expected<std::shared_ptr<StaticSceneDraw::Mesh>, core::Error>

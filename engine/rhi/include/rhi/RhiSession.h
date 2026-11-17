@@ -15,6 +15,7 @@
 #include "core/Diagnostics.h"
 #include "core/Error.h"
 #include "rhi/Capabilities.h"
+#include "rhi/EnvironmentUpload.h"
 #include "rhi/Image.h"
 #include "rhi/Buffer.h"
 #include "rhi/LoaderSource.h"
@@ -53,6 +54,7 @@ struct DeferredLighting {
     std::vector<std::uint32_t> directFragment;
     std::vector<std::uint32_t> displayFragment;
     float exposureEV = 0.F;
+    bool environmentLighting = false;
 };
 
 struct GBufferProbe {
@@ -173,8 +175,13 @@ public:
     presentFrame(std::uint32_t width, std::uint32_t height, FrameScreenshot* screenshot = nullptr);
 
     [[nodiscard]] std::expected<void, core::Error> replaceStaticScene(
-        std::span<const StaticMeshUpload> meshes, std::span<const StaticInstanceDraw> draws,
-        bool verifyRollback = false, std::array<float, 16> inverseProjection = {});
+        std::span<const StaticMeshUpload> meshes,
+        std::span<const StaticInstanceDraw> draws,
+        bool verifyRollback = false,
+        std::array<float, 16> inverseProjection = {},
+        std::array<float, 12> viewToWorld = {});
+    [[nodiscard]] std::expected<void, core::Error>
+    replaceEnvironment(const EnvironmentUpload& upload, bool verifyRollback = false);
 
     // Explicit synchronous verification path. Object records use the 32-byte std430 layout.
     std::expected<std::array<std::uint32_t, 2>, core::Error> verifyGpuCull(

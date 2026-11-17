@@ -354,6 +354,19 @@ RuntimeSession::openStaticScene(const std::filesystem::path& source, bool verify
 }
 
 std::expected<void, core::Error>
+RuntimeSession::replaceEnvironment(const rhi::EnvironmentUpload& upload, bool verifyRollback) {
+    if (!m_impl->rhi || m_impl->closed) {
+        return std::unexpected(
+            core::Error{
+                core::ErrorCategory::InvalidState,
+                core::ErrorStage::Capability,
+                "no active render session",
+                {}});
+    }
+    return m_impl->rhi->replaceEnvironment(upload, verifyRollback);
+}
+
+std::expected<void, core::Error>
 RuntimeSession::saveStaticScene(const std::filesystem::path& destination) const {
     if (m_impl->closed || !m_impl->staticScene) {
         return std::unexpected(makeError(core::ErrorCategory::InvalidState,

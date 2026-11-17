@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DeviceResources.h"
+#include "rhi/EnvironmentUpload.h"
 
 namespace ar::rhi::detail {
 
@@ -26,8 +27,18 @@ public:
     std::expected<void, core::Error> open();
     VkDescriptorSetLayout layout() const noexcept { return m_layout; }
     std::expected<Attachment, core::Error> createAttachment(
-        VkExtent2D extent, VkFormat format, VkImageAspectFlags aspect, VkImageUsageFlags usage);
+        VkExtent2D extent,
+        VkFormat format,
+        VkImageAspectFlags aspect,
+        VkImageUsageFlags usage,
+        std::uint32_t mipCount = 1,
+        bool cube = false);
     void destroyAttachment(Attachment& attachment) noexcept;
+
+    using Environment = std::array<Attachment, 3>;
+    std::expected<Environment, core::Error>
+    prepareEnvironment(const EnvironmentUpload& upload, bool verifyRollback);
+    void destroyEnvironment(Environment& environment) noexcept;
     std::expected<std::vector<Draw>, core::Error> prepare(
         std::span<const StaticMeshUpload> meshes, std::span<const StaticInstanceDraw> draws,
         bool verifyRollback);
@@ -42,6 +53,8 @@ private:
     VkDescriptorSetLayout m_layout = VK_NULL_HANDLE;
     VkSampler m_sampler = VK_NULL_HANDLE;
     std::vector<Draw> m_active;
+    // A candidate whose transfer fence could not be settled is held until retry or close.
+    Environment m_pendingEnvironment{};
     bool m_abandoned = false;
     bool m_enableGBuffer = false;
 };
