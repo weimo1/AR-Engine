@@ -1,6 +1,7 @@
 #include "runtime/RuntimeSession.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -189,7 +190,8 @@ RuntimeSession::start(const RuntimeConfig& config) {
     auto query = config.query;
     if (config.staticAssetRoot) {
         query.enableStaticScene = true;
-        session->staticScene = std::make_unique<StaticSceneSession>(*config.staticAssetRoot);
+        session->staticScene = std::make_unique<StaticSceneSession>(
+            *config.staticAssetRoot, query.enableGBuffer);
     }
     auto rhi = [&]() -> std::expected<std::unique_ptr<rhi::RhiSession>, rhi::QueryFailure> {
         if (auto opened = session->openWindow(query); !opened) {
@@ -298,6 +300,26 @@ RuntimeSession::presentFrame(rhi::FrameScreenshot* screenshot) {
         window.waitEvents(kWindowEventWaitSeconds);
         return window.shouldClose() ? FrameStatus::Closed : FrameStatus::Paused;
     }
+    if (screenshot && !screenshot->gbuffer.empty() && m_impl->staticScene) {
+        const auto input = m_impl->staticScene->input();
+        if (input) {
+            const auto& camera = input->camera;
+            const float halfFov = std::tan(camera.verticalFovRadians * 0.5F);
+            const float width = static_cast<float>(screenshot->width);
+            const float height = static_cast<float>(screenshot->height);
+            for (auto& sample : screenshot->gbuffer) {
+                if (sample.depth == 0.F) {
+                    continue;
+                }
+                const float distance = camera.nearPlane * camera.farPlane /
+                    (camera.nearPlane + sample.depth * (camera.farPlane - camera.nearPlane));
+                const float x = 2.F * (static_cast<float>(sample.pixel[0]) + 0.5F) / width - 1.F;
+                const float y = 1.F - 2.F * (static_cast<float>(sample.pixel[1]) + 0.5F) / height;
+                sample.viewPosition = {x * distance * halfFov * width / height, y * distance * halfFov,
+                                       -distance};
+            }
+        }
+    }
     return FrameStatus::Presented;
 }
 
@@ -310,7 +332,8 @@ RuntimeSession::openStaticScene(const std::filesystem::path& source, bool verify
     std::optional<core::Error> gpuError;
     auto opened = m_impl->staticScene->open(source, [&](const render::StaticRenderInput& input)
                                               -> std::expected<void, StaticSceneError> {
-        auto ready = render::publishStaticScene(*m_impl->rhi, input, verifyRollback);
+        auto ready = render::publishStaticScene(
+            *m_impl->rhi, input, verifyRollback, m_impl->config.query.enableGBuffer);
         if (!ready) {
             gpuError = std::move(ready.error());
             return std::unexpected(StaticSceneError{

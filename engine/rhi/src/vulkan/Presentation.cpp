@@ -3,6 +3,7 @@
 #include "core/Diagnostics.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <limits>
@@ -16,6 +17,40 @@ namespace ar::rhi::detail {
 namespace {
 
 constexpr std::uint64_t kFrameTimeout = 5'000'000'000;
+constexpr std::array gbufferFormats{
+    VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8G8_UNORM};
+constexpr VkDeviceSize kProbeStride = 24;
+constexpr std::array<VkDeviceSize, 4> probeOffsets{0, 8, 16, 20};
+
+constexpr VkDeviceSize probeStart(VkDeviceSize screenshotBytes) {
+    return (screenshotBytes + 7) & ~VkDeviceSize{7};
+}
+
+std::array<VkOffset3D, 3> probePositions(VkExtent2D extent) {
+    const auto coordinate = [](std::uint32_t size, float fraction) {
+        return static_cast<std::int32_t>(static_cast<float>(size) * fraction);
+    };
+    return {{
+        {coordinate(extent.width, 0.5F), coordinate(extent.height, 0.38F), 0},
+        {coordinate(extent.width, 0.5F), coordinate(extent.height, 0.76F), 0},
+        {coordinate(extent.width, 0.05F), coordinate(extent.height, 0.05F), 0},
+    }};
+}
+
+float halfToFloat(std::uint16_t bits) {
+    const int exponent = (bits >> 10) & 31;
+    const auto fraction = static_cast<float>(bits & 1023);
+    float magnitude = 0.F;
+    if (exponent == 0) {
+        magnitude = std::ldexp(fraction, -24);
+    } else if (exponent == 31) {
+        magnitude = fraction == 0 ? std::numeric_limits<float>::infinity()
+                                  : std::numeric_limits<float>::quiet_NaN();
+    } else {
+        magnitude = std::ldexp(1.F + fraction / 1024.F, exponent - 15);
+    }
+    return (bits & 0x8000u) ? -magnitude : magnitude;
+}
 
 core::Error failed(const char* operation, VkResult result) {
     return {
@@ -64,7 +99,8 @@ std::expected<void, core::Error> Presentation::open(
     bool enableScreenshot,
     VkDescriptorSetLayout bindingLayout,
     VkDescriptorSet bindingSet,
-    StaticSceneDraw* staticScene) {
+    StaticSceneDraw* staticScene,
+    bool enableGBuffer) {
     if (!vkGetPhysicalDeviceSurfaceCapabilitiesKHR || !vkGetPhysicalDeviceSurfaceFormatsKHR ||
         !vkCreateSwapchainKHR || !vkDestroySwapchainKHR || !vkGetSwapchainImagesKHR ||
         !vkAcquireNextImageKHR || !vkQueuePresentKHR) {
@@ -83,6 +119,7 @@ std::expected<void, core::Error> Presentation::open(
     m_enableScreenshot = enableScreenshot;
     m_bindingSet = bindingSet;
     m_staticScene = staticScene;
+    m_enableGBuffer = enableGBuffer;
     for (Frame& frame : m_frames) {
         if (auto created = createFrame(frame, graphicsFamily); !created) {
             return created;
@@ -95,7 +132,10 @@ std::expected<void, core::Error> Presentation::open(
             layout.setLayoutCount = 1;
             layout.pSetLayouts = &bindingLayout;
         }
-        const VkPushConstantRange matrix{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(std::array<float, 16>)};
+        const VkPushConstantRange matrix{
+            m_enableGBuffer ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
+                            : static_cast<VkShaderStageFlags>(VK_SHADER_STAGE_VERTEX_BIT),
+            0, m_enableGBuffer ? 128u : 64u};
         if (m_staticScene) {
             layout.pushConstantRangeCount = 1;
             layout.pPushConstantRanges = &matrix;
@@ -260,12 +300,27 @@ std::expected<bool, core::Error> Presentation::createSwapchain(VkExtent2D frameb
         }
     }
     if (m_staticScene) {
-        for (auto& depth : m_swapchain.depths) {
-            auto created = m_staticScene->createDepth(m_swapchain.extent);
+        for (auto& slot : m_swapchain.attachments) {
+            const VkImageUsageFlags readUsage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                (m_enableScreenshot ? static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_SRC_BIT) : 0);
+            auto created = m_staticScene->createAttachment(
+                m_swapchain.extent, StaticSceneDraw::depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | (m_enableGBuffer ? readUsage : 0));
             if (!created) {
                 return std::unexpected(created.error());
             }
-            depth = *created;
+            slot.depth = *created;
+            if (m_enableGBuffer) {
+                for (std::size_t index = 0; index < gbufferFormats.size(); ++index) {
+                    auto attachment = m_staticScene->createAttachment(
+                        m_swapchain.extent, gbufferFormats[index], VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | readUsage);
+                    if (!attachment) {
+                        return std::unexpected(attachment.error());
+                    }
+                    slot.gbuffer[index] = *attachment;
+                }
+            }
         }
     }
     if (m_shaders) {
@@ -288,7 +343,9 @@ Presentation::createReadback(VkPhysicalDevice physical, Readback& readback) {
     m_swapchain.readbackBytes = static_cast<std::size_t>(pixels * 4);
     VkBufferCreateInfo buffer{};
     buffer.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buffer.size = m_swapchain.readbackBytes;
+    buffer.size = m_enableGBuffer
+        ? probeStart(m_swapchain.readbackBytes) + kProbeStride * probePositions(m_swapchain.extent).size()
+        : m_swapchain.readbackBytes;
     buffer.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     if (auto created = create(m_device, readback.buffer, buffer, vkCreateBuffer, "vkCreateBuffer");
         !created) {
@@ -349,6 +406,9 @@ Presentation::readScreenshot(Frame& frame, FrameScreenshot& screenshot) {
     }
     if (result == VK_SUCCESS) {
         std::memcpy(captured.rgba.data(), mapped, captured.rgba.size());
+        if (m_enableGBuffer) {
+            decodeGBufferProbes(mapped, captured);
+        }
     }
     vkUnmapMemory(m_device, readback.memory);
     if (result != VK_SUCCESS) {
@@ -362,6 +422,74 @@ Presentation::readScreenshot(Frame& frame, FrameScreenshot& screenshot) {
     }
     screenshot = std::move(captured);
     return {};
+}
+
+void Presentation::decodeGBufferProbes(const void* mapped, FrameScreenshot& screenshot) const {
+    const auto* samples = static_cast<const std::uint8_t*>(mapped) + probeStart(m_swapchain.readbackBytes);
+    const auto positions = probePositions(m_swapchain.extent);
+    screenshot.gbuffer.resize(positions.size());
+    for (std::size_t i = 0; i < positions.size(); ++i) {
+        auto& output = screenshot.gbuffer[i];
+        output.pixel = {static_cast<std::uint32_t>(positions[i].x),
+                        static_cast<std::uint32_t>(positions[i].y)};
+        const auto* sample = samples + i * kProbeStride;
+        for (std::size_t channel = 0; channel < output.baseColor.size(); ++channel) {
+            output.baseColor[channel] = static_cast<float>(sample[channel]) / 255.F;
+        }
+        for (std::size_t channel = 0; channel < output.normal.size(); ++channel) {
+            std::uint16_t bits = 0;
+            std::memcpy(&bits, sample + probeOffsets[1] + channel * sizeof(bits), sizeof(bits));
+            output.normal[channel] = halfToFloat(bits);
+        }
+        for (std::size_t channel = 0; channel < output.material.size(); ++channel) {
+            output.material[channel] = static_cast<float>(sample[probeOffsets[2] + channel]) / 255.F;
+        }
+        std::memcpy(&output.depth, sample + probeOffsets[3], sizeof(output.depth));
+    }
+}
+
+void Presentation::copyGBufferProbes(VkCommandBuffer commands, VkBuffer destination) const {
+    const auto& slot = m_swapchain.attachments[m_frameIndex];
+    const std::array images{slot.gbuffer[0].image, slot.gbuffer[1].image,
+                            slot.gbuffer[2].image, slot.depth.image};
+    std::array<VkImageMemoryBarrier2, 4> transitions{};
+    for (std::size_t i = 0; i < images.size(); ++i) {
+        const bool depth = i == images.size() - 1;
+        auto& barrier = transitions[i];
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        barrier.srcStageMask = depth ? VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                           VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT
+                                     : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        barrier.srcAccessMask = depth ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+                                     : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+        barrier.oldLayout = depth ? VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL
+                                  : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = images[i];
+        const auto aspect = depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange = {static_cast<VkImageAspectFlags>(aspect), 0, 1, 0, 1};
+    }
+    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(transitions.size());
+    dependency.pImageMemoryBarriers = transitions.data();
+    vkCmdPipelineBarrier2(commands, &dependency);
+    const auto positions = probePositions(m_swapchain.extent);
+    for (std::size_t i = 0; i < images.size(); ++i) {
+        std::array<VkBufferImageCopy, 3> copies{};
+        for (std::size_t j = 0; j < copies.size(); ++j) {
+            auto& copy = copies[j];
+            copy.bufferOffset = probeStart(m_swapchain.readbackBytes) + j * kProbeStride + probeOffsets[i];
+            copy.imageSubresource = {transitions[i].subresourceRange.aspectMask, 0, 0, 1};
+            copy.imageOffset = positions[j];
+            copy.imageExtent = {1, 1, 1};
+        }
+        vkCmdCopyImageToBuffer(commands, images[i], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination,
+                               static_cast<std::uint32_t>(copies.size()), copies.data());
+    }
 }
 
 std::expected<void, core::Error>
@@ -404,7 +532,8 @@ Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& sha
     const VkVertexInputBindingDescription meshBinding{0, sizeof(StaticVertex), VK_VERTEX_INPUT_RATE_VERTEX};
     const std::array meshAttributes{
         VkVertexInputAttributeDescription{0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(StaticVertex, position)},
-        VkVertexInputAttributeDescription{1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(StaticVertex, uv)}};
+        VkVertexInputAttributeDescription{1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(StaticVertex, uv)},
+        VkVertexInputAttributeDescription{2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(StaticVertex, normal)}};
     if (m_cullFrames.front()) {
         vertex.vertexBindingDescriptionCount = 1;
         vertex.pVertexBindingDescriptions = &positions;
@@ -414,17 +543,18 @@ Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& sha
     if (m_staticScene) {
         vertex.vertexBindingDescriptionCount = 1;
         vertex.pVertexBindingDescriptions = &meshBinding;
-        vertex.vertexAttributeDescriptionCount = static_cast<std::uint32_t>(meshAttributes.size());
+        vertex.vertexAttributeDescriptionCount = m_enableGBuffer ? 3 : 2;
         vertex.pVertexAttributeDescriptions = meshAttributes.data();
     }
     VkPipelineInputAssemblyStateCreateInfo assembly{};
     assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    const float height = static_cast<float>(m_swapchain.extent.height);
     const VkViewport viewport{
         0.0F,
-        0.0F,
+        m_enableGBuffer ? height : 0.F,
         static_cast<float>(m_swapchain.extent.width),
-        static_cast<float>(m_swapchain.extent.height),
+        m_enableGBuffer ? -height : height,
         0.0F,
         1.0F};
     const VkRect2D scissor{{0, 0}, m_swapchain.extent};
@@ -447,12 +577,14 @@ Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& sha
                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     VkPipelineColorBlendStateCreateInfo blend{};
     blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    blend.attachmentCount = 1;
-    blend.pAttachments = &color;
+    const std::array colors{color, color, color, color};
+    blend.attachmentCount = m_enableGBuffer ? static_cast<std::uint32_t>(colors.size()) : 1;
+    blend.pAttachments = colors.data();
     VkPipelineRenderingCreateInfo rendering{};
     rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachmentFormats = &format;
+    const std::array formats{format, gbufferFormats[0], gbufferFormats[1], gbufferFormats[2]};
+    rendering.colorAttachmentCount = blend.attachmentCount;
+    rendering.pColorAttachmentFormats = formats.data();
     VkPipelineDepthStencilStateCreateInfo depth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     if (m_staticScene) {
         rendering.depthAttachmentFormat = StaticSceneDraw::depthFormat;
@@ -562,15 +694,47 @@ Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capt
     rendering.renderArea.extent = m_swapchain.extent;
     rendering.layerCount = 1;
     rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachments = &color;
+    std::array<VkRenderingAttachmentInfo, 4> colors{};
+    colors[0] = color;
+    rendering.pColorAttachments = colors.data();
+    if (m_enableGBuffer) {
+        std::array<VkImageMemoryBarrier2, 3> transitions{};
+        const auto& attachments = m_swapchain.attachments[m_frameIndex].gbuffer;
+        for (std::size_t index = 0; index < attachments.size(); ++index) {
+            auto& transition = transitions[index];
+            transition = barrier;
+            transition.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                      VK_PIPELINE_STAGE_2_COPY_BIT;
+            transition.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            transition.srcAccessMask =
+                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_TRANSFER_READ_BIT;
+            transition.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            transition.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            transition.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            transition.image = attachments[index].image;
+            auto& target = colors[index + 1];
+            target = color;
+            target.imageView = attachments[index].view;
+            target.clearValue = {};
+        }
+        VkDependencyInfo gbufferDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        gbufferDependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(transitions.size());
+        gbufferDependency.pImageMemoryBarriers = transitions.data();
+        vkCmdPipelineBarrier2(commands, &gbufferDependency);
+        rendering.colorAttachmentCount = static_cast<std::uint32_t>(colors.size());
+    }
     VkRenderingAttachmentInfo depthAttachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     if (m_staticScene) {
-        const auto& depth = m_swapchain.depths[m_frameIndex];
+        const auto& depth = m_swapchain.attachments[m_frameIndex].depth;
         VkImageMemoryBarrier2 transition{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
         transition.srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
                                   VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
         transition.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         transition.dstStageMask = transition.srcStageMask;
+        if (m_enableGBuffer && m_enableScreenshot) {
+            transition.srcStageMask |= VK_PIPELINE_STAGE_2_COPY_BIT;
+            transition.srcAccessMask |= VK_ACCESS_2_TRANSFER_READ_BIT;
+        }
         transition.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
                                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         transition.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -586,7 +750,8 @@ Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capt
         depthAttachment.imageView = depth.view;
         depthAttachment.imageLayout = transition.newLayout;
         depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.storeOp = m_enableGBuffer ? VK_ATTACHMENT_STORE_OP_STORE
+                                                  : VK_ATTACHMENT_STORE_OP_DONT_CARE;
         depthAttachment.clearValue.depthStencil = {0.F, 0};
         rendering.pDepthAttachment = &depthAttachment;
     }
@@ -635,6 +800,9 @@ Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capt
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.imageExtent = {m_swapchain.extent.width, m_swapchain.extent.height, 1};
         vkCmdCopyImageToBuffer(commands, image.handle, barrier.newLayout, capture, 1, &region);
+        if (m_enableGBuffer) {
+            copyGBufferProbes(commands, capture);
+        }
 
         host.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
         host.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
@@ -932,8 +1100,11 @@ std::optional<core::Error> Presentation::close() {
 
 void Presentation::destroySwapchain() noexcept {
     if (m_staticScene) {
-        for (auto& depth : m_swapchain.depths) {
-            m_staticScene->destroyDepth(depth);
+        for (auto& slot : m_swapchain.attachments) {
+            for (auto& attachment : slot.gbuffer) {
+                m_staticScene->destroyAttachment(attachment);
+            }
+            m_staticScene->destroyAttachment(slot.depth);
         }
     }
     for (const Image& image : m_swapchain.images) {

@@ -93,7 +93,7 @@
 
 - [x] T26 不透明 glTF 材质输入：默认值、显式因子、sRGB/线性通道与 P3b 兼容通过；双配置各 78/78，零编译警告，DSH 委托评审覆盖 17/17。
   - 验收：`assets-opaque-material` 核对默认值、显式因子、贴图解释及 P3b 兼容。
-- [ ] T27 GBuffer 与深度读回
+- [x] T27 GBuffer 与深度读回。真机验证 Reverse-Z 遮挡、材质与法线附件和视空间位置重建，双配置各 79/79、零编译警告，DSH 独立评审通过。
   - 验收：`sample-gbuffer-probes` 核对基础颜色、法线、材质通道和近片遮挡。
 - [ ] T28 延迟直接光与 HDR 转 SDR
   - 验收：`sample-hdr-lighting-probes` 对照光照、曝光和颜色编码参考。

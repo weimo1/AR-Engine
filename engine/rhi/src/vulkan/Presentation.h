@@ -42,7 +42,8 @@ public:
         bool enableScreenshot,
         VkDescriptorSetLayout bindingLayout,
         VkDescriptorSet bindingSet,
-        StaticSceneDraw* staticScene = nullptr);
+        StaticSceneDraw* staticScene = nullptr,
+        bool enableGBuffer = false);
     std::expected<void, core::Error> publishStaticScene(std::vector<StaticSceneDraw::Draw> draws);
     std::expected<PresentStatus, core::Error>
     presentFrame(VkExtent2D framebuffer, FrameScreenshot* screenshot);
@@ -81,7 +82,11 @@ private:
         VkSwapchainKHR handle = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
         std::array<Readback, 2> readbacks{};
-        std::array<StaticSceneDraw::Depth, 2> depths{};
+        struct SlotAttachments {
+            StaticSceneDraw::Attachment depth;
+            std::array<StaticSceneDraw::Attachment, 3> gbuffer;
+        };
+        std::array<SlotAttachments, 2> attachments{};
         VkFormat format = VK_FORMAT_UNDEFINED;
         VkExtent2D extent{};
         std::vector<Image> images;
@@ -113,6 +118,8 @@ private:
     createTrianglePipeline(VkFormat format, const TriangleShaders& shaders);
     std::expected<void, core::Error> createReadback(VkPhysicalDevice physical, Readback& readback);
     std::expected<void, core::Error> readScreenshot(Frame& frame, FrameScreenshot& screenshot);
+    void copyGBufferProbes(VkCommandBuffer commands, VkBuffer destination) const;
+    void decodeGBufferProbes(const void* mapped, FrameScreenshot& screenshot) const;
     std::expected<DrawStatus, core::Error> draw(Frame& frame, bool capture);
     std::expected<void, core::Error>
     record(VkCommandBuffer commands, const Image& image, VkBuffer capture);
@@ -130,6 +137,7 @@ private:
     const TriangleShaders* m_shaders = nullptr;
     bool m_enableScreenshot = false;
     bool m_deferCapture = false;
+    bool m_enableGBuffer = false;
     VkExtent2D m_requestedExtent{};
     SwapchainResources m_swapchain;
     VkDescriptorSet m_bindingSet = VK_NULL_HANDLE;

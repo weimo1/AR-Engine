@@ -1,6 +1,7 @@
 #include "render/StaticSceneRenderer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <unordered_map>
 
 #include <glm/ext/matrix_clip_space.hpp>
@@ -14,7 +15,7 @@
 namespace ar::render {
 
 std::expected<void, core::Error> publishStaticScene(
-    rhi::RhiSession& rhi, const StaticRenderInput& input, bool verifyRollback) {
+    rhi::RhiSession& rhi, const StaticRenderInput& input, bool verifyRollback, bool enableGBuffer) {
     const auto& camera = input.camera;
     const auto& [px, py, pz] = camera.position;
     const auto& [x, y, z, w] = camera.orientation;
@@ -23,9 +24,12 @@ std::expected<void, core::Error> publishStaticScene(
                       glm::translate(glm::mat4(1.F), {-px, -py, -pz});
     auto projection = glm::perspectiveRH_ZO(
         camera.verticalFovRadians, 1.F, camera.farPlane, camera.nearPlane);
-    projection[1][1] *= -1.F;
+    if (!enableGBuffer) {
+        projection[1][1] *= -1.F;
+    }
     const auto clipFromWorld = projection * view;
     std::vector<std::vector<rhi::StaticVertex>> vertices;
+    std::vector<std::vector<std::uint32_t>> faceIndices;
     std::vector<rhi::StaticMeshUpload> meshes;
     std::vector<rhi::StaticInstanceDraw> draws;
     std::unordered_map<const assets::StaticMesh*, std::uint32_t> indices;
@@ -40,15 +44,68 @@ std::expected<void, core::Error> publishStaticScene(
         auto [entry, inserted] = indices.try_emplace(asset.get(), static_cast<std::uint32_t>(meshes.size()));
         if (inserted) {
             auto& buffer = vertices.emplace_back();
-            buffer.reserve(asset->vertices.size());
-            for (const auto& vertex : asset->vertices) {
-                buffer.push_back({vertex.position, vertex.uv});
+            auto& fallback = faceIndices.emplace_back();
+            std::span<const std::uint32_t> meshIndices = asset->indices;
+            if (enableGBuffer && asset->normals.empty()) {
+                buffer.reserve(asset->indices.size());
+                fallback.reserve(asset->indices.size());
+                for (std::size_t triangle = 0; triangle < asset->indices.size(); triangle += 3) {
+                    const auto& a = asset->vertices[asset->indices[triangle]];
+                    const auto& b = asset->vertices[asset->indices[triangle + 1]];
+                    const auto& c = asset->vertices[asset->indices[triangle + 2]];
+                    const glm::vec3 edge1 = glm::make_vec3(b.position.data()) - glm::make_vec3(a.position.data());
+                    const glm::vec3 edge2 = glm::make_vec3(c.position.data()) - glm::make_vec3(a.position.data());
+                    const auto cross = glm::cross(edge1, edge2);
+                    const auto length = glm::length(cross);
+                    if (!(length > 0.F) || !std::isfinite(length)) {
+                        continue;
+                    }
+                    const auto normal = cross / length;
+                    for (const auto* vertex : {&a, &b, &c}) {
+                        fallback.push_back(static_cast<std::uint32_t>(buffer.size()));
+                        buffer.push_back({vertex->position, vertex->uv, {normal.x, normal.y, normal.z}});
+                    }
+                }
+                meshIndices = fallback;
+            } else {
+                buffer.reserve(asset->vertices.size());
+                for (std::size_t vertexIndex = 0; vertexIndex < asset->vertices.size(); ++vertexIndex) {
+                    const auto& vertex = asset->vertices[vertexIndex];
+                    const auto normal = enableGBuffer ? asset->normals[vertexIndex] : std::array<float, 3>{};
+                    buffer.push_back({vertex.position, vertex.uv, normal});
+                }
             }
-            meshes.push_back({asset, buffer, asset->indices, asset->rgba, asset->width, asset->height});
+            auto& mesh = meshes.emplace_back(rhi::StaticMeshUpload{
+                asset, buffer, meshIndices, asset->rgba, asset->width, asset->height});
+            if (enableGBuffer) {
+                static constexpr std::array<std::uint8_t, 4> white{255, 255, 255, 255};
+                const auto& data = asset->material.metallicRoughness;
+                mesh.materialRgba = data ? std::span<const std::uint8_t>{data->rgba} : white;
+                mesh.materialWidth = data ? data->width : 1;
+                mesh.materialHeight = data ? data->height : 1;
+            }
         }
-        const auto clip = clipFromWorld * glm::make_mat4(draw.modelMatrix.data());
+        const auto model = glm::make_mat4(draw.modelMatrix.data());
+        const auto clip = clipFromWorld * model;
         auto& instance = draws.emplace_back(rhi::StaticInstanceDraw{entry->second, {}});
         std::copy_n(glm::value_ptr(clip), instance.clipFromModel.size(), instance.clipFromModel.begin());
+        if (enableGBuffer) {
+            const glm::mat3 linear(view * model);
+            const auto determinant = glm::determinant(linear);
+            if (!std::isfinite(determinant) || determinant == 0.F) {
+                return std::unexpected(core::Error{
+                    core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation,
+                    "GBuffer requires an invertible instance transform", {}});
+            }
+            const auto normal = glm::transpose(glm::inverse(linear));
+            for (std::size_t column = 0; column < 3; ++column) {
+                std::copy_n(glm::value_ptr(normal) + column * 3, 3,
+                            instance.normalFromModel.begin() + column * 4);
+            }
+            instance.normalFromModel[3] = asset->material.metallicFactor;
+            instance.normalFromModel[7] = asset->material.roughnessFactor;
+            instance.baseColorFactor = asset->material.baseColorFactor;
+        }
     }
     return rhi.replaceStaticScene(meshes, draws, verifyRollback);
 }

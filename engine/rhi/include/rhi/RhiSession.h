@@ -48,10 +48,21 @@ struct TriangleShaders {
     std::vector<std::uint32_t> fragment;
 };
 
+struct GBufferProbe {
+    std::array<std::uint32_t, 2> pixel{};
+    std::array<float, 4> baseColor{};
+    std::array<float, 3> normal{};
+    std::array<float, 2> material{};
+    float depth = 0;
+    std::array<float, 3> viewPosition{};
+};
+
 struct FrameScreenshot {
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     std::vector<std::uint8_t> rgba;
+    // Diagnostic GBuffer samples, ordered overlap, far-only, and background for the sample.
+    std::vector<GBufferProbe> gbuffer{};
 };
 
 enum class PresentStatus { Presented, Retry };
@@ -92,6 +103,7 @@ struct QueryConfig {
     bool enableSetBindingSample = false;
     bool verifyBindingRetirement = false;
     bool enableStaticScene = false;
+    bool enableGBuffer = false;
 };
 
 struct DescriptorHeapLimits {

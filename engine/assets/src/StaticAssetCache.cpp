@@ -111,7 +111,7 @@ std::span<const std::byte> elements(
 
 std::expected<void, AssetError> loadGeometry(
     StaticMesh& mesh, const fastgltf::Asset& asset, const fastgltf::Primitive& primitive,
-    std::span<const std::byte> buffer, const fs::path& path) {
+    std::span<const std::byte> buffer, const fs::path& path, StaticMaterialMode mode) {
     const auto positionAttr = primitive.findAttribute("POSITION");
     const auto uvAttr = primitive.findAttribute("TEXCOORD_0");
     if (!primitive.indicesAccessor || positionAttr == primitive.attributes.end() ||
@@ -162,6 +162,34 @@ std::expected<void, AssetError> loadGeometry(
         std::memcpy(&mesh.indices[i], indexBytes.data() + i * indexWidth, indexWidth);
         if (mesh.indices[i] >= mesh.vertices.size()) {
             return failure(AssetStage::Geometry, path, "index exceeds vertex range");
+        }
+    }
+    if (mode == StaticMaterialMode::Opaque) {
+        const auto attribute = primitive.findAttribute("NORMAL");
+        if (attribute != primitive.attributes.end()) {
+            if (attribute->accessorIndex >= asset.accessors.size()) {
+                return failure(AssetStage::Geometry, path, "invalid NORMAL accessor reference");
+            }
+            const auto& normal = asset.accessors[attribute->accessorIndex];
+            if (normal.type != fastgltf::AccessorType::Vec3 || normal.componentType != Float ||
+                normal.count != positions.count) {
+                return failure(AssetStage::Geometry, path, "NORMAL must be FLOAT VEC3 per vertex");
+            }
+            const auto bytes = elements(asset, normal, buffer, positionWidth, sizeof(float));
+            if (bytes.empty()) {
+                return failure(AssetStage::Geometry, path, "NORMAL layout or buffer bounds are invalid");
+            }
+            mesh.normals.resize(normal.count);
+            for (std::size_t i = 0; i < normal.count; ++i) {
+                auto& value = mesh.normals[i];
+                std::memcpy(value.data(), bytes.data() + i * positionWidth, positionWidth);
+                const double length = std::hypot(
+                    static_cast<double>(value[0]), static_cast<double>(value[1]),
+                    static_cast<double>(value[2]));
+                if (!std::isfinite(length) || std::abs(length - 1.0) > 0.001) {
+                    return failure(AssetStage::Geometry, path, "NORMAL must have finite unit length");
+                }
+            }
         }
     }
     return {};
@@ -304,7 +332,7 @@ std::expected<StaticMesh, AssetError> loadMesh(
         return failure(AssetStage::Geometry, *bin, "buffer is shorter than its declared length");
     }
     if (auto geometry = loadGeometry(mesh, asset, primitive,
-                                     std::span(*bytes).first(source.byteLength), model);
+                                     std::span(*bytes).first(source.byteLength), model, mode);
         !geometry) {
         return std::unexpected(geometry.error());
     }

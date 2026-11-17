@@ -44,18 +44,25 @@ void writeModel(const fs::path& path, std::string buffer = "quad.bin",
                 std::string image = "colors.png", std::string node = R"({"mesh":0})",
                 std::string positionOffset = "0",
                 std::string_view material = R"({"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}})",
-                std::string_view materialRef = R"(,"material":0)") {
+                std::string_view materialRef = R"(,"material":0)", unsigned normalCount = 0) {
     std::ofstream out(path, std::ios::binary);
     out << R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[)"
-        << node << R"(],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1},)"
+        << node << R"(],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1)"
+        << (normalCount ? R"(,"NORMAL":3)" : "") << "},"
         << R"("indices":2)" << materialRef << R"(,"mode":4}]}],"buffers":[{"uri":")" << buffer
-        << R"(","byteLength":92}],"bufferViews":[{"buffer":0,"byteLength":48},)"
-        << R"({"buffer":0,"byteOffset":48,"byteLength":32},{"buffer":0,"byteOffset":80,"byteLength":12}],)"
+        << R"(","byteLength":)" << (normalCount ? 140 : 92)
+        << R"(}],"bufferViews":[{"buffer":0,"byteLength":48},)"
+        << R"({"buffer":0,"byteOffset":48,"byteLength":32},{"buffer":0,"byteOffset":80,"byteLength":12})"
+        << (normalCount ? R"(,{"buffer":0,"byteOffset":92,"byteLength":48})" : "") << "],"
         << R"("accessors":[{"bufferView":0,"byteOffset":)" << positionOffset
         << R"(,"componentType":5126,"count":4,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},)"
         << R"({"bufferView":1,"componentType":5126,"count":4,"type":"VEC2"},)"
-        << R"({"bufferView":2,"componentType":5123,"count":6,"type":"SCALAR"}],)"
-        << R"("materials":[)" << material << R"(],)"
+        << R"({"bufferView":2,"componentType":5123,"count":6,"type":"SCALAR"})";
+    if (normalCount) {
+        out << R"(,{"bufferView":3,"componentType":5126,"type":"VEC3","count":)"
+            << normalCount << '}';
+    }
+    out << R"(],"materials":[)" << material << R"(],)"
         << R"("textures":[{"source":0}],"images":[{"uri":")" << image << R"("}]})";
     REQUIRE(out.good());
 }
@@ -141,6 +148,7 @@ TEST_CASE("Opaque glTF keeps factors and texture roles", "[assets-opaque-materia
     writeModel(missingTexture, "quad.bin", "missing.png", R"({"mesh":0})", "0", "{}");
     const auto defaults = cache.load("models/default.gltf");
     REQUIRE(defaults.has_value());
+    CHECK((*defaults)->normals.empty());
     CHECK((*defaults)->material.baseColorFactor == std::array{1.F, 1.F, 1.F, 1.F});
     CHECK((*defaults)->material.metallicFactor == 1.F);
     CHECK((*defaults)->material.roughnessFactor == 1.F);
@@ -153,6 +161,21 @@ TEST_CASE("Opaque glTF keeps factors and texture roles", "[assets-opaque-materia
     const auto noMaterial = cache.load("models/no-material.gltf");
     REQUIRE(noMaterial.has_value());
     CHECK((*noMaterial)->rgba == (*defaults)->rgba);
+
+    constexpr std::array normals{0.F, 0.6F, 0.8F, 0.F, 0.6F, 0.8F,
+                                 0.F, 0.6F, 0.8F, 0.F, 0.6F, 0.8F};
+    writeBytes(models / "quad.bin", normals, true);
+    writeModel(models / "normals.gltf", "quad.bin", "colors.png", R"({"mesh":0})", "0",
+               "{}", R"(,"material":0)", 4);
+    const auto withNormals = cache.load("models/normals.gltf");
+    REQUIRE(withNormals.has_value());
+    REQUIRE((*withNormals)->normals.size() == 4);
+    CHECK((*withNormals)->normals[0] == std::array{0.F, 0.6F, 0.8F});
+    writeModel(models / "bad-normals.gltf", "quad.bin", "colors.png", R"({"mesh":0})", "0",
+               "{}", R"(,"material":0)", 3);
+    const auto badNormals = cache.load("models/bad-normals.gltf");
+    REQUIRE_FALSE(badNormals.has_value());
+    CHECK(badNormals.error().stage == ar::assets::AssetStage::Geometry);
 
     // Non-endpoint RGB/alpha and distinct G/B detect color decoding and swapped channels.
     constexpr std::array<std::uint8_t, 70> png{

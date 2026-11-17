@@ -46,14 +46,16 @@ struct StaticSceneSession::State {
         std::shared_ptr<const render::StaticRenderInput> input;
     };
 
-    explicit State(std::filesystem::path assetRoot) : assets(std::move(assetRoot)) {}
+    State(std::filesystem::path assetRoot, bool opaqueMaterials)
+        : assets(std::move(assetRoot), opaqueMaterials ? assets::StaticMaterialMode::Opaque
+                                                       : assets::StaticMaterialMode::BaseColorOnly) {}
 
     assets::StaticAssetCache assets;
     std::unique_ptr<Active> active;
 };
 
-StaticSceneSession::StaticSceneSession(std::filesystem::path assetRoot)
-    : m_state(std::make_unique<State>(std::move(assetRoot))) {}
+StaticSceneSession::StaticSceneSession(std::filesystem::path assetRoot, bool opaqueMaterials)
+    : m_state(std::make_unique<State>(std::move(assetRoot), opaqueMaterials)) {}
 StaticSceneSession::~StaticSceneSession() = default;
 
 std::expected<void, StaticSceneError> StaticSceneSession::open(

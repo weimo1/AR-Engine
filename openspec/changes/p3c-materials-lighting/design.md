@@ -46,6 +46,8 @@ T26 增加显式 `StaticMaterialMode::Opaque`，P3b 继续沿用默认 `BaseColo
 
 ### T27 附件用途与复用
 
+首版采用呈现路径持有 RHI 内部帧资源的方案。基础色、法线、材质和深度以一组资源绑定到帧槽，和交换链尺寸一起创建，帧槽索引与交换链图像索引分别使用。render 定义输出语义，RHI 决定 Vulkan 格式、视图和布局；当前固定路径沿用显式同步。读回由诊断请求触发，调用方只接收尺寸、像素位置及解码后的值，接口不暴露附件句柄。resize 时等待旧槽位最后一次使用完成，再释放旧附件。
+
 | 附件 | 生产者 | 消费者 | Usage 和同步 |
 | --- | --- | --- | --- |
 | GBuffer 颜色、法线、材质 | 几何阶段 color attachment output 写入 | 光照或调试 shader 采样；测试复制 | COLOR_ATTACHMENT、SAMPLED；诊断配置增加 TRANSFER_SRC。COLOR_ATTACHMENT_OUTPUT / COLOR_ATTACHMENT_WRITE → 实际 shader sampled read 或 COPY / TRANSFER_READ |
@@ -53,6 +55,10 @@ T26 增加显式 `StaticMaterialMode::Opaque`，P3b 继续沿用默认 `BaseColo
 | HDR 颜色 | 直接光阶段 color attachment output 写入 | 输出阶段采样；测试复制 | COLOR_ATTACHMENT、SAMPLED；诊断配置增加 TRANSFER_SRC。COLOR_ATTACHMENT_OUTPUT / COLOR_ATTACHMENT_WRITE → 实际 shader sampled read 或 COPY / TRANSFER_READ |
 
 测试复制后等待所属提交完成，再读 CPU 缓冲并执行所需的 invalidate。下一帧复用等待对应帧槽最后一次使用完成，按已知布局切回附件用途。仅在完整覆盖写且允许丢弃内容时使用 UNDEFINED。有效顶点 NORMAL 经视图模型线性部分的逆转置并归一化；没有顶点 NORMAL 时使用三角形面法线，退化三角形不参与法线参考探针。用非均匀缩放和上下不对称探针分别验证法线与位置重建。
+
+首轮诊断用三个位置切开故障范围。重叠处应读到近表面和显式材质，远表面可见处应读到较低的 Reverse-Z 深度与默认材质，背景应保持深度和基础色清屏值。三个位置都只有清屏值时，先核对绘制列表、相机和实际附件；深度有值而材质探针异常时，核对 attachment 对应关系、采样用途和读回格式。
+
+T27 的样例用 `--static-scene … --asset-root … --gbuffer` 打开几何写入路径，交换链颜色同时提供基础色预览。测试增加 `--gbuffer-probes <JSON>`，在最后一帧按需从四个附件复制固定纹素，读回包含同一帧的尺寸、像素坐标、原始深度与解码值。两个纹理用途走独立绑定，使用 UNORM 存原始字节；几何 shader 只对基础色 RGB 显式解码。视空间法线取模型视图线性部分的逆转置。在缺少顶点法线时，上传阶段按三角形展开并生成面法线。
 
 ### T28 光照与显示变换
 

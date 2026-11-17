@@ -12,6 +12,7 @@ class RhiSession;
 namespace ar::render {
 
 std::expected<void, core::Error> publishStaticScene(
-    rhi::RhiSession& rhi, const StaticRenderInput& input, bool verifyRollback);
+    rhi::RhiSession& rhi, const StaticRenderInput& input, bool verifyRollback,
+    bool enableGBuffer = false);
 
 } // namespace ar::render

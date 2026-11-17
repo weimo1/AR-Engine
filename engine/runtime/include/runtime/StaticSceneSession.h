@@ -20,7 +20,7 @@ struct StaticSceneError {
 
 class StaticSceneSession {
 public:
-    explicit StaticSceneSession(std::filesystem::path assetRoot);
+    explicit StaticSceneSession(std::filesystem::path assetRoot, bool opaqueMaterials = false);
     ~StaticSceneSession();
 
     using PrepareRender = std::function<std::expected<void, StaticSceneError>(

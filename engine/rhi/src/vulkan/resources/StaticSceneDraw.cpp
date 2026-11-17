@@ -32,14 +32,16 @@ struct StaticSceneDraw::Mesh {
         if (pool) {
             vkDestroyDescriptorPool(resources.m_device, pool, nullptr);
         }
-        if (sampled) {
-            resources.releaseSampledView(sampled);
-        }
-        if (view.generation) {
-            static_cast<void>(resources.destroyImageView(view));
-        }
-        if (image.generation) {
-            static_cast<void>(resources.destroyImage(image));
+        for (const auto& texture : textures) {
+            if (texture.sampled) {
+                resources.releaseSampledView(texture.sampled);
+            }
+            if (texture.view.generation) {
+                static_cast<void>(resources.destroyImageView(texture.view));
+            }
+            if (texture.image.generation) {
+                static_cast<void>(resources.destroyImage(texture.image));
+            }
         }
         for (const auto& buffer : {vertices, indices}) {
             if (buffer.buffer) {
@@ -51,15 +53,19 @@ struct StaticSceneDraw::Mesh {
     std::shared_ptr<const void> identity;
     DeviceResources::BufferSlot vertices;
     DeviceResources::BufferSlot indices;
-    ImageHandle image;
-    ImageViewHandle view;
-    VkImageView sampled = VK_NULL_HANDLE;
+    struct Texture {
+        ImageHandle image;
+        ImageViewHandle view;
+        VkImageView sampled = VK_NULL_HANDLE;
+    };
+    std::array<Texture, 2> textures{};
     VkDescriptorPool pool = VK_NULL_HANDLE;
     VkDescriptorSet set = VK_NULL_HANDLE;
     std::uint32_t indexCount = 0;
 };
 
-StaticSceneDraw::StaticSceneDraw(DeviceResources& resources) : m_resources(resources) {}
+StaticSceneDraw::StaticSceneDraw(DeviceResources& resources, bool enableGBuffer)
+    : m_resources(resources), m_enableGBuffer(enableGBuffer) {}
 
 StaticSceneDraw::~StaticSceneDraw() {
     m_active.clear();
@@ -74,16 +80,14 @@ StaticSceneDraw::~StaticSceneDraw() {
 }
 
 std::expected<void, core::Error> StaticSceneDraw::open() {
-    VkFormatProperties depthProperties{};
-    vkGetPhysicalDeviceFormatProperties(m_resources.m_physical, depthFormat, &depthProperties);
-    if (!(depthProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
-        return failed("required static scene depth format unavailable", VK_ERROR_FORMAT_NOT_SUPPORTED);
-    }
-    VkDescriptorSetLayoutBinding binding{
-        0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+    const std::array bindings{
+        VkDescriptorSetLayoutBinding{
+            0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{
+            1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout.bindingCount = 1;
-    layout.pBindings = &binding;
+    layout.bindingCount = m_enableGBuffer ? 2 : 1;
+    layout.pBindings = bindings.data();
     const auto device = m_resources.m_device;
     if (auto result = vkCreateDescriptorSetLayout(device, &layout, nullptr, &m_layout);
         result != VK_SUCCESS) {
@@ -102,48 +106,61 @@ std::expected<void, core::Error> StaticSceneDraw::open() {
     return {};
 }
 
-std::expected<StaticSceneDraw::Depth, core::Error> StaticSceneDraw::createDepth(VkExtent2D extent) {
+std::expected<StaticSceneDraw::Attachment, core::Error> StaticSceneDraw::createAttachment(
+    VkExtent2D extent, VkFormat format, VkImageAspectFlags aspect, VkImageUsageFlags usage) {
+    VkImageFormatProperties properties{};
+    const auto supported = vkGetPhysicalDeviceImageFormatProperties(
+        m_resources.m_physical, format, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,
+        usage, 0, &properties);
+    if (supported != VK_SUCCESS) {
+        return failed("static scene attachment format and usage unavailable", supported);
+    }
+    if (!extent.width || !extent.height || extent.width > properties.maxExtent.width ||
+        extent.height > properties.maxExtent.height) {
+        return invalid("static scene attachment extent is out of range");
+    }
     if (auto ready = m_resources.ensureAllocator(); !ready) {
         return std::unexpected(ready.error());
     }
-    Depth depth;
+    Attachment attachment;
     VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     image.imageType = VK_IMAGE_TYPE_2D;
-    image.format = depthFormat;
+    image.format = format;
     image.extent = {extent.width, extent.height, 1};
     image.mipLevels = 1;
     image.arrayLayers = 1;
     image.samples = VK_SAMPLE_COUNT_1_BIT;
     image.tiling = VK_IMAGE_TILING_OPTIMAL;
-    image.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    image.usage = usage;
     VmaAllocationCreateInfo allocation{};
     allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     if (auto result = vmaCreateImage(
-            m_resources.m_allocator, &image, &allocation, &depth.image, &depth.allocation, nullptr);
+            m_resources.m_allocator, &image, &allocation,
+            &attachment.image, &attachment.allocation, nullptr);
         result != VK_SUCCESS) {
-        return failed("allocate static scene depth attachment", result);
+        return failed("allocate static scene attachment", result);
     }
     VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    view.image = depth.image;
+    view.image = attachment.image;
     view.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    view.format = depthFormat;
-    view.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-    if (auto result = vkCreateImageView(m_resources.m_device, &view, nullptr, &depth.view);
+    view.format = format;
+    view.subresourceRange = {aspect, 0, 1, 0, 1};
+    if (auto result = vkCreateImageView(m_resources.m_device, &view, nullptr, &attachment.view);
         result != VK_SUCCESS) {
-        destroyDepth(depth);
-        return failed("create static scene depth view", result);
+        destroyAttachment(attachment);
+        return failed("create static scene attachment view", result);
     }
-    return depth;
+    return attachment;
 }
 
-void StaticSceneDraw::destroyDepth(Depth& depth) noexcept {
-    if (depth.view) {
-        vkDestroyImageView(m_resources.m_device, depth.view, nullptr);
+void StaticSceneDraw::destroyAttachment(Attachment& attachment) noexcept {
+    if (attachment.view) {
+        vkDestroyImageView(m_resources.m_device, attachment.view, nullptr);
     }
-    if (depth.image) {
-        vmaDestroyImage(m_resources.m_allocator, depth.image, depth.allocation);
+    if (attachment.image) {
+        vmaDestroyImage(m_resources.m_allocator, attachment.image, attachment.allocation);
     }
-    depth = {};
+    attachment = {};
 }
 
 std::expected<std::shared_ptr<StaticSceneDraw::Mesh>, core::Error>
@@ -178,22 +195,29 @@ StaticSceneDraw::upload(const StaticMeshUpload& input) {
         !made) {
         return std::unexpected(made.error());
     }
-    auto image = m_resources.createSampledImage({input.width, input.height}, std::as_bytes(input.rgba));
-    if (!image) {
-        return std::unexpected(image.error());
+    const std::uint32_t textureCount = m_enableGBuffer ? 2 : 1;
+    const std::array descriptions{
+        ImageDesc{input.width, input.height}, ImageDesc{input.materialWidth, input.materialHeight}};
+    const std::array pixels{input.rgba, input.materialRgba};
+    for (std::uint32_t i = 0; i < textureCount; ++i) {
+        auto& texture = mesh->textures[i];
+        auto image = m_resources.createSampledImage(descriptions[i], std::as_bytes(pixels[i]));
+        if (!image) {
+            return std::unexpected(image.error());
+        }
+        texture.image = *image;
+        auto view = m_resources.createImageView(*image);
+        if (!view) {
+            return std::unexpected(view.error());
+        }
+        texture.view = *view;
+        auto sampled = m_resources.retainSampledView(*view);
+        if (!sampled) {
+            return std::unexpected(sampled.error());
+        }
+        texture.sampled = *sampled;
     }
-    mesh->image = *image;
-    auto view = m_resources.createImageView(*image);
-    if (!view) {
-        return std::unexpected(view.error());
-    }
-    mesh->view = *view;
-    auto sampled = m_resources.retainSampledView(*view);
-    if (!sampled) {
-        return std::unexpected(sampled.error());
-    }
-    mesh->sampled = *sampled;
-    const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+    const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, textureCount};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool.maxSets = 1;
     pool.poolSizeCount = 1;
@@ -210,13 +234,19 @@ StaticSceneDraw::upload(const StaticMeshUpload& input) {
     if (auto result = vkAllocateDescriptorSets(device, &allocate, &mesh->set); result != VK_SUCCESS) {
         return failed("allocate static mesh descriptor", result);
     }
-    const VkDescriptorImageInfo texture{m_sampler, mesh->sampled, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    write.dstSet = mesh->set;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.pImageInfo = &texture;
-    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    std::array<VkDescriptorImageInfo, 2> textures{};
+    std::array<VkWriteDescriptorSet, 2> writes{};
+    for (std::uint32_t i = 0; i < textureCount; ++i) {
+        textures[i] = {m_sampler, mesh->textures[i].sampled, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        auto& write = writes[i];
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = mesh->set;
+        write.dstBinding = i;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &textures[i];
+    }
+    vkUpdateDescriptorSets(device, textureCount, writes.data(), 0, nullptr);
     return mesh;
 }
 
@@ -248,7 +278,7 @@ std::expected<std::vector<StaticSceneDraw::Draw>, core::Error> StaticSceneDraw::
                 return invalid("injected failure after first candidate mesh upload");
             }
         }
-        prepared.push_back({mesh->second, draw.clipFromModel});
+        prepared.push_back({mesh->second, draw});
     }
     if (verifyRollback) {
         return invalid("rollback fixture did not reach a new mesh upload");
@@ -263,11 +293,20 @@ void StaticSceneDraw::publish(std::vector<Draw> draws) noexcept {
 void StaticSceneDraw::record(VkCommandBuffer commands, VkPipelineLayout layout, float inverseAspect) const {
     constexpr VkDeviceSize offset = 0;
     for (const auto& draw : m_active) {
-        auto matrix = draw.matrix;
+        auto matrix = draw.instance.clipFromModel;
         for (std::size_t column = 0; column < 4; ++column) {
             matrix[column * 4] *= inverseAspect;
         }
-        vkCmdPushConstants(commands, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(matrix), matrix.data());
+        if (m_enableGBuffer) {
+            const auto stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+            vkCmdPushConstants(commands, layout, stages, 0, sizeof(matrix), matrix.data());
+            vkCmdPushConstants(commands, layout, stages, sizeof(matrix), sizeof(draw.instance.normalFromModel),
+                               draw.instance.normalFromModel.data());
+            vkCmdPushConstants(commands, layout, stages, sizeof(matrix) + sizeof(draw.instance.normalFromModel),
+                               sizeof(draw.instance.baseColorFactor), draw.instance.baseColorFactor.data());
+        } else {
+            vkCmdPushConstants(commands, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(matrix), matrix.data());
+        }
         vkCmdBindVertexBuffers(commands, 0, 1, &draw.mesh->vertices.buffer, &offset);
         vkCmdBindIndexBuffer(commands, draw.mesh->indices.buffer, 0, VK_INDEX_TYPE_UINT32);
         vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1,

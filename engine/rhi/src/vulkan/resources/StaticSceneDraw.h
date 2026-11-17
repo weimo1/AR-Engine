@@ -8,25 +8,26 @@ class StaticSceneDraw {
     struct Mesh;
 
 public:
-    explicit StaticSceneDraw(DeviceResources& resources);
+    explicit StaticSceneDraw(DeviceResources& resources, bool enableGBuffer);
     ~StaticSceneDraw();
     StaticSceneDraw(const StaticSceneDraw&) = delete;
 
     static constexpr VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
-    struct Depth {
+    struct Attachment {
         VkImage image = VK_NULL_HANDLE;
         VmaAllocation_T* allocation = nullptr;
         VkImageView view = VK_NULL_HANDLE;
     };
     struct Draw {
         std::shared_ptr<Mesh> mesh;
-        std::array<float, 16> matrix;
+        StaticInstanceDraw instance;
     };
 
     std::expected<void, core::Error> open();
     VkDescriptorSetLayout layout() const noexcept { return m_layout; }
-    std::expected<Depth, core::Error> createDepth(VkExtent2D extent);
-    void destroyDepth(Depth& depth) noexcept;
+    std::expected<Attachment, core::Error> createAttachment(
+        VkExtent2D extent, VkFormat format, VkImageAspectFlags aspect, VkImageUsageFlags usage);
+    void destroyAttachment(Attachment& attachment) noexcept;
     std::expected<std::vector<Draw>, core::Error> prepare(
         std::span<const StaticMeshUpload> meshes, std::span<const StaticInstanceDraw> draws,
         bool verifyRollback);
@@ -42,6 +43,7 @@ private:
     VkSampler m_sampler = VK_NULL_HANDLE;
     std::vector<Draw> m_active;
     bool m_abandoned = false;
+    bool m_enableGBuffer = false;
 };
 
 } // namespace ar::rhi::detail

@@ -94,6 +94,7 @@ add_subdirectory(engine/render)
 add_subdirectory(engine/scene)
 add_subdirectory(engine/runtime)
 add_subdirectory(examples/triangle)
+set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT ar_triangle)
 
 if(AR_BUILD_TESTS)
     enable_testing()

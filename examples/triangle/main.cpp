@@ -28,6 +28,8 @@ struct Options {
     bool gpuEmpty = false;
     bool setBinding = false;
     bool verifyBindingRetirement = false;
+    bool gbuffer = false;
+    std::optional<std::filesystem::path> gbufferProbes;
     std::optional<std::filesystem::path> scene;
     std::optional<std::filesystem::path> assetRoot;
     std::optional<std::filesystem::path> sceneCandidate;
@@ -51,6 +53,11 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
             options.setBinding = true;
         } else if (arg == L"--clear-only") {
             options.clearOnly = true;
+        } else if (arg == L"--gbuffer") {
+            options.gbuffer = true;
+        } else if (arg == L"--gbuffer-probes" && !options.gbufferProbes && index + 1 < argc) {
+            options.gbuffer = true;
+            options.gbufferProbes = argv[++index];
         } else if (arg == L"--static-scene" && !options.scene && index + 1 < argc) {
             options.scene = argv[++index];
         } else if (arg == L"--asset-root" && !options.assetRoot && index + 1 < argc) {
@@ -82,7 +89,7 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
             return std::nullopt;
         }
     }
-    if ((!options.visible || options.screenshot) && !options.frames) {
+    if ((!options.visible || options.screenshot || options.gbufferProbes) && !options.frames) {
         return std::nullopt;
     }
     if (options.verifyBindingRetirement && (options.frames != 3 || options.screenshot)) {
@@ -94,13 +101,57 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
     if (options.gpuDriven && (options.clearOnly || options.setBinding)) {
         return std::nullopt;
     }
-    if (options.scene.has_value() != options.assetRoot.has_value() ||
+    if ((options.gbuffer && !options.scene) ||
+        (options.gbufferProbes && options.gbufferProbes->empty()) ||
+        options.scene.has_value() != options.assetRoot.has_value() ||
         (options.scene && (options.scene->empty() || options.assetRoot->empty() ||
                            options.gpuDriven || options.clearOnly || options.setBinding)) ||
         (options.sceneCandidate && (!options.scene || !options.screenshot || options.frames != 4))) {
         return std::nullopt;
     }
     return options;
+}
+
+bool writeGBufferProbes(const std::filesystem::path& path, const ar::rhi::FrameScreenshot& frame) {
+    constexpr std::array names{"overlap", "far-only", "background"};
+    if (frame.gbuffer.size() != names.size()) {
+        return false;
+    }
+    std::ofstream out(path, std::ios::binary);
+    out.precision(9);
+    const auto array = [&](const auto& values) {
+        out << '[';
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            if (i) {
+                out << ',';
+            }
+            out << values[i];
+        }
+        out << ']';
+    };
+    out << "{\"extent\":";
+    array(std::array{frame.width, frame.height});
+    out << ",\"probes\":[";
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        if (i) {
+            out << ',';
+        }
+        const auto& probe = frame.gbuffer[i];
+        out << "{\"name\":\"" << names[i] << "\",\"pixel\":";
+        array(probe.pixel);
+        out << ",\"depth\":" << probe.depth << ",\"base_color\":";
+        array(probe.baseColor);
+        out << ",\"view_normal\":";
+        array(probe.normal);
+        out << ",\"metallic_roughness\":";
+        array(probe.material);
+        out << ",\"view_position\":";
+        array(probe.viewPosition);
+        out << '}';
+    }
+    out << "]}\n";
+    out.close();
+    return out.good();
 }
 
 bool writeScreenshot(const std::filesystem::path& path, const ar::rhi::FrameScreenshot& image) {
@@ -159,7 +210,7 @@ int wmain(int argc, wchar_t** argv) {
         std::fputs(
             "usage: ar_triangle [--frames N] [--hidden] [--clear-only] "
             "[--set-binding] [--static-scene JSON --asset-root DIRECTORY] "
-            "[--screenshot PATH] [--output DIRECTORY]\n",
+            "[--gbuffer [--gbuffer-probes PATH]] [--screenshot PATH] [--output DIRECTORY]\n",
             stderr);
         return 2;
     }
@@ -169,10 +220,12 @@ int wmain(int argc, wchar_t** argv) {
     config.query.requestedApi = ar::rhi::makeApiVersion(1, 3);
     config.query.createGraphicsDevice = true;
     config.query.enableScreenshot =
-        options->screenshot.has_value() || options->verifyBindingRetirement;
+        options->screenshot.has_value() || options->gbufferProbes.has_value() ||
+        options->verifyBindingRetirement;
     config.query.enableSetBinding = options->setBinding;
     config.query.enableSetBindingSample = options->setBinding;
     config.query.verifyBindingRetirement = options->verifyBindingRetirement;
+    config.query.enableGBuffer = options->gbuffer;
     config.staticAssetRoot = options->assetRoot;
     if (options->verifyBindingRetirement) {
         config.diagnostics.minLevel = ar::core::LogLevel::Debug;
@@ -180,12 +233,14 @@ int wmain(int argc, wchar_t** argv) {
     if (!options->clearOnly) {
         const std::filesystem::path shaderDir = AR_TRIANGLE_SHADER_DIR;
         auto vertex = readShader(
-            shaderDir / (options->scene        ? "static_scene.vert.spv"
+            shaderDir / (options->gbuffer      ? "gbuffer.vert.spv"
+                         : options->scene      ? "static_scene.vert.spv"
                          : options->gpuDriven  ? "gpu_draw.vert.spv"
                          : options->setBinding ? "set_binding.vert.spv"
                                                : "triangle.vert.spv"));
         auto fragment = readShader(
-            shaderDir / (options->scene        ? "static_scene.frag.spv"
+            shaderDir / (options->gbuffer      ? "gbuffer.frag.spv"
+                         : options->scene      ? "static_scene.frag.spv"
                          : options->gpuDriven  ? "gpu_draw.frag.spv"
                          : options->setBinding ? "set_binding.frag.spv"
                                                : "triangle.frag.spv"));
@@ -244,7 +299,7 @@ int wmain(int argc, wchar_t** argv) {
     ar::rhi::FrameScreenshot screenshot;
     while (!options->frames || presented < *options->frames) {
         const bool capture = options->sceneCandidate ||
-                             (options->screenshot && presented + 1 == *options->frames);
+            ((options->screenshot || options->gbufferProbes) && presented + 1 == *options->frames);
         const auto frame = (*session)->presentFrame(capture ? &screenshot : nullptr);
         if (!frame || *frame == ar::runtime::FrameStatus::Closed) {
             break;
@@ -300,6 +355,10 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (options->screenshot && !writeScreenshot(*options->screenshot, screenshot)) {
         std::fwprintf(stderr, L"Could not write screenshot: %ls\n", options->screenshot->c_str());
+        return 1;
+    }
+    if (options->gbufferProbes && !writeGBufferProbes(*options->gbufferProbes, screenshot)) {
+        std::fputs("could not write GBuffer probes\n", stderr);
         return 1;
     }
     return 0;

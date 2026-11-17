@@ -202,6 +202,11 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorStage::Validation,
             "a graphics device requires a Vulkan API request of at least 1.3");
     }
+    if (config.enableGBuffer && !config.enableStaticScene) {
+        return makeError(
+            core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation,
+            "GBuffer requires static scene presentation");
+    }
     if (config.enableStaticScene &&
         (!config.presentation || !config.triangleShaders || config.gpuDriven ||
          config.enableSetBindingSample)) {
@@ -1252,7 +1257,7 @@ struct RhiSession::Impl {
                 if (!owner) {
                     return std::unexpected(owner.error());
                 }
-                staticScene.emplace(**owner);
+                staticScene.emplace(**owner, config.enableGBuffer);
                 if (auto ready = staticScene->open(); !ready) {
                     return ready;
                 }
@@ -1268,7 +1273,8 @@ struct RhiSession::Impl {
                     staticScene ? staticScene->layout()
                         : config.enableSetBindingSample ? setBinding->layout() : VK_NULL_HANDLE,
                     config.enableSetBindingSample ? setBinding->set() : VK_NULL_HANDLE,
-                    staticScene ? &*staticScene : nullptr);
+                    staticScene ? &*staticScene : nullptr,
+                    config.enableGBuffer);
                 !opened) {
                 return opened;
             }
