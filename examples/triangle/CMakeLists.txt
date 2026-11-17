@@ -12,7 +12,7 @@ if(NOT image_constant OR NOT sampler_constant)
     message(FATAL_ERROR "Descriptor set capacities are missing")
 endif()
 
-foreach(shader IN ITEMS triangle.vert triangle.frag set_binding.vert set_binding.frag gpu_cull.comp gpu_draw.vert gpu_draw.frag static_scene.vert static_scene.frag gbuffer.vert gbuffer.frag)
+foreach(shader IN ITEMS triangle.vert triangle.frag set_binding.vert set_binding.frag gpu_cull.comp gpu_draw.vert gpu_draw.frag static_scene.vert static_scene.frag gbuffer.vert gbuffer.frag fullscreen.vert deferred_direct.frag display_sdr.frag)
     set(source "${PROJECT_SOURCE_DIR}/shaders/${shader}")
     set(output "${shader_dir}/${shader}.spv")
     set(shader_options)

@@ -19,8 +19,9 @@ namespace {
 constexpr std::uint64_t kFrameTimeout = 5'000'000'000;
 constexpr std::array gbufferFormats{
     VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8G8_UNORM};
-constexpr VkDeviceSize kProbeStride = 24;
-constexpr std::array<VkDeviceSize, 4> probeOffsets{0, 8, 16, 20};
+constexpr VkFormat hdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+constexpr VkDeviceSize kProbeStride = 32;
+constexpr std::array<VkDeviceSize, 5> probeOffsets{0, 8, 16, 20, 24};
 
 constexpr VkDeviceSize probeStart(VkDeviceSize screenshotBytes) {
     return (screenshotBytes + 7) & ~VkDeviceSize{7};
@@ -100,7 +101,8 @@ std::expected<void, core::Error> Presentation::open(
     VkDescriptorSetLayout bindingLayout,
     VkDescriptorSet bindingSet,
     StaticSceneDraw* staticScene,
-    bool enableGBuffer) {
+    bool enableGBuffer,
+    const DeferredLighting* lighting) {
     if (!vkGetPhysicalDeviceSurfaceCapabilitiesKHR || !vkGetPhysicalDeviceSurfaceFormatsKHR ||
         !vkCreateSwapchainKHR || !vkDestroySwapchainKHR || !vkGetSwapchainImagesKHR ||
         !vkAcquireNextImageKHR || !vkQueuePresentKHR) {
@@ -120,6 +122,7 @@ std::expected<void, core::Error> Presentation::open(
     m_bindingSet = bindingSet;
     m_staticScene = staticScene;
     m_enableGBuffer = enableGBuffer;
+    m_lighting = lighting;
     for (Frame& frame : m_frames) {
         if (auto created = createFrame(frame, graphicsFamily); !created) {
             return created;
@@ -147,6 +150,11 @@ std::expected<void, core::Error> Presentation::open(
                 vkCreatePipelineLayout,
                 "vkCreatePipelineLayout");
             !created) {
+            return created;
+        }
+    }
+    if (m_lighting) {
+        if (auto created = createLightingLayout(); !created) {
             return created;
         }
     }
@@ -324,12 +332,205 @@ std::expected<bool, core::Error> Presentation::createSwapchain(VkExtent2D frameb
         }
     }
     if (m_shaders) {
-        if (auto created = createTrianglePipeline(*format, *m_shaders); !created) {
+        const VkFormat geometryOutput = m_lighting ? VK_FORMAT_UNDEFINED : *format;
+        if (auto created = createGraphicsPipeline(
+                geometryOutput, m_shaders->vertex, m_shaders->fragment, m_swapchain.pipeline);
+            !created) {
             return std::unexpected(std::move(created.error()));
+        }
+    }
+    if (m_lighting) {
+        VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        if (m_enableScreenshot) {
+            usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        }
+        if (auto created = createLightingResources(usage); !created) {
+            return std::unexpected(created.error());
+        }
+        if (auto created = createGraphicsPipeline(
+                hdrFormat, m_lighting->vertex, m_lighting->directFragment, m_swapchain.directPipeline, true);
+            !created) {
+            return std::unexpected(created.error());
+        }
+        if (auto created = createGraphicsPipeline(
+                *format, m_lighting->vertex, m_lighting->displayFragment, m_swapchain.displayPipeline, true);
+            !created) {
+            return std::unexpected(created.error());
         }
     }
     m_requestedExtent = framebuffer;
     return true;
+}
+
+std::expected<void, core::Error> Presentation::createLightingLayout() {
+    VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    sampler.magFilter = VK_FILTER_NEAREST;
+    sampler.minFilter = VK_FILTER_NEAREST;
+    sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (auto created = create(m_device, m_lightingSampler, sampler, vkCreateSampler, "lighting sampler");
+        !created) {
+        return created;
+    }
+    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
+    for (std::uint32_t i = 0; i < bindings.size(); ++i) {
+        bindings[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                       VK_SHADER_STAGE_FRAGMENT_BIT, &m_lightingSampler};
+    }
+    VkDescriptorSetLayoutCreateInfo set{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    set.bindingCount = static_cast<std::uint32_t>(bindings.size());
+    set.pBindings = bindings.data();
+    if (auto created = create(m_device, m_lightingSetLayout, set, vkCreateDescriptorSetLayout,
+                              "lighting descriptor layout"); !created) {
+        return created;
+    }
+    const VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(m_inverseProjection)};
+    VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layout.setLayoutCount = 1;
+    layout.pSetLayouts = &m_lightingSetLayout;
+    layout.pushConstantRangeCount = 1;
+    layout.pPushConstantRanges = &push;
+    return create(m_device, m_lightingLayout, layout, vkCreatePipelineLayout, "lighting pipeline layout");
+}
+
+std::expected<void, core::Error> Presentation::createLightingResources(VkImageUsageFlags usage) {
+    constexpr std::uint32_t setsPerSlot = 2;
+    constexpr std::uint32_t bindingsPerSet = 4;
+    const auto setCount = setsPerSlot * static_cast<std::uint32_t>(m_swapchain.attachments.size());
+    const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, setCount * bindingsPerSet};
+    VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pool.maxSets = setCount;
+    pool.poolSizeCount = 1;
+    pool.pPoolSizes = &size;
+    if (auto created = create(m_device, m_swapchain.lightingPool, pool, vkCreateDescriptorPool,
+                              "lighting descriptor pool"); !created) {
+        return created;
+    }
+
+    for (auto& slot : m_swapchain.attachments) {
+        auto attachment = m_staticScene->createAttachment(
+            m_swapchain.extent, hdrFormat, VK_IMAGE_ASPECT_COLOR_BIT, usage);
+        if (!attachment) {
+            return std::unexpected(attachment.error());
+        }
+        slot.hdr = *attachment;
+        const std::array layouts{m_lightingSetLayout, m_lightingSetLayout};
+        std::array<VkDescriptorSet, setsPerSlot> sets{};
+        VkDescriptorSetAllocateInfo allocate{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        allocate.descriptorPool = m_swapchain.lightingPool;
+        allocate.descriptorSetCount = setsPerSlot;
+        allocate.pSetLayouts = layouts.data();
+        const VkResult result = vkAllocateDescriptorSets(m_device, &allocate, sets.data());
+        if (result != VK_SUCCESS) {
+            return std::unexpected(failed("allocating lighting descriptor sets", result));
+        }
+        slot.directSet = sets[0];
+        slot.displaySet = sets[1];
+        const std::array views{slot.gbuffer[0].view, slot.gbuffer[1].view, slot.gbuffer[2].view,
+                               slot.depth.view, slot.hdr.view};
+        std::array<VkDescriptorImageInfo, views.size()> images{};
+        std::array<VkWriteDescriptorSet, views.size()> writes{};
+        for (std::uint32_t i = 0; i < views.size(); ++i) {
+            images[i] = {VK_NULL_HANDLE, views[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            auto& write = writes[i];
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = i < bindingsPerSet ? slot.directSet : slot.displaySet;
+            write.dstBinding = i < bindingsPerSet ? i : 0;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.pImageInfo = &images[i];
+        }
+        vkUpdateDescriptorSets(m_device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    }
+    return {};
+}
+
+void Presentation::recordLighting(VkCommandBuffer commands, VkImageView output) const {
+    const auto& slot = m_swapchain.attachments[m_frameIndex];
+    const auto transition = [](VkImage image, VkImageAspectFlags aspect,
+                               VkPipelineStageFlags2 fromStage, VkAccessFlags2 fromAccess,
+                               VkImageLayout fromLayout, VkPipelineStageFlags2 toStage,
+                               VkAccessFlags2 toAccess, VkImageLayout toLayout) {
+        VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        barrier.srcStageMask = fromStage;
+        barrier.srcAccessMask = fromAccess;
+        barrier.dstStageMask = toStage;
+        barrier.dstAccessMask = toAccess;
+        barrier.oldLayout = fromLayout;
+        barrier.newLayout = toLayout;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = image;
+        barrier.subresourceRange = {aspect, 0, 1, 0, 1};
+        return barrier;
+    };
+    constexpr auto colorStage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    constexpr auto colorWrite = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    constexpr auto colorLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    constexpr auto sampleStage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    constexpr auto sampleRead = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    constexpr auto sampleLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    const auto colorToSample = [&](VkImage image) {
+        return transition(image, VK_IMAGE_ASPECT_COLOR_BIT, colorStage, colorWrite, colorLayout,
+                          sampleStage, sampleRead, sampleLayout);
+    };
+
+    const std::array barriers{
+        colorToSample(slot.gbuffer[0].image),
+        colorToSample(slot.gbuffer[1].image),
+        colorToSample(slot.gbuffer[2].image),
+        transition(slot.depth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+                   VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                   VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                   sampleStage, sampleRead, sampleLayout),
+        transition(slot.hdr.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
+                   VK_IMAGE_LAYOUT_UNDEFINED, colorStage, colorWrite, colorLayout),
+    };
+    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(barriers.size());
+    dependency.pImageMemoryBarriers = barriers.data();
+    vkCmdPipelineBarrier2(commands, &dependency);
+
+    const auto draw = [&](VkImageView target, VkPipeline pipeline, VkDescriptorSet set,
+                          std::uint32_t size, const void* push) {
+        VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        color.imageView = target;
+        color.imageLayout = colorLayout;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo render{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        render.renderArea.extent = m_swapchain.extent;
+        render.layerCount = 1;
+        render.colorAttachmentCount = 1;
+        render.pColorAttachments = &color;
+        vkCmdBeginRendering(commands, &render);
+        vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, m_lightingLayout,
+                                0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(commands, m_lightingLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, size, push);
+        vkCmdDraw(commands, 3, 1, 0, 0);
+        vkCmdEndRendering(commands);
+    };
+
+    auto inverse = m_inverseProjection;
+    inverse[0] *= static_cast<float>(m_swapchain.extent.width) /
+                  static_cast<float>(m_swapchain.extent.height);
+    draw(slot.hdr.view, m_swapchain.directPipeline, slot.directSet, sizeof(inverse), inverse.data());
+
+    const auto hdrBarrier = colorToSample(slot.hdr.image);
+    dependency.imageMemoryBarrierCount = 1;
+    dependency.pImageMemoryBarriers = &hdrBarrier;
+    vkCmdPipelineBarrier2(commands, &dependency);
+
+    const bool srgb = m_swapchain.format == VK_FORMAT_B8G8R8A8_SRGB ||
+                      m_swapchain.format == VK_FORMAT_R8G8B8A8_SRGB;
+    const struct DisplayPush {
+        float exposureEV;
+        std::uint32_t encodeSrgb;
+    } display{m_lighting->exposureEV, srgb ? 0u : 1u};
+    static_assert(sizeof(DisplayPush) == 8);
+    draw(output, m_swapchain.displayPipeline, slot.displaySet, sizeof(display), &display);
 }
 
 std::expected<void, core::Error>
@@ -445,16 +646,25 @@ void Presentation::decodeGBufferProbes(const void* mapped, FrameScreenshot& scre
             output.material[channel] = static_cast<float>(sample[probeOffsets[2] + channel]) / 255.F;
         }
         std::memcpy(&output.depth, sample + probeOffsets[3], sizeof(output.depth));
+        if (m_lighting) {
+            auto& rgb = output.hdrColor.emplace();
+            for (std::size_t channel = 0; channel < rgb.size(); ++channel) {
+                std::uint16_t bits = 0;
+                std::memcpy(&bits, sample + probeOffsets[4] + channel * sizeof(bits), sizeof(bits));
+                rgb[channel] = halfToFloat(bits);
+            }
+        }
     }
 }
 
 void Presentation::copyGBufferProbes(VkCommandBuffer commands, VkBuffer destination) const {
     const auto& slot = m_swapchain.attachments[m_frameIndex];
     const std::array images{slot.gbuffer[0].image, slot.gbuffer[1].image,
-                            slot.gbuffer[2].image, slot.depth.image};
-    std::array<VkImageMemoryBarrier2, 4> transitions{};
-    for (std::size_t i = 0; i < images.size(); ++i) {
-        const bool depth = i == images.size() - 1;
+                            slot.gbuffer[2].image, slot.depth.image, slot.hdr.image};
+    const std::uint32_t count = m_lighting ? 5 : 4;
+    std::array<VkImageMemoryBarrier2, 5> transitions{};
+    for (std::size_t i = 0; i < count; ++i) {
+        const bool depth = i == 3;
         auto& barrier = transitions[i];
         barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
         barrier.srcStageMask = depth ? VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
@@ -466,6 +676,11 @@ void Presentation::copyGBufferProbes(VkCommandBuffer commands, VkBuffer destinat
         barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
         barrier.oldLayout = depth ? VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL
                                   : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        if (m_lighting) {
+            barrier.srcStageMask |= VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            barrier.srcAccessMask |= VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
         barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -474,11 +689,11 @@ void Presentation::copyGBufferProbes(VkCommandBuffer commands, VkBuffer destinat
         barrier.subresourceRange = {static_cast<VkImageAspectFlags>(aspect), 0, 1, 0, 1};
     }
     VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(transitions.size());
+    dependency.imageMemoryBarrierCount = count;
     dependency.pImageMemoryBarriers = transitions.data();
     vkCmdPipelineBarrier2(commands, &dependency);
     const auto positions = probePositions(m_swapchain.extent);
-    for (std::size_t i = 0; i < images.size(); ++i) {
+    for (std::size_t i = 0; i < count; ++i) {
         std::array<VkBufferImageCopy, 3> copies{};
         for (std::size_t j = 0; j < copies.size(); ++j) {
             auto& copy = copies[j];
@@ -493,7 +708,11 @@ void Presentation::copyGBufferProbes(VkCommandBuffer commands, VkBuffer destinat
 }
 
 std::expected<void, core::Error>
-Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& shaders) {
+Presentation::createGraphicsPipeline(
+    VkFormat format, const std::vector<std::uint32_t>& vertexCode,
+    const std::vector<std::uint32_t>& fragmentCode, VkPipeline& output, bool fullscreen) {
+    const bool geometry = m_staticScene && !fullscreen;
+    const bool gbuffer = m_enableGBuffer && !fullscreen;
     struct ShaderModules {
         VkDevice device;
         std::array<VkShaderModule, 2> handles{};
@@ -506,7 +725,7 @@ Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& sha
         }
     } modules{m_device};
 
-    const std::array bytecode{&shaders.vertex, &shaders.fragment};
+    const std::array bytecode{&vertexCode, &fragmentCode};
     const std::array stages{VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
     std::array<VkPipelineShaderStageCreateInfo, 2> stageInfos{};
     for (std::size_t i = 0; i < stageInfos.size(); ++i) {
@@ -534,16 +753,16 @@ Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& sha
         VkVertexInputAttributeDescription{0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(StaticVertex, position)},
         VkVertexInputAttributeDescription{1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(StaticVertex, uv)},
         VkVertexInputAttributeDescription{2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(StaticVertex, normal)}};
-    if (m_cullFrames.front()) {
+    if (m_cullFrames.front() && !fullscreen) {
         vertex.vertexBindingDescriptionCount = 1;
         vertex.pVertexBindingDescriptions = &positions;
         vertex.vertexAttributeDescriptionCount = 1;
         vertex.pVertexAttributeDescriptions = &position;
     }
-    if (m_staticScene) {
+    if (geometry) {
         vertex.vertexBindingDescriptionCount = 1;
         vertex.pVertexBindingDescriptions = &meshBinding;
-        vertex.vertexAttributeDescriptionCount = m_enableGBuffer ? 3 : 2;
+        vertex.vertexAttributeDescriptionCount = gbuffer ? 3 : 2;
         vertex.pVertexAttributeDescriptions = meshAttributes.data();
     }
     VkPipelineInputAssemblyStateCreateInfo assembly{};
@@ -552,9 +771,9 @@ Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& sha
     const float height = static_cast<float>(m_swapchain.extent.height);
     const VkViewport viewport{
         0.0F,
-        m_enableGBuffer ? height : 0.F,
+        gbuffer ? height : 0.F,
         static_cast<float>(m_swapchain.extent.width),
-        m_enableGBuffer ? -height : height,
+        gbuffer ? -height : height,
         0.0F,
         1.0F};
     const VkRect2D scissor{{0, 0}, m_swapchain.extent};
@@ -578,7 +797,7 @@ Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& sha
     VkPipelineColorBlendStateCreateInfo blend{};
     blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     const std::array colors{color, color, color, color};
-    blend.attachmentCount = m_enableGBuffer ? static_cast<std::uint32_t>(colors.size()) : 1;
+    blend.attachmentCount = gbuffer ? static_cast<std::uint32_t>(colors.size()) : 1;
     blend.pAttachments = colors.data();
     VkPipelineRenderingCreateInfo rendering{};
     rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
@@ -586,7 +805,7 @@ Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& sha
     rendering.colorAttachmentCount = blend.attachmentCount;
     rendering.pColorAttachmentFormats = formats.data();
     VkPipelineDepthStencilStateCreateInfo depth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-    if (m_staticScene) {
+    if (geometry) {
         rendering.depthAttachmentFormat = StaticSceneDraw::depthFormat;
         depth.depthTestEnable = VK_TRUE;
         depth.depthWriteEnable = VK_TRUE;
@@ -603,12 +822,12 @@ Presentation::createTrianglePipeline(VkFormat format, const TriangleShaders& sha
     pipeline.pRasterizationState = &raster;
     pipeline.pMultisampleState = &multisample;
     pipeline.pColorBlendState = &blend;
-    if (m_staticScene) {
+    if (geometry) {
         pipeline.pDepthStencilState = &depth;
     }
-    pipeline.layout = m_pipelineLayout;
+    pipeline.layout = fullscreen ? m_lightingLayout : m_pipelineLayout;
     const VkResult result = vkCreateGraphicsPipelines(
-        m_device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &m_swapchain.pipeline);
+        m_device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &output);
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkCreateGraphicsPipelines", result));
     }
@@ -696,6 +915,9 @@ Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capt
     rendering.colorAttachmentCount = 1;
     std::array<VkRenderingAttachmentInfo, 4> colors{};
     colors[0] = color;
+    if (m_lighting) {
+        colors[0].imageView = VK_NULL_HANDLE;
+    }
     rendering.pColorAttachments = colors.data();
     if (m_enableGBuffer) {
         std::array<VkImageMemoryBarrier2, 3> transitions{};
@@ -784,6 +1006,9 @@ Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capt
         }
     }
     vkCmdEndRendering(commands);
+    if (m_lighting) {
+        recordLighting(commands, image.view);
+    }
 
     barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
     barrier.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
@@ -1062,11 +1287,13 @@ std::optional<core::Error> Presentation::drainFrames() {
 }
 
 std::expected<void, core::Error>
-Presentation::publishStaticScene(std::vector<StaticSceneDraw::Draw> draws) {
+Presentation::publishStaticScene(std::vector<StaticSceneDraw::Draw> draws,
+                                 const std::array<float, 16>& inverseProjection) {
     if (auto error = drainFrames()) {
         return std::unexpected(std::move(*error));
     }
     m_staticScene->publish(std::move(draws));
+    m_inverseProjection = inverseProjection;
     return {};
 }
 
@@ -1095,15 +1322,33 @@ std::optional<core::Error> Presentation::close() {
     if (m_pipelineLayout) {
         vkDestroyPipelineLayout(m_device, std::exchange(m_pipelineLayout, VK_NULL_HANDLE), nullptr);
     }
+    if (m_lightingLayout) {
+        vkDestroyPipelineLayout(m_device, std::exchange(m_lightingLayout, VK_NULL_HANDLE), nullptr);
+    }
+    if (m_lightingSetLayout) {
+        vkDestroyDescriptorSetLayout(m_device, std::exchange(m_lightingSetLayout, VK_NULL_HANDLE), nullptr);
+    }
+    if (m_lightingSampler) {
+        vkDestroySampler(m_device, std::exchange(m_lightingSampler, VK_NULL_HANDLE), nullptr);
+    }
     return error;
 }
 
 void Presentation::destroySwapchain() noexcept {
+    if (m_swapchain.lightingPool) {
+        vkDestroyDescriptorPool(m_device, m_swapchain.lightingPool, nullptr);
+    }
+    for (VkPipeline pipeline : {m_swapchain.directPipeline, m_swapchain.displayPipeline}) {
+        if (pipeline) {
+            vkDestroyPipeline(m_device, pipeline, nullptr);
+        }
+    }
     if (m_staticScene) {
         for (auto& slot : m_swapchain.attachments) {
             for (auto& attachment : slot.gbuffer) {
                 m_staticScene->destroyAttachment(attachment);
             }
+            m_staticScene->destroyAttachment(slot.hdr);
             m_staticScene->destroyAttachment(slot.depth);
         }
     }

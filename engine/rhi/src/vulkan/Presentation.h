@@ -17,6 +17,7 @@ class DiagnosticSession;
 
 namespace ar::rhi {
 struct TriangleShaders;
+struct DeferredLighting;
 struct FrameScreenshot;
 enum class PresentStatus;
 } // namespace ar::rhi
@@ -43,8 +44,10 @@ public:
         VkDescriptorSetLayout bindingLayout,
         VkDescriptorSet bindingSet,
         StaticSceneDraw* staticScene = nullptr,
-        bool enableGBuffer = false);
-    std::expected<void, core::Error> publishStaticScene(std::vector<StaticSceneDraw::Draw> draws);
+        bool enableGBuffer = false,
+        const DeferredLighting* lighting = nullptr);
+    std::expected<void, core::Error> publishStaticScene(std::vector<StaticSceneDraw::Draw> draws,
+                       const std::array<float, 16>& inverseProjection);
     std::expected<PresentStatus, core::Error>
     presentFrame(VkExtent2D framebuffer, FrameScreenshot* screenshot);
     std::optional<core::Error> close();
@@ -81,10 +84,16 @@ private:
     struct SwapchainResources {
         VkSwapchainKHR handle = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
+        VkPipeline directPipeline = VK_NULL_HANDLE;
+        VkPipeline displayPipeline = VK_NULL_HANDLE;
+        VkDescriptorPool lightingPool = VK_NULL_HANDLE;
         std::array<Readback, 2> readbacks{};
         struct SlotAttachments {
             StaticSceneDraw::Attachment depth;
             std::array<StaticSceneDraw::Attachment, 3> gbuffer;
+            StaticSceneDraw::Attachment hdr;
+            VkDescriptorSet directSet = VK_NULL_HANDLE;
+            VkDescriptorSet displaySet = VK_NULL_HANDLE;
         };
         std::array<SlotAttachments, 2> attachments{};
         VkFormat format = VK_FORMAT_UNDEFINED;
@@ -115,7 +124,12 @@ private:
     std::expected<bool, core::Error> createSwapchain(VkExtent2D framebuffer);
     void destroySwapchain() noexcept;
     std::expected<void, core::Error>
-    createTrianglePipeline(VkFormat format, const TriangleShaders& shaders);
+    createGraphicsPipeline(VkFormat format, const std::vector<std::uint32_t>& vertexCode,
+                           const std::vector<std::uint32_t>& fragmentCode, VkPipeline& output,
+                           bool fullscreen = false);
+    std::expected<void, core::Error> createLightingLayout();
+    std::expected<void, core::Error> createLightingResources(VkImageUsageFlags usage);
+    void recordLighting(VkCommandBuffer commands, VkImageView output) const;
     std::expected<void, core::Error> createReadback(VkPhysicalDevice physical, Readback& readback);
     std::expected<void, core::Error> readScreenshot(Frame& frame, FrameScreenshot& screenshot);
     void copyGBufferProbes(VkCommandBuffer commands, VkBuffer destination) const;
@@ -138,6 +152,11 @@ private:
     bool m_enableScreenshot = false;
     bool m_deferCapture = false;
     bool m_enableGBuffer = false;
+    const DeferredLighting* m_lighting = nullptr;
+    VkSampler m_lightingSampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_lightingSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_lightingLayout = VK_NULL_HANDLE;
+    std::array<float, 16> m_inverseProjection{};
     VkExtent2D m_requestedExtent{};
     SwapchainResources m_swapchain;
     VkDescriptorSet m_bindingSet = VK_NULL_HANDLE;

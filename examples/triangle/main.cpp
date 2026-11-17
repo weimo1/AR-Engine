@@ -1,5 +1,6 @@
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cwchar>
@@ -29,6 +30,8 @@ struct Options {
     bool setBinding = false;
     bool verifyBindingRetirement = false;
     bool gbuffer = false;
+    bool hdrLighting = false;
+    std::optional<float> exposureEV;
     std::optional<std::filesystem::path> gbufferProbes;
     std::optional<std::filesystem::path> scene;
     std::optional<std::filesystem::path> assetRoot;
@@ -53,6 +56,19 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
             options.setBinding = true;
         } else if (arg == L"--clear-only") {
             options.clearOnly = true;
+        } else if (arg == L"--hdr-lighting") {
+            options.hdrLighting = true;
+            options.gbuffer = true;
+        } else if (arg == L"--exposure-ev" && !options.exposureEV && index + 1 < argc) {
+            const wchar_t* text = argv[++index];
+            wchar_t* end = nullptr;
+            errno = 0;
+            const float exposure = std::wcstof(text, &end);
+            if (end == text || *end != L'\0' || errno == ERANGE ||
+                !std::isfinite(exposure) || std::abs(exposure) > 16.F) {
+                return std::nullopt;
+            }
+            options.exposureEV = exposure;
         } else if (arg == L"--gbuffer") {
             options.gbuffer = true;
         } else if (arg == L"--gbuffer-probes" && !options.gbufferProbes && index + 1 < argc) {
@@ -101,7 +117,7 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
     if (options.gpuDriven && (options.clearOnly || options.setBinding)) {
         return std::nullopt;
     }
-    if ((options.gbuffer && !options.scene) ||
+    if ((options.exposureEV && !options.hdrLighting) || (options.gbuffer && !options.scene) ||
         (options.gbufferProbes && options.gbufferProbes->empty()) ||
         options.scene.has_value() != options.assetRoot.has_value() ||
         (options.scene && (options.scene->empty() || options.assetRoot->empty() ||
@@ -147,6 +163,16 @@ bool writeGBufferProbes(const std::filesystem::path& path, const ar::rhi::FrameS
         array(probe.material);
         out << ",\"view_position\":";
         array(probe.viewPosition);
+        if (probe.hdrColor) {
+            out << ",\"hdr_color\":";
+            array(*probe.hdrColor);
+            out << ",\"sdr_rgb\":";
+            const auto offset =
+                (static_cast<std::size_t>(probe.pixel[1]) * frame.width + probe.pixel[0]) * 4;
+            array(std::array{static_cast<unsigned>(frame.rgba[offset]),
+                             static_cast<unsigned>(frame.rgba[offset + 1]),
+                             static_cast<unsigned>(frame.rgba[offset + 2])});
+        }
         out << '}';
     }
     out << "]}\n";
@@ -210,7 +236,8 @@ int wmain(int argc, wchar_t** argv) {
         std::fputs(
             "usage: ar_triangle [--frames N] [--hidden] [--clear-only] "
             "[--set-binding] [--static-scene JSON --asset-root DIRECTORY] "
-            "[--gbuffer [--gbuffer-probes PATH]] [--screenshot PATH] [--output DIRECTORY]\n",
+            "[--gbuffer [--gbuffer-probes PATH]] [--hdr-lighting [--exposure-ev EV]] "
+            "[--screenshot PATH] [--output DIRECTORY]\n",
             stderr);
         return 2;
     }
@@ -244,6 +271,17 @@ int wmain(int argc, wchar_t** argv) {
                          : options->gpuDriven  ? "gpu_draw.frag.spv"
                          : options->setBinding ? "set_binding.frag.spv"
                                                : "triangle.frag.spv"));
+        if (options->hdrLighting) {
+            auto fullscreen = readShader(shaderDir / "fullscreen.vert.spv");
+            auto direct = readShader(shaderDir / "deferred_direct.frag.spv");
+            auto display = readShader(shaderDir / "display_sdr.frag.spv");
+            if (!fullscreen || !direct || !display) {
+                return 1;
+            }
+            config.query.deferredLighting.emplace(ar::rhi::DeferredLighting{
+                std::move(*fullscreen), std::move(*direct), std::move(*display),
+                options->exposureEV.value_or(0.F)});
+        }
         if (options->gpuDriven) {
             auto compute = readShader(shaderDir / "gpu_cull.comp.spv");
             if (!compute) {

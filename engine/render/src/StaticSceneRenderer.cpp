@@ -107,7 +107,10 @@ std::expected<void, core::Error> publishStaticScene(
             instance.baseColorFactor = asset->material.baseColorFactor;
         }
     }
-    return rhi.replaceStaticScene(meshes, draws, verifyRollback);
+    const auto inverse = glm::inverse(projection);
+    std::array<float, 16> inverseProjection;
+    std::copy_n(glm::value_ptr(inverse), inverseProjection.size(), inverseProjection.begin());
+    return rhi.replaceStaticScene(meshes, draws, verifyRollback, inverseProjection);
 }
 
 } // namespace ar::render

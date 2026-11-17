@@ -3,6 +3,7 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include <cmath>
 #include <windows.h>
 
 #include <volk.h>
@@ -201,6 +202,18 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorCategory::InvalidArguments,
             core::ErrorStage::Validation,
             "a graphics device requires a Vulkan API request of at least 1.3");
+    }
+    if (config.deferredLighting) {
+        const auto& lighting = *config.deferredLighting;
+        const auto validSpirv = [](const auto& words) {
+            return words.size() >= 5 && words.front() == 0x07230203u;
+        };
+        if (!config.enableGBuffer || !validSpirv(lighting.vertex) ||
+            !validSpirv(lighting.directFragment) || !validSpirv(lighting.displayFragment) ||
+            !std::isfinite(lighting.exposureEV) || std::abs(lighting.exposureEV) > 16.F) {
+            return makeError(core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation,
+                             "deferred lighting requires GBuffer, valid SPIR-V and EV in [-16, 16]");
+        }
     }
     if (config.enableGBuffer && !config.enableStaticScene) {
         return makeError(
@@ -1274,7 +1287,8 @@ struct RhiSession::Impl {
                         : config.enableSetBindingSample ? setBinding->layout() : VK_NULL_HANDLE,
                     config.enableSetBindingSample ? setBinding->set() : VK_NULL_HANDLE,
                     staticScene ? &*staticScene : nullptr,
-                    config.enableGBuffer);
+                    config.enableGBuffer,
+                    config.deferredLighting ? &*config.deferredLighting : nullptr);
                 !opened) {
                 return opened;
             }
@@ -1919,7 +1933,7 @@ std::expected<std::array<std::uint32_t, 2>, core::Error> RhiSession::verifyGpuCu
 
 std::expected<void, core::Error> RhiSession::replaceStaticScene(
     std::span<const StaticMeshUpload> meshes, std::span<const StaticInstanceDraw> draws,
-    bool verifyRollback) {
+    bool verifyRollback, std::array<float, 16> inverseProjection) {
     if (m_impl->closed || !m_impl->staticScene || !m_impl->presenter) {
         return std::unexpected(makeError(
             core::ErrorCategory::InvalidState, core::ErrorStage::Capability,
@@ -1938,7 +1952,7 @@ std::expected<void, core::Error> RhiSession::replaceStaticScene(
                   candidate.error().message);
         return std::unexpected(candidate.error());
     }
-    if (auto published = m_impl->presenter->publishStaticScene(std::move(*candidate)); !published) {
+    if (auto published = m_impl->presenter->publishStaticScene(std::move(*candidate), inverseProjection); !published) {
         return published;
     }
     emitEvent(*m_impl->diagnostics, core::LogLevel::Info, "rhi.static-scene.ready",

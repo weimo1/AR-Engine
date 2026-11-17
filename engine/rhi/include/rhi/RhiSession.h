@@ -48,6 +48,13 @@ struct TriangleShaders {
     std::vector<std::uint32_t> fragment;
 };
 
+struct DeferredLighting {
+    std::vector<std::uint32_t> vertex;
+    std::vector<std::uint32_t> directFragment;
+    std::vector<std::uint32_t> displayFragment;
+    float exposureEV = 0.F;
+};
+
 struct GBufferProbe {
     std::array<std::uint32_t, 2> pixel{};
     std::array<float, 4> baseColor{};
@@ -55,6 +62,7 @@ struct GBufferProbe {
     std::array<float, 2> material{};
     float depth = 0;
     std::array<float, 3> viewPosition{};
+    std::optional<std::array<float, 3>> hdrColor;
 };
 
 struct FrameScreenshot {
@@ -104,6 +112,7 @@ struct QueryConfig {
     bool verifyBindingRetirement = false;
     bool enableStaticScene = false;
     bool enableGBuffer = false;
+    std::optional<DeferredLighting> deferredLighting;
 };
 
 struct DescriptorHeapLimits {
@@ -165,7 +174,7 @@ public:
 
     [[nodiscard]] std::expected<void, core::Error> replaceStaticScene(
         std::span<const StaticMeshUpload> meshes, std::span<const StaticInstanceDraw> draws,
-        bool verifyRollback = false);
+        bool verifyRollback = false, std::array<float, 16> inverseProjection = {});
 
     // Explicit synchronous verification path. Object records use the 32-byte std430 layout.
     std::expected<std::array<std::uint32_t, 2>, core::Error> verifyGpuCull(

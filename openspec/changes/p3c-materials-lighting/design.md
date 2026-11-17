@@ -64,6 +64,17 @@ T27 的样例用 `--static-scene … --asset-root … --gbuffer` 打开几何写
 
 直接光参考采用 GGX 分布、分离式 Smith G1 与 Schlick Fresnel。GGX 的 α 为 `max(roughness², 0.002)`，F0 在 0.04 和线性基础色之间按金属度插值；Lambert 漫反射乘 `(1 - metallic) × (1 - Fresnel)`。点乘为非正值的受光表面贡献为零，BRDF 分母下限为 `1e-5`。曝光只施加在输出阶段，使用 `exp2(EV)` 缩放线性场景颜色。FilmACES 参考项目颜色规范链接的 Flower `common_tonemapper.glsl` 中的 `filmToneMap` 和 `post_tonemapper.glsl` 中的 Rec.709/AP1 转换，T28 固定所使用的参数并加入黄金探针。UNORM 输出显式 sRGB 编码，sRGB 附件交给硬件编码。两档曝光的 HDR 读回应一致，最终 SDR 应不同。
 
+T28 通过 `--hdr-lighting` 显式启动，复用 T27 的几何附件与 Reverse-Z 深度。固定方向光的视空间入射方向为 (0, 0, 1)，线性 RGB 辐亮度为 (6, 6, 6)。深度为 0 的像素输出黑色，其他像素用像素中心、负高度 viewport 和逆投影重建视方向。正常帧将结果写入当前帧槽的 RGBA16F；仅诊断帧复制 HDR texel 并读回最终交换链颜色。
+
+| 顺序 | 输入 → 输出 | 生命周期与同步 |
+| --- | --- | --- |
+| 几何 | 不透明实例 → GBuffer + D32 | Presentation 按帧槽分配；颜色写和早/晚深度写分别转为 fragment sampled read |
+| 直接光 | GBuffer + D32 → RGBA16F | 每槽绑定各自的附件视图；HDR 颜色写转为 fragment sampled read |
+| 显示 | RGBA16F → SDR 交换链 | 输出阶段应用 EV；附件为 sRGB 时写线性值，UNORM 时写 sRGB 编码值 |
+| 诊断 | HDR 与交换链颜色 → CPU | 受控末帧才复制，复制完成后通过现有 fence 与 invalidate 路径读回；帧槽复用与重建沿用 Presentation 的等待边界 |
+
+FilmACES 固定 Flower 默认参数：slope 0.91、toe 0.55、shoulder 0.26、black clip 0、white clip 0.04、pre/post desaturation 0.96/0.93、red modifier 1、glow scale 1；不启用额外色域扩展。显示阶段先把 Rec.709 转 AP1，再执行曲线并转回 Rec.709。黑色直接映射到零，避免零输入的对数运算。验收固定 EV=0 与 EV=-1，HDR 按同一浮点容差核对 CPU 参考与两次读回，SDR 探针按编码后字节核对。
+
 ### T29 环境发布
 
 只有所有必需面与 mip 都写完、转为可采样且生成提交完成，才发布新环境。旧环境由最后一次采样提交的完成信号保护。生成中途失败时保留旧环境，候选资源按实际完成状态清理。常量环境验证能量，方向可区分的环境验证面朝向和粗糙度对应的高光 mip。
