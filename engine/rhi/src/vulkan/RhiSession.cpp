@@ -222,7 +222,7 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
     }
     if (config.enableStaticScene &&
         (!config.presentation || !config.triangleShaders || config.gpuDriven ||
-         config.enableSetBindingSample)) {
+         config.enableSetBindingSample || (config.enableSetBinding && !config.enableGBuffer))) {
         return makeError(
             core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation,
             "static scene requires presentation and dedicated graphics shaders");
@@ -999,6 +999,8 @@ struct RhiSession::Impl {
         }
         VkPhysicalDeviceDescriptorIndexingFeatures indexing{};
         detail::SetBindingLimits bindingLimits{};
+        const bool bindlessMaterials = config.enableStaticScene && config.enableSetBinding;
+        auto bindingImageCount = detail::kSetImageCount;
         if (config.enableSetBinding) {
             indexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
             VkPhysicalDeviceFeatures2 features{};
@@ -1015,8 +1017,21 @@ struct RhiSession::Impl {
                     limits.maxDescriptorSetSampledImages),
                 std::min(limits.maxPerStageDescriptorSamplers, limits.maxDescriptorSetSamplers),
                 limits.maxPerStageResources};
-            const auto check = detail::checkSetBinding(
-                bindingLimits, detail::kSetImageCount, detail::kSetSamplerCount);
+            if (bindlessMaterials) {
+                if (!indexing.runtimeDescriptorArray) {
+                    return std::unexpected(makeError(
+                        core::ErrorCategory::RequestedApiUnsupported,
+                        core::ErrorStage::Capability,
+                        "Bindless materials require runtimeDescriptorArray"));
+                }
+                const auto stageImages = bindingLimits.total > detail::kSetSamplerCount
+                                             ? bindingLimits.total - detail::kSetSamplerCount
+                                             : 0;
+                bindingImageCount =
+                    std::min({bindingLimits.images, stageImages, detail::kStaticSceneImageLimit});
+            }
+            const auto check =
+                detail::checkSetBinding(bindingLimits, bindingImageCount, detail::kSetSamplerCount);
             if (check != detail::SetBindingCheck::Ready) {
                 const char* reason = "maxPerStageResources";
                 switch (check) {
@@ -1040,6 +1055,7 @@ struct RhiSession::Impl {
             }
             indexing = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES};
             indexing.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+            indexing.runtimeDescriptorArray = bindlessMaterials ? VK_TRUE : VK_FALSE;
             indexing.pNext = core13.pNext;
             core13.pNext = &indexing;
         }
@@ -1118,7 +1134,8 @@ struct RhiSession::Impl {
                 return std::unexpected(std::move(view.error()));
             }
             setBinding.emplace(graphicsDevice, **owner);
-            if (auto opened = setBinding->open(*view); !opened) {
+            if (auto opened = setBinding->open(*view, bindingImageCount, bindlessMaterials);
+                !opened) {
                 return opened;
             }
             if (config.enableSetBindingSample) {
@@ -1192,7 +1209,7 @@ struct RhiSession::Impl {
                 *diagnostics,
                 core::LogLevel::Info,
                 "rhi.binding.set.ready",
-                "path=descriptor-set images=" + std::to_string(detail::kSetImageCount) +
+                "path=descriptor-set images=" + std::to_string(bindingImageCount) +
                     " samplers=" + std::to_string(detail::kSetSamplerCount) +
                     " default_slot=0 shaderSampledImageArrayNonUniformIndexing=true" +
                     " image_limit=" + std::to_string(bindingLimits.images) +
@@ -1213,7 +1230,7 @@ struct RhiSession::Impl {
                                 " default_slot=0");
                     }
                 };
-                reportSlots("image", detail::kSetImageCount);
+                reportSlots("image", bindingImageCount);
                 reportSlots("sampler", detail::kSetSamplerCount);
             }
         }
@@ -1270,7 +1287,8 @@ struct RhiSession::Impl {
                 if (!owner) {
                     return std::unexpected(owner.error());
                 }
-                staticScene.emplace(**owner, config.enableGBuffer);
+                staticScene.emplace(
+                    **owner, config.enableGBuffer, bindlessMaterials ? &*setBinding : nullptr);
                 if (auto ready = staticScene->open(); !ready) {
                     return ready;
                 }

@@ -72,16 +72,27 @@ def check_probe(probe: dict, resolution: list, distance: float, color: list, nor
     check_values(f"{label} material", probe["metallic_roughness"], material, 2 / 255)
 
 
-def run(executable: str, output_root: Path, configuration: str) -> None:
+def run(executable: str, output_root: Path, configuration: str, bindless: bool = False) -> None:
     output_root.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix="gbuffer-", dir=output_root) as directory:
         output = Path(directory)
         scene, assets = make_scene(output)
         evidence = output / "probes.json"
         logs = output / "logs"
+        options = []
+        far_color = (32, 160, 80)
+        if bindless:
+            far_color = (216, 96, 192)
+            asset = make_mesh(assets, "replacement", bytes([*far_color, 255] * 4))
+            replacement = json.loads(scene.read_text(encoding="utf-8"))
+            replacement["objects"][1]["asset"] = asset
+            candidate = output / "replacement.json"
+            candidate.write_text(json.dumps(replacement), encoding="utf-8")
+            options = ["--bindless-materials", "--static-scene-test", str(candidate),
+                       "--screenshot", str(output / "result.png")]
         subprocess.run([executable, "--hidden", "--frames", "4", "--output", str(logs),
                         "--static-scene", str(scene), "--asset-root", str(assets),
-                        "--gbuffer-probes", str(evidence)], check=True, timeout=40)
+                        "--gbuffer-probes", str(evidence), *options], check=True, timeout=40)
         report = json.loads(evidence.read_text(encoding="utf-8"))
         probes = {probe["name"]: probe for probe in report["probes"]}
         if set(probes) != {"overlap", "far-only", "background"}:
@@ -91,7 +102,7 @@ def run(executable: str, output_root: Path, configuration: str) -> None:
                     [srgb(128) * 0.5, srgb(64) * 0.6, srgb(192) * 0.7, 1],
                     [0, 1 / math.sqrt(5), 2 / math.sqrt(5)], [192 / 255 * 0.4, 64 / 255 * 0.7])
         check_probe(probes["far-only"], size, 5.5,
-                    [srgb(32), srgb(160), srgb(80), 1], [0, 0, 1], [1, 1])
+                    [*(srgb(byte) for byte in far_color), 1], [0, 0, 1], [1, 1])
         if probes["background"]["depth"] != 0 or probes["background"]["base_color"] != [0, 0, 0, 0]:
             raise RuntimeError(f"background clear values were not preserved: {probes['background']}")
         run_dir = next(logs.iterdir())
@@ -105,7 +116,12 @@ def run(executable: str, output_root: Path, configuration: str) -> None:
             configuration == "Debug" and "rhi.validation.enabled" not in ids
         ):
             raise RuntimeError("Vulkan Validation was missing or reported GBuffer errors")
+        if bindless:
+            if not {"rhi.binding.set.ready", "rhi.static-scene.rollback"} <= ids:
+                raise RuntimeError("bindless setup or injected replacement was not recorded")
+            if (output / "before.png").read_bytes() != (output / "rollback.png").read_bytes():
+                raise RuntimeError("failed bindless replacement changed the rendered scene")
 
 
 if __name__ == "__main__":
-    run(sys.argv[1], Path(sys.argv[2]), sys.argv[3])
+    run(sys.argv[1], Path(sys.argv[2]), sys.argv[3], sys.argv[4:] == ["--bindless-materials"])

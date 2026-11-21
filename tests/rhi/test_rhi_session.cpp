@@ -1105,22 +1105,36 @@ TEST_CASE("descriptor set binding creates ready defaults", "[rhi-set-binding-dev
 
 TEST_CASE(
     "binding slots retain descriptors until both frames finish", "[rhi-set-binding-retirement]") {
-    rhi::detail::SetBindingSlots<int, 2> slots{0};
+    rhi::detail::SetBindingSlots<int, 4> slots{0, 2};
+    std::vector<std::pair<std::size_t, int>> writes;
+    std::vector<int> releases;
+    const auto apply = [&](bool frame0, bool frame1) {
+        return slots.applyCompleted(
+            frame0,
+            frame1,
+            [&](std::size_t slot, int value) { writes.emplace_back(slot, value); },
+            [&](int retired) { releases.push_back(retired); });
+    };
     const auto first = slots.registerPending(42);
     REQUIRE(first);
     CHECK_FALSE(slots.resolve(*first));
     CHECK(slots.descriptor(1) == 0);
-    CHECK_FALSE(slots.applyCompleted(false, true));
-    REQUIRE(slots.applyCompleted(true, true));
+    CHECK_FALSE(apply(false, true));
+    CHECK(writes.empty());
+    REQUIRE(apply(true, true));
+    CHECK(writes == std::vector<std::pair<std::size_t, int>>{{1, 42}});
     CHECK(slots.resolve(*first) == 1);
     CHECK(slots.descriptor(1) == 42);
     REQUIRE(slots.retire(*first));
     CHECK_FALSE(slots.resolve(*first));
-    CHECK_FALSE(slots.applyCompleted(true, false));
-    CHECK_FALSE(slots.applyCompleted(false, true));
+    CHECK_FALSE(apply(true, false));
+    CHECK_FALSE(apply(false, true));
+    CHECK(releases.empty());
     CHECK(slots.descriptor(1) == 42);
     CHECK_FALSE(slots.registerPending(43));
-    REQUIRE(slots.applyCompleted(true, true));
+    REQUIRE(apply(true, true));
+    CHECK(writes == std::vector<std::pair<std::size_t, int>>{{1, 42}, {1, 0}});
+    CHECK(releases == std::vector{42});
     CHECK(slots.descriptor(1) == 0);
     const auto next = slots.registerPending(43);
     REQUIRE(next);

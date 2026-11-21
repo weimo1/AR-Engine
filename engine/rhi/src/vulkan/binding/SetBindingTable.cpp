@@ -29,15 +29,26 @@ SetBindingTable::~SetBindingTable() {
     }
 }
 
-std::expected<void, core::Error> SetBindingTable::open(VkImageView defaultView) {
+std::expected<void, core::Error>
+SetBindingTable::open(VkImageView defaultView, std::uint32_t imageCount, bool repeat) {
+    if (imageCount == 0 || imageCount > kStaticSceneImageLimit) {
+        return std::unexpected(
+            core::Error{
+                core::ErrorCategory::InvalidArguments,
+                core::ErrorStage::Validation,
+                "invalid sampled image table capacity",
+                {}});
+    }
     VkSamplerCreateInfo sampler{};
     sampler.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     sampler.magFilter = VK_FILTER_NEAREST;
     sampler.minFilter = VK_FILTER_NEAREST;
     sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    const auto address =
+        repeat ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler.addressModeU = address;
+    sampler.addressModeV = address;
+    sampler.addressModeW = address;
     VkSampler samplerHandle = VK_NULL_HANDLE;
     if (const auto result = vkCreateSampler(m_device, &sampler, nullptr, &samplerHandle);
         result != VK_SUCCESS) {
@@ -45,13 +56,9 @@ std::expected<void, core::Error> SetBindingTable::open(VkImageView defaultView) 
     }
     m_defaultSampler = samplerHandle;
 
-    constexpr std::array bindings{
+    const std::array bindings{
         VkDescriptorSetLayoutBinding{
-            0,
-            VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-            kSetImageCount,
-            VK_SHADER_STAGE_FRAGMENT_BIT,
-            nullptr},
+            0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageCount, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{
             1, VK_DESCRIPTOR_TYPE_SAMPLER, kSetSamplerCount, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
@@ -66,8 +73,8 @@ std::expected<void, core::Error> SetBindingTable::open(VkImageView defaultView) 
     }
     m_layout = layoutHandle;
 
-    constexpr std::array sizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kSetImageCount},
+    const std::array sizes{
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, imageCount},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, kSetSamplerCount},
     };
     VkDescriptorPoolCreateInfo pool{};
@@ -92,12 +99,18 @@ std::expected<void, core::Error> SetBindingTable::open(VkImageView defaultView) 
         return std::unexpected(bindingError("vkAllocateDescriptorSets", result));
     }
 
-    m_images.emplace(
-        VkDescriptorImageInfo{
-            VK_NULL_HANDLE, defaultView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    m_samplers.emplace(
-        VkDescriptorImageInfo{m_defaultSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED});
-    writeDescriptors();
+    const VkDescriptorImageInfo imageInfo{
+        VK_NULL_HANDLE, defaultView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const VkDescriptorImageInfo samplerInfo{
+        m_defaultSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+    m_images.emplace(imageInfo, imageCount);
+    m_samplers.emplace(samplerInfo);
+    std::array<VkDescriptorImageInfo, kStaticSceneImageLimit> images;
+    std::array<VkDescriptorImageInfo, kSetSamplerCount> samplers;
+    images.fill(imageInfo);
+    samplers.fill(samplerInfo);
+    writeDescriptors(0, 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, std::span(images).first(imageCount));
+    writeDescriptors(1, 0, VK_DESCRIPTOR_TYPE_SAMPLER, samplers);
     return {};
 }
 
@@ -117,44 +130,36 @@ bool SetBindingTable::retireImage(ImageBinding handle) {
 }
 
 bool SetBindingTable::publishCompleted(bool firstFrameComplete, bool secondFrameComplete) {
-    const bool samplersChanged =
-        m_samplers->applyCompleted(firstFrameComplete, secondFrameComplete);
     const bool imagesChanged = m_images->applyCompleted(
         firstFrameComplete,
         secondFrameComplete,
-        [this] { writeDescriptors(); },
+        [this](std::size_t index, const auto& descriptor) {
+            writeDescriptors(0, index, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, {&descriptor, 1});
+        },
         [this](const auto& descriptor) { m_resources.releaseSampledView(descriptor.imageView); });
-    if (samplersChanged && !imagesChanged) {
-        writeDescriptors();
-    }
+    const bool samplersChanged = m_samplers->applyCompleted(
+        firstFrameComplete,
+        secondFrameComplete,
+        [this](std::size_t index, const auto& descriptor) {
+            writeDescriptors(1, index, VK_DESCRIPTOR_TYPE_SAMPLER, {&descriptor, 1});
+        },
+        [](const auto&) {});
     return imagesChanged || samplersChanged;
 }
 
-void SetBindingTable::writeDescriptors() {
-    std::array<VkDescriptorImageInfo, kSetImageCount> images;
-    std::array<VkDescriptorImageInfo, kSetSamplerCount> samplers;
-    for (std::size_t index = 0; index < images.size(); ++index) {
-        images[index] = m_images->descriptor(index);
-    }
-    for (std::size_t index = 0; index < samplers.size(); ++index) {
-        samplers[index] = m_samplers->descriptor(index);
-    }
-    std::array<VkWriteDescriptorSet, 2> writes{};
-    constexpr std::array bindings{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_DESCRIPTOR_TYPE_SAMPLER};
-    constexpr std::array counts{kSetImageCount, kSetSamplerCount};
-    const std::array<const VkDescriptorImageInfo*, bindings.size()> descriptors{
-        images.data(), samplers.data()};
-    for (std::size_t index = 0; index < bindings.size(); ++index) {
-        auto& write = writes[index];
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_set;
-        write.dstBinding = static_cast<std::uint32_t>(index);
-        write.descriptorCount = counts[index];
-        write.descriptorType = bindings[index];
-        write.pImageInfo = descriptors[index];
-    }
-    vkUpdateDescriptorSets(
-        m_device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+void SetBindingTable::writeDescriptors(
+    std::uint32_t binding,
+    std::size_t index,
+    VkDescriptorType type,
+    std::span<const VkDescriptorImageInfo> descriptors) {
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = m_set;
+    write.dstBinding = binding;
+    write.dstArrayElement = static_cast<std::uint32_t>(index);
+    write.descriptorCount = static_cast<std::uint32_t>(descriptors.size());
+    write.descriptorType = type;
+    write.pImageInfo = descriptors.data();
+    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
 }
 
 std::expected<void, core::Error>

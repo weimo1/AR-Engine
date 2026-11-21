@@ -24,7 +24,7 @@ public:
         std::uint64_t generation;
     };
 
-    explicit SetBindingSlots(Descriptor fallback) {
+    explicit SetBindingSlots(Descriptor fallback, std::size_t size = Capacity) : m_size(size) {
         m_slots[0].value = fallback;
         m_slots[0].state = State::Published;
     }
@@ -33,7 +33,7 @@ public:
         if (m_generation == (std::numeric_limits<std::uint64_t>::max)()) {
             return std::nullopt;
         }
-        for (std::size_t index = 1; index < Capacity; ++index) {
+        for (std::size_t index = 1; index < m_size; ++index) {
             if (m_slots[index].state == State::Free) {
                 m_slots[index] = {descriptor, ++m_generation, State::Pending};
                 return Handle{index, m_generation};
@@ -84,22 +84,17 @@ public:
             return false;
         }
         bool changed = false;
-        std::array<std::optional<Descriptor>, Capacity> retired{};
-        std::size_t retiredCount = 0;
-        for (auto& slot : m_slots) {
+        for (std::size_t index = 1; index < m_size; ++index) {
+            auto& slot = m_slots[index];
             if (slot.state == State::Pending) {
                 slot.state = State::Published;
+                write(index, *slot.value);
                 changed = true;
             } else if (slot.state == State::Retiring) {
-                retired[retiredCount++] = *slot.value;
+                write(index, *m_slots[0].value);
+                release(*slot.value);
                 slot = {};
                 changed = true;
-            }
-        }
-        if (changed) {
-            write();
-            for (std::size_t index = 0; index < retiredCount; ++index) {
-                release(*retired[index]);
             }
         }
         return changed;
@@ -107,11 +102,14 @@ public:
 
     bool applyCompleted(bool firstFrameComplete, bool secondFrameComplete) {
         return applyCompleted(
-            firstFrameComplete, secondFrameComplete, [] {}, [](const Descriptor&) {});
+            firstFrameComplete,
+            secondFrameComplete,
+            [](std::size_t, const Descriptor&) {},
+            [](const Descriptor&) {});
     }
 
     [[nodiscard]] const Descriptor& descriptor(std::size_t index) const noexcept {
-        if (index < Capacity) {
+        if (index < m_size) {
             const auto& slot = m_slots[index];
             if (slot.state == State::Published || slot.state == State::Retiring) {
                 return *slot.value;
@@ -122,7 +120,7 @@ public:
 
 private:
     [[nodiscard]] const Slot* find(Handle handle) const noexcept {
-        if (handle.slot == 0 || handle.slot >= Capacity || handle.generation == 0) {
+        if (handle.slot == 0 || handle.slot >= m_size || handle.generation == 0) {
             return nullptr;
         }
         const auto& slot = m_slots[handle.slot];
@@ -130,6 +128,7 @@ private:
     }
 
     std::array<Slot, Capacity> m_slots{};
+    std::size_t m_size;
     std::uint64_t m_generation = 0;
 };
 

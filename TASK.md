@@ -119,7 +119,7 @@
 
 - [x] T34 共享几何与实例、材质数据。双配置各 84/84，DSH 独立评审 17/17 通过。
   - 验收：`render-static-scene-draw-data` 核对多网格范围、共享实例、材质引用与无效输入。
-- [ ] T35 静态场景 Descriptor Set Bindless
+- [x] T35 静态场景 Descriptor Set Bindless。双配置各 85/85，验证两材质、回滚和在途保护，DSH 独立评审 18/18 通过。
   - 验收：核对材质槽位、颜色与数据贴图解释、脏槽位更新及在途保护。
 - [ ] T36 GPU 剔除、Graph Buffer 同步与索引间接绘制
   - 验收：`sample-static-scene-gpu-driven` 同场景对照 CPU 可见集合与像素，覆盖零可见和容量边界。

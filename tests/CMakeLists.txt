@@ -305,6 +305,14 @@ set_tests_properties(sample-gbuffer-probes PROPERTIES
     LABELS "gpu"
     ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1")
 
+add_test(NAME sample-bindless-material-probes
+    COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_gbuffer.py"
+        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>"
+        --bindless-materials)
+set_tests_properties(sample-bindless-material-probes PROPERTIES
+    LABELS "gpu"
+    ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1")
+
 add_test(NAME sample-hdr-lighting-probes
     COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_hdr_lighting.py"
         "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>")

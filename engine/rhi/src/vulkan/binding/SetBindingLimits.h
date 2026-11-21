@@ -15,6 +15,7 @@ enum class SetBindingCheck { Ready, MissingFeature, ImageLimit, SamplerLimit, St
 
 inline constexpr std::uint32_t kSetImageCount = 8;
 inline constexpr std::uint32_t kSetSamplerCount = 4;
+inline constexpr std::uint32_t kStaticSceneImageLimit = 64;
 
 constexpr SetBindingCheck
 checkSetBinding(SetBindingLimits limits, std::uint32_t images, std::uint32_t samplers) noexcept {

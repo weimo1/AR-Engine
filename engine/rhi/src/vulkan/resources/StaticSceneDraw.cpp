@@ -8,6 +8,8 @@
 
 #include <vk_mem_alloc.h>
 
+#include "binding/SetBindingTable.h"
+
 namespace ar::rhi::detail {
 namespace {
 std::unexpected<core::Error> failed(const char* operation, VkResult result) {
@@ -31,6 +33,17 @@ struct StaticSceneDraw::Mesh {
         auto& resources = owner.m_resources;
         if (pool) {
             vkDestroyDescriptorPool(resources.m_device, pool, nullptr);
+        }
+        bool retirePublished = false;
+        for (const auto& texture : textures) {
+            if (texture.binding) {
+                retirePublished |= owner.m_bindings->resolveImage(*texture.binding).has_value();
+                owner.m_bindings->retireImage(*texture.binding);
+            }
+        }
+        // Published meshes are destroyed after Presentation has drained their submissions.
+        if (retirePublished) {
+            owner.m_bindings->publishCompleted(true, true);
         }
         for (const auto& texture : textures) {
             if (texture.sampled) {
@@ -57,6 +70,7 @@ struct StaticSceneDraw::Mesh {
         ImageHandle image;
         ImageViewHandle view;
         VkImageView sampled = VK_NULL_HANDLE;
+        std::optional<SetBindingTable::ImageBinding> binding;
     };
     std::array<Texture, 2> textures{};
     VkDescriptorPool pool = VK_NULL_HANDLE;
@@ -64,8 +78,9 @@ struct StaticSceneDraw::Mesh {
     std::uint32_t indexCount = 0;
 };
 
-StaticSceneDraw::StaticSceneDraw(DeviceResources& resources, bool enableGBuffer)
-    : m_resources(resources), m_enableGBuffer(enableGBuffer) {}
+StaticSceneDraw::StaticSceneDraw(
+    DeviceResources& resources, bool enableGBuffer, SetBindingTable* bindings)
+    : m_resources(resources), m_bindings(bindings), m_enableGBuffer(enableGBuffer) {}
 
 StaticSceneDraw::~StaticSceneDraw() {
     m_active.clear();
@@ -81,6 +96,9 @@ StaticSceneDraw::~StaticSceneDraw() {
 }
 
 std::expected<void, core::Error> StaticSceneDraw::open() {
+    if (m_bindings) {
+        return {};
+    }
     const std::array bindings{
         VkDescriptorSetLayoutBinding{
             0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
@@ -105,6 +123,10 @@ std::expected<void, core::Error> StaticSceneDraw::open() {
         return failed("create static mesh sampler", result);
     }
     return {};
+}
+
+VkDescriptorSetLayout StaticSceneDraw::layout() const noexcept {
+    return m_bindings ? m_bindings->layout() : m_layout;
 }
 
 std::expected<StaticSceneDraw::Attachment, core::Error> StaticSceneDraw::createAttachment(
@@ -328,7 +350,18 @@ StaticSceneDraw::upload(const StaticMeshUpload& input) {
         if (!sampled) {
             return std::unexpected(sampled.error());
         }
-        texture.sampled = *sampled;
+        if (m_bindings) {
+            texture.binding = m_bindings->registerImage(*sampled);
+            if (!texture.binding) {
+                m_resources.releaseSampledView(*sampled);
+                return invalid("static scene sampled image table capacity exhausted");
+            }
+        } else {
+            texture.sampled = *sampled;
+        }
+    }
+    if (m_bindings) {
+        return mesh;
     }
     const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, textureCount};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -400,11 +433,19 @@ std::expected<std::vector<StaticSceneDraw::Draw>, core::Error> StaticSceneDraw::
 }
 
 void StaticSceneDraw::publish(std::vector<Draw> draws) noexcept {
+    if (m_bindings) {
+        m_bindings->publishCompleted(true, true);
+    }
     m_active = std::move(draws);
 }
 
 void StaticSceneDraw::record(VkCommandBuffer commands, VkPipelineLayout layout, float inverseAspect) const {
     constexpr VkDeviceSize offset = 0;
+    if (m_bindings) {
+        const auto set = m_bindings->set();
+        vkCmdBindDescriptorSets(
+            commands, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, nullptr);
+    }
     for (const auto& draw : m_active) {
         auto matrix = draw.instance.clipFromModel;
         for (std::size_t column = 0; column < 4; ++column) {
@@ -412,9 +453,17 @@ void StaticSceneDraw::record(VkCommandBuffer commands, VkPipelineLayout layout, 
         }
         if (m_enableGBuffer) {
             const auto stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+            auto normal = draw.instance.normalFromModel;
+            if (m_bindings) {
+                // Two 8-bit slots fit exactly in a float and leave the normal columns unchanged.
+                static_assert(kStaticSceneImageLimit <= 256);
+                const auto slots = draw.mesh->textures[0].binding->slot |
+                                   (draw.mesh->textures[1].binding->slot << 8);
+                normal[11] = static_cast<float>(slots);
+            }
             vkCmdPushConstants(commands, layout, stages, 0, sizeof(matrix), matrix.data());
-            vkCmdPushConstants(commands, layout, stages, sizeof(matrix), sizeof(draw.instance.normalFromModel),
-                               draw.instance.normalFromModel.data());
+            vkCmdPushConstants(
+                commands, layout, stages, sizeof(matrix), sizeof(normal), normal.data());
             vkCmdPushConstants(commands, layout, stages, sizeof(matrix) + sizeof(draw.instance.normalFromModel),
                                sizeof(draw.instance.baseColorFactor), draw.instance.baseColorFactor.data());
         } else {
@@ -422,8 +471,17 @@ void StaticSceneDraw::record(VkCommandBuffer commands, VkPipelineLayout layout, 
         }
         vkCmdBindVertexBuffers(commands, 0, 1, &draw.mesh->vertices.buffer, &offset);
         vkCmdBindIndexBuffer(commands, draw.mesh->indices.buffer, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1,
-                                &draw.mesh->set, 0, nullptr);
+        if (!m_bindings) {
+            vkCmdBindDescriptorSets(
+                commands,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                layout,
+                0,
+                1,
+                &draw.mesh->set,
+                0,
+                nullptr);
+        }
         vkCmdDrawIndexed(commands, draw.mesh->indexCount, 1, 0, 0, 0);
     }
 }

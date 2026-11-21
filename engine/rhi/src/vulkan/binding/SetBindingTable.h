@@ -1,6 +1,7 @@
 #pragma once
 
 #include <expected>
+#include <span>
 
 #include <volk.h>
 
@@ -14,7 +15,7 @@ class DeviceResources;
 
 // Borrows the device and the default view owned by DeviceResources.
 class SetBindingTable {
-    using ImageSlots = SetBindingSlots<VkDescriptorImageInfo, kSetImageCount>;
+    using ImageSlots = SetBindingSlots<VkDescriptorImageInfo, kStaticSceneImageLimit>;
     using SamplerSlots = SetBindingSlots<VkDescriptorImageInfo, kSetSamplerCount>;
 
 public:
@@ -25,7 +26,8 @@ public:
     SetBindingTable(const SetBindingTable&) = delete;
     SetBindingTable& operator=(const SetBindingTable&) = delete;
 
-    std::expected<void, core::Error> open(VkImageView defaultView);
+    std::expected<void, core::Error>
+    open(VkImageView defaultView, std::uint32_t imageCount = kSetImageCount, bool repeat = false);
     std::expected<void, core::Error>
     populateSample(VkImageView stripes, VkImageView blue, VkImageView secondView);
     using ImageBinding = ImageSlots::Handle;
@@ -51,7 +53,11 @@ public:
     }
 
 private:
-    void writeDescriptors();
+    void writeDescriptors(
+        std::uint32_t binding,
+        std::size_t index,
+        VkDescriptorType type,
+        std::span<const VkDescriptorImageInfo> descriptors);
     std::array<std::optional<ImageBinding>, 3> m_sampleImages{};
     std::optional<ImageSlots> m_images;
     std::optional<SamplerSlots> m_samplers;

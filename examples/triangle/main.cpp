@@ -31,6 +31,7 @@ struct Options {
     bool setBinding = false;
     bool verifyBindingRetirement = false;
     bool gbuffer = false;
+    bool bindlessMaterials = false;
     bool hdrLighting = false;
     bool verifyIblRollback = false;
     std::optional<ar::render::EnvironmentPreset> ibl;
@@ -85,6 +86,9 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
                 return std::nullopt;
             }
             options.exposureEV = exposure;
+        } else if (arg == L"--bindless-materials") {
+            options.bindlessMaterials = true;
+            options.gbuffer = true;
         } else if (arg == L"--gbuffer") {
             options.gbuffer = true;
         } else if (arg == L"--gbuffer-probes" && !options.gbufferProbes && index + 1 < argc) {
@@ -254,7 +258,8 @@ int wmain(int argc, wchar_t** argv) {
         std::fputs(
             "usage: ar_triangle [--frames N] [--hidden] [--clear-only] "
             "[--set-binding] [--static-scene JSON --asset-root DIRECTORY] "
-            "[--gbuffer [--gbuffer-probes PATH]] [--hdr-lighting [--exposure-ev EV]] "
+            "[--gbuffer [--gbuffer-probes PATH]] [--bindless-materials] [--hdr-lighting "
+            "[--exposure-ev EV]] "
             "[--ibl constant|directional] [--screenshot PATH] [--output DIRECTORY]\n",
             stderr);
         return 2;
@@ -267,7 +272,7 @@ int wmain(int argc, wchar_t** argv) {
     config.query.enableScreenshot =
         options->screenshot.has_value() || options->gbufferProbes.has_value() ||
         options->verifyBindingRetirement;
-    config.query.enableSetBinding = options->setBinding;
+    config.query.enableSetBinding = options->setBinding || options->bindlessMaterials;
     config.query.enableSetBindingSample = options->setBinding;
     config.query.verifyBindingRetirement = options->verifyBindingRetirement;
     config.query.enableGBuffer = options->gbuffer;
@@ -284,11 +289,12 @@ int wmain(int argc, wchar_t** argv) {
                          : options->setBinding ? "set_binding.vert.spv"
                                                : "triangle.vert.spv"));
         auto fragment = readShader(
-            shaderDir / (options->gbuffer      ? "gbuffer.frag.spv"
-                         : options->scene      ? "static_scene.frag.spv"
-                         : options->gpuDriven  ? "gpu_draw.frag.spv"
-                         : options->setBinding ? "set_binding.frag.spv"
-                                               : "triangle.frag.spv"));
+            shaderDir / (options->bindlessMaterials ? "gbuffer_bindless.frag.spv"
+                         : options->gbuffer         ? "gbuffer.frag.spv"
+                         : options->scene           ? "static_scene.frag.spv"
+                         : options->gpuDriven       ? "gpu_draw.frag.spv"
+                         : options->setBinding      ? "set_binding.frag.spv"
+                                                    : "triangle.frag.spv"));
         if (options->hdrLighting) {
             auto fullscreen = readShader(shaderDir / "fullscreen.vert.spv");
             auto direct = readShader(

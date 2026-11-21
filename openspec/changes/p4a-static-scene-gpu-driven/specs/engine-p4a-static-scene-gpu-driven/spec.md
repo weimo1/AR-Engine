@@ -1,4 +1,4 @@
-<!-- Generated from proposal.md; source-sha256: 67f01151d4c87101623d7882ad41a6725033d2f5d3e5da130326a10212458cbc. Do not edit. -->
+<!-- Generated from proposal.md; source-sha256: 99f972091697bcab95c2fbe5792adc60532b7502fc2fa14854544fa73d27501a. Do not edit. -->
 
 ## Purpose
 
@@ -14,6 +14,12 @@
 
 - **WHEN** `render-static-scene-draw-data` 构造两个网格、共享网格的实例和不同材质
 - **THEN** 索引范围、顶点偏移、实例索引与材质引用符合约定，超容量和非法索引被拒绝
+
+#### Scenario: 静态场景的 Set 材质发布与退役
+
+- **WHEN** `sample-bindless-material-probes` 启用静态场景的共享描述符表，并加载、回滚再替换候选材质
+- **THEN** 基础色和金属粗糙度探针符合线性解释，失败保留原画面，成功替换后探针反映新材质且 Debug 同步验证无错误
+- **AND** `rhi-set-binding-retirement` 核对在途访问结束后才写入变化槽位并释放旧引用
 
 ### Requirement: 有界 Compute 剔除与间接绘制
 

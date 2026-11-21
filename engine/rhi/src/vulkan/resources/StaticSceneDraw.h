@@ -5,11 +5,14 @@
 
 namespace ar::rhi::detail {
 
+class SetBindingTable;
+
 class StaticSceneDraw {
     struct Mesh;
 
 public:
-    explicit StaticSceneDraw(DeviceResources& resources, bool enableGBuffer);
+    explicit StaticSceneDraw(
+        DeviceResources& resources, bool enableGBuffer, SetBindingTable* bindings);
     ~StaticSceneDraw();
     StaticSceneDraw(const StaticSceneDraw&) = delete;
 
@@ -25,7 +28,7 @@ public:
     };
 
     std::expected<void, core::Error> open();
-    VkDescriptorSetLayout layout() const noexcept { return m_layout; }
+    VkDescriptorSetLayout layout() const noexcept;
     std::expected<Attachment, core::Error> createAttachment(
         VkExtent2D extent,
         VkFormat format,
@@ -50,6 +53,7 @@ private:
     std::expected<std::shared_ptr<Mesh>, core::Error> upload(const StaticMeshUpload& input);
 
     DeviceResources& m_resources;
+    SetBindingTable* m_bindings;
     VkDescriptorSetLayout m_layout = VK_NULL_HANDLE;
     VkSampler m_sampler = VK_NULL_HANDLE;
     std::vector<Draw> m_active;
