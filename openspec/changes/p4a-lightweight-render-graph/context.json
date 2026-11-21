@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "objective": "在单图形队列上生成逐子资源同步计划，并迁移 P3c 的几何、光照、显示和诊断路径。",
+  "non_goals": ["资源别名", "自动多队列", "并行录制", "阴影与 GI"],
+  "tags": ["native"],
+  "documents": [
+    {"path": "docs/modules/render/README.md", "purpose": "architecture", "status": "reference", "basis": "渲染编排与模块边界"},
+    {"path": "docs/modules/rhi/README.md", "purpose": "architecture", "status": "reference", "basis": "Vulkan 执行与资源所有权"}
+  ],
+  "skills": ["ar-cpp-oop-style", "ar-cpp-hpc-optimization", "ar-e2e-side-effect-safety"],
+  "write_paths": ["TASK.md", "openspec/changes/p4a-lightweight-render-graph/**", "engine/render/**", "engine/rhi/**", "engine/runtime/**", "tests/**", "workflow/p0-checks.json"]
+}

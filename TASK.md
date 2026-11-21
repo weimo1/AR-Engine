@@ -102,6 +102,17 @@
 - [x] T30 [人工] P3c 里程碑验收。用户在收到同场景的直接光和环境光截图、材质探针与回归证据后回复“可以的继续”。双配置各 82/82，T29 独立评审通过。
   - 用户确认展示画面、材质诊断视图及回归证据。
 
+### P4a 轻量 Render Graph
+
+参见 [P4a 技术方案](openspec/changes/p4a-lightweight-render-graph/design.md)。
+
+- [x] T31 CPU 资源声明与计划。逐子资源同步、连续读取、丢弃覆盖和导入导出通过，双配置各 83/83，DSH 审查 14/14 通过。
+  - 验收：`render-graph-plan` 核对逐子资源状态、连续读取、丢弃覆盖、外部导入导出及无效声明。
+- [ ] T32 Vulkan 单队列执行与 P3c 迁移
+  - 验收：复跑 GBuffer、HDR/SDR、IBL 探针和 Graph resize，维持原容差并通过同步验证。
+- [ ] T33 [人工] P4a 里程碑验收
+  - 用户确认迁移前后展示结果与同步诊断证据。
+
 ## 人工待办（不阻塞队列）
 
 - 云端 “Engine CPU build and test” 首跑（2026-11-10，run 42821435014，`49b5633`，4 分 52 秒）：工具链检查、依赖恢复、两配置编译通过，Debug CTest 47/49；失败的 `runtime-system-inspect`、`runtime-system-development` 需要真实 Vulkan 加载器。两项已标 `gpu`，云端改用 `build_checks.py --no-gpu`；推送后用 `gh workflow run` 再跑一次确认，绿了再决定是否改成推送触发 + vcpkg 缓存。
