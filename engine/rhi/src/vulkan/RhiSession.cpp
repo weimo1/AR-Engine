@@ -1283,12 +1283,14 @@ struct RhiSession::Impl {
                     {config.presentation->width, config.presentation->height},
                     config.triangleShaders ? &*config.triangleShaders : nullptr,
                     config.enableScreenshot,
-                    staticScene ? staticScene->layout()
-                        : config.enableSetBindingSample ? setBinding->layout() : VK_NULL_HANDLE,
+                    staticScene                     ? staticScene->layout()
+                    : config.enableSetBindingSample ? setBinding->layout()
+                                                    : VK_NULL_HANDLE,
                     config.enableSetBindingSample ? setBinding->set() : VK_NULL_HANDLE,
                     staticScene ? &*staticScene : nullptr,
                     config.enableGBuffer,
-                    config.deferredLighting ? &*config.deferredLighting : nullptr);
+                    config.deferredLighting ? &*config.deferredLighting : nullptr,
+                    config.planPresentation);
                 !opened) {
                 return opened;
             }

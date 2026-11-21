@@ -9,6 +9,7 @@
 #include <volk.h>
 
 #include "core/Error.h"
+#include "rhi/PresentationGraph.h"
 #include "resources/StaticSceneDraw.h"
 
 namespace ar::core {
@@ -45,7 +46,8 @@ public:
         VkDescriptorSet bindingSet,
         StaticSceneDraw* staticScene = nullptr,
         bool enableGBuffer = false,
-        const DeferredLighting* lighting = nullptr);
+        const DeferredLighting* lighting = nullptr,
+        PlanPresentationGraph planner = nullptr);
     std::expected<void, core::Error> publishStaticScene(
         std::vector<StaticSceneDraw::Draw> draws,
         const std::array<float, 16>& inverseProjection,
@@ -76,6 +78,7 @@ private:
     struct Image {
         VkImage handle = VK_NULL_HANDLE; // Owned by the swapchain.
         VkImageView view = VK_NULL_HANDLE;
+        PresentationImageState state{};
     };
 
     struct Readback {
@@ -96,6 +99,7 @@ private:
             StaticSceneDraw::Attachment depth;
             std::array<StaticSceneDraw::Attachment, 3> gbuffer;
             StaticSceneDraw::Attachment hdr;
+            PresentationStates graphStates{};
             VkDescriptorSet directSet = VK_NULL_HANDLE;
             VkDescriptorSet displaySet = VK_NULL_HANDLE;
         };
@@ -134,14 +138,24 @@ private:
     std::expected<void, core::Error> createLightingLayout();
     std::expected<void, core::Error> createLightingResources(VkImageUsageFlags usage);
     void writeEnvironmentDescriptors() const;
-    void recordLighting(VkCommandBuffer commands, VkImageView output) const;
+    void recordLighting(
+        VkCommandBuffer commands, const Image& output, const PresentationGraphPlan* plan) const;
     std::expected<void, core::Error> createReadback(VkPhysicalDevice physical, Readback& readback);
     std::expected<void, core::Error> readScreenshot(Frame& frame, FrameScreenshot& screenshot);
-    void copyGBufferProbes(VkCommandBuffer commands, VkBuffer destination) const;
+    void copyGBufferProbes(VkCommandBuffer commands, VkBuffer destination, bool graph) const;
     void decodeGBufferProbes(const void* mapped, FrameScreenshot& screenshot) const;
     std::expected<DrawStatus, core::Error> draw(Frame& frame, bool capture);
-    std::expected<void, core::Error>
-    record(VkCommandBuffer commands, const Image& image, VkBuffer capture);
+    std::expected<void, core::Error> record(
+        VkCommandBuffer commands,
+        const Image& image,
+        VkBuffer capture,
+        const PresentationGraphPlan* plan);
+    void recordGraphBarriers(
+        VkCommandBuffer commands,
+        const Image& output,
+        const PresentationGraphPlan& plan,
+        PresentationPass pass) const;
+    bool validGraphPlan(const PresentationGraphPlan& plan) const;
     VkResult drain(Frame& frame, std::uint64_t timeout);
     std::optional<core::Error> drainFrames();
 
@@ -157,6 +171,7 @@ private:
     bool m_enableScreenshot = false;
     bool m_deferCapture = false;
     bool m_enableGBuffer = false;
+    PlanPresentationGraph m_planPresentation = nullptr;
     const DeferredLighting* m_lighting = nullptr;
     VkSampler m_lightingSampler = VK_NULL_HANDLE;
     VkSampler m_environmentSampler = VK_NULL_HANDLE;

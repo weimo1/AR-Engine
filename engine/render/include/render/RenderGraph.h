@@ -6,27 +6,13 @@
 #include <span>
 #include <vector>
 
+#include "rhi/PresentationGraph.h"
+
 namespace ar::render {
 
-enum class GraphUsage : std::uint32_t {
-    ColorWrite = 1u << 0,
-    FragmentSample = 1u << 1,
-    ComputeSample = 1u << 2,
-    DepthWrite = 1u << 3,
-    CopyRead = 1u << 4,
-    Present = 1u << 5,
-};
-
-enum class GraphLayout {
-    Undefined,
-    ColorAttachment,
-    DepthAttachment,
-    ShaderRead,
-    CopySource,
-    Present
-};
-
-using GraphUsageMask = std::uint32_t;
+using rhi::GraphLayout;
+using rhi::GraphUsage;
+using rhi::GraphUsageMask;
 
 constexpr GraphUsageMask usageMask(GraphUsage usage) noexcept {
     return static_cast<GraphUsageMask>(usage);

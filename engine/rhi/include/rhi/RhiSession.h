@@ -16,6 +16,7 @@
 #include "core/Error.h"
 #include "rhi/Capabilities.h"
 #include "rhi/EnvironmentUpload.h"
+#include "rhi/PresentationGraph.h"
 #include "rhi/Image.h"
 #include "rhi/Buffer.h"
 #include "rhi/LoaderSource.h"
@@ -115,6 +116,7 @@ struct QueryConfig {
     bool enableStaticScene = false;
     bool enableGBuffer = false;
     std::optional<DeferredLighting> deferredLighting;
+    PlanPresentationGraph planPresentation = nullptr;
 };
 
 struct DescriptorHeapLimits {

@@ -13,6 +13,7 @@
 #include "rhi/Capabilities.h"
 #include "rhi/RhiSession.h"
 #include "render/StaticSceneRenderer.h"
+#include "render/PresentationGraph.h"
 #include "runtime/RuntimeConfig.h"
 #include "runtime/StaticSceneSession.h"
 
@@ -188,6 +189,9 @@ RuntimeSession::start(const RuntimeConfig& config) {
     session->diagnostics = std::move(*diagnostics);
 
     auto query = config.query;
+    if (query.enableGBuffer) {
+        query.planPresentation = render::planPresentationGraph;
+    }
     if (config.staticAssetRoot) {
         query.enableStaticScene = true;
         session->staticScene = std::make_unique<StaticSceneSession>(

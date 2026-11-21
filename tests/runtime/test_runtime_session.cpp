@@ -810,6 +810,11 @@ TEST_CASE("Hidden window rebuilds, pauses, restores and closes", "[sample-resize
     config.query.requestedApi = rhi::makeApiVersion(1, 3);
     config.query.createGraphicsDevice = true;
     config.query.enableScreenshot = true;
+    bool graph = false;
+    SECTION("triangle") {}
+    SECTION("GBuffer graph") {
+        graph = true;
+    }
     const auto shader = [](const char* name) {
         std::ifstream input(
             std::filesystem::path(AR_TEST_SHADER_DIR) / name, std::ios::binary | std::ios::ate);
@@ -820,13 +825,19 @@ TEST_CASE("Hidden window rebuilds, pauses, restores and closes", "[sample-resize
         REQUIRE(input.seekg(0).read(reinterpret_cast<char*>(words.data()), size));
         return words;
     };
-    config.query.triangleShaders =
-        rhi::TriangleShaders{shader("triangle.vert.spv"), shader("triangle.frag.spv")};
+    config.query.triangleShaders = rhi::TriangleShaders{
+        shader(graph ? "gbuffer.vert.spv" : "triangle.vert.spv"),
+        shader(graph ? "gbuffer.frag.spv" : "triangle.frag.spv")};
     config.window.emplace();
     config.window->visible = false;
     config.window->title = "AR resize test " + std::to_string(GetCurrentProcessId());
     config.diagnostics.runId = "sample-resize";
     config.diagnostics.outputRoot = freshRunDirectory(config.diagnostics.runId);
+    if (graph) {
+        config.query.enableGBuffer = true;
+        config.staticAssetRoot = config.diagnostics.outputRoot / "assets";
+        std::filesystem::create_directories(*config.staticAssetRoot);
+    }
     auto session = runtime::RuntimeSession::start(config);
     REQUIRE(session);
     const std::wstring title(config.window->title.begin(), config.window->title.end());
@@ -860,7 +871,20 @@ TEST_CASE("Hidden window rebuilds, pauses, restores and closes", "[sample-resize
     REQUIRE(after.rgba.size() == static_cast<std::size_t>(after.width) * after.height * 4);
     const auto center =
         (static_cast<std::size_t>(after.height / 2) * after.width + after.width / 2) * 4;
-    CHECK(after.rgba[center] > after.rgba[0]);
+    if (graph) {
+        REQUIRE(after.gbuffer.size() == 3);
+        for (const auto& probe : after.gbuffer) {
+            CHECK(probe.depth == 0.F);
+            CHECK(probe.pixel[0] < after.width);
+            CHECK(probe.pixel[1] < after.height);
+        }
+        // Reuse the rebuilt slots with both capture modes.
+        REQUIRE(present() == runtime::FrameStatus::Presented);
+        REQUIRE(present(&after) == runtime::FrameStatus::Presented);
+        REQUIRE(after.gbuffer.size() == 3);
+    } else {
+        CHECK(after.rgba[center] > after.rgba[0]);
+    }
 
     // Change the iconic style directly so the test window remains hidden and never activates.
     const LONG_PTR normalStyle = GetWindowLongPtrW(window, GWL_STYLE);

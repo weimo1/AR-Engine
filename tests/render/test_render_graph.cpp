@@ -151,3 +151,30 @@ TEST_CASE("graph validates depth image usage", "[render-graph-plan]") {
     REQUIRE_FALSE(rejected.has_value());
     CHECK(rejected.error().code == GraphErrorCode::InvalidAccess);
 }
+
+TEST_CASE("graph rejects duplicate and incompatible imports", "[render-graph-plan]") {
+    using ar::render::GraphError;
+    using ar::render::GraphLayout;
+    using ar::render::GraphSubresourceState;
+    constexpr GraphSubresourceState imported{
+        0, 1, 1, GraphLayout::ShaderRead, usageMask(GraphUsage::FragmentSample)};
+    constexpr std::array repeated{imported, imported};
+    constexpr std::array invalid{
+        GraphSubresourceState{0, 1, 1, GraphLayout::ShaderRead, usageMask(GraphUsage::ColorWrite)}};
+    for (const auto imports :
+         {std::span<const GraphSubresourceState>{repeated},
+          std::span<const GraphSubresourceState>{invalid}}) {
+        const auto result = planRenderGraph({images, {}, imports});
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == GraphErrorCode::InvalidImport);
+        CHECK(result.error().pass == GraphError::noPass);
+        CHECK(result.error().mip == 1);
+        CHECK(result.error().layer == 1);
+    }
+    const std::array passes{GraphPass{std::span{&fragmentRead, 1}}};
+    const auto result = planRenderGraph({images, passes, std::span{&imported, 1}});
+    REQUIRE_FALSE(result);
+    CHECK(result.error().code == GraphErrorCode::UninitializedRead);
+    CHECK(result.error().mip == 0);
+    CHECK(result.error().layer == 0);
+}

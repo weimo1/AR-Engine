@@ -102,7 +102,8 @@ std::expected<void, core::Error> Presentation::open(
     VkDescriptorSet bindingSet,
     StaticSceneDraw* staticScene,
     bool enableGBuffer,
-    const DeferredLighting* lighting) {
+    const DeferredLighting* lighting,
+    PlanPresentationGraph planner) {
     if (!vkGetPhysicalDeviceSurfaceCapabilitiesKHR || !vkGetPhysicalDeviceSurfaceFormatsKHR ||
         !vkCreateSwapchainKHR || !vkDestroySwapchainKHR || !vkGetSwapchainImagesKHR ||
         !vkAcquireNextImageKHR || !vkQueuePresentKHR) {
@@ -122,6 +123,7 @@ std::expected<void, core::Error> Presentation::open(
     m_bindingSet = bindingSet;
     m_staticScene = staticScene;
     m_enableGBuffer = enableGBuffer;
+    m_planPresentation = planner;
     m_lighting = lighting;
     for (Frame& frame : m_frames) {
         if (auto created = createFrame(frame, graphicsFamily); !created) {
@@ -493,7 +495,8 @@ void Presentation::writeEnvironmentDescriptors() const {
     }
 }
 
-void Presentation::recordLighting(VkCommandBuffer commands, VkImageView output) const {
+void Presentation::recordLighting(
+    VkCommandBuffer commands, const Image& output, const PresentationGraphPlan* plan) const {
     const auto& slot = m_swapchain.attachments[m_frameIndex];
     const auto transition = [](VkImage image, VkImageAspectFlags aspect,
                                VkPipelineStageFlags2 fromStage, VkAccessFlags2 fromAccess,
@@ -537,7 +540,11 @@ void Presentation::recordLighting(VkCommandBuffer commands, VkImageView output) 
     VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     dependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(barriers.size());
     dependency.pImageMemoryBarriers = barriers.data();
-    vkCmdPipelineBarrier2(commands, &dependency);
+    if (plan) {
+        recordGraphBarriers(commands, output, *plan, PresentationPass::Lighting);
+    } else {
+        vkCmdPipelineBarrier2(commands, &dependency);
+    }
 
     const auto draw = [&](VkImageView target, VkPipeline pipeline, VkDescriptorSet set,
                           std::uint32_t size, const void* push) {
@@ -573,7 +580,11 @@ void Presentation::recordLighting(VkCommandBuffer commands, VkImageView output) 
     const auto hdrBarrier = colorToSample(slot.hdr.image);
     dependency.imageMemoryBarrierCount = 1;
     dependency.pImageMemoryBarriers = &hdrBarrier;
-    vkCmdPipelineBarrier2(commands, &dependency);
+    if (plan) {
+        recordGraphBarriers(commands, output, *plan, PresentationPass::Display);
+    } else {
+        vkCmdPipelineBarrier2(commands, &dependency);
+    }
 
     const bool srgb = m_swapchain.format == VK_FORMAT_B8G8R8A8_SRGB ||
                       m_swapchain.format == VK_FORMAT_R8G8B8A8_SRGB;
@@ -582,7 +593,7 @@ void Presentation::recordLighting(VkCommandBuffer commands, VkImageView output) 
         std::uint32_t encodeSrgb;
     } display{m_lighting->exposureEV, srgb ? 0u : 1u};
     static_assert(sizeof(DisplayPush) == 8);
-    draw(output, m_swapchain.displayPipeline, slot.displaySet, sizeof(display), &display);
+    draw(output.view, m_swapchain.displayPipeline, slot.displaySet, sizeof(display), &display);
 }
 
 std::expected<void, core::Error>
@@ -709,7 +720,8 @@ void Presentation::decodeGBufferProbes(const void* mapped, FrameScreenshot& scre
     }
 }
 
-void Presentation::copyGBufferProbes(VkCommandBuffer commands, VkBuffer destination) const {
+void Presentation::copyGBufferProbes(
+    VkCommandBuffer commands, VkBuffer destination, bool graph) const {
     const auto& slot = m_swapchain.attachments[m_frameIndex];
     const std::array images{slot.gbuffer[0].image, slot.gbuffer[1].image,
                             slot.gbuffer[2].image, slot.depth.image, slot.hdr.image};
@@ -743,7 +755,9 @@ void Presentation::copyGBufferProbes(VkCommandBuffer commands, VkBuffer destinat
     VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     dependency.imageMemoryBarrierCount = count;
     dependency.pImageMemoryBarriers = transitions.data();
-    vkCmdPipelineBarrier2(commands, &dependency);
+    if (!graph) {
+        vkCmdPipelineBarrier2(commands, &dependency);
+    }
     const auto positions = probePositions(m_swapchain.extent);
     for (std::size_t i = 0; i < count; ++i) {
         std::array<VkBufferImageCopy, 3> copies{};
@@ -925,8 +939,11 @@ Presentation::createFrame(Frame& frame, std::uint32_t graphicsFamily) {
     return {};
 }
 
-std::expected<void, core::Error>
-Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capture) {
+std::expected<void, core::Error> Presentation::record(
+    VkCommandBuffer commands,
+    const Image& image,
+    VkBuffer capture,
+    const PresentationGraphPlan* plan) {
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -951,7 +968,13 @@ Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capt
     dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     dependency.imageMemoryBarrierCount = 1;
     dependency.pImageMemoryBarriers = &barrier;
-    vkCmdPipelineBarrier2(commands, &dependency);
+    if (plan) {
+        recordGraphBarriers(commands, image, *plan, PresentationPass::Geometry);
+        dependency.imageMemoryBarrierCount = 0;
+        dependency.pImageMemoryBarriers = nullptr;
+    } else {
+        vkCmdPipelineBarrier2(commands, &dependency);
+    }
 
     VkRenderingAttachmentInfo color{};
     color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -994,7 +1017,9 @@ Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capt
         VkDependencyInfo gbufferDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
         gbufferDependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(transitions.size());
         gbufferDependency.pImageMemoryBarriers = transitions.data();
-        vkCmdPipelineBarrier2(commands, &gbufferDependency);
+        if (!plan) {
+            vkCmdPipelineBarrier2(commands, &gbufferDependency);
+        }
         rendering.colorAttachmentCount = static_cast<std::uint32_t>(colors.size());
     }
     VkRenderingAttachmentInfo depthAttachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
@@ -1020,7 +1045,9 @@ Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capt
         VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
         depthDependency.imageMemoryBarrierCount = 1;
         depthDependency.pImageMemoryBarriers = &transition;
-        vkCmdPipelineBarrier2(commands, &depthDependency);
+        if (!plan) {
+            vkCmdPipelineBarrier2(commands, &depthDependency);
+        }
         depthAttachment.imageView = depth.view;
         depthAttachment.imageLayout = transition.newLayout;
         depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -1059,7 +1086,7 @@ Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capt
     }
     vkCmdEndRendering(commands);
     if (m_lighting) {
-        recordLighting(commands, image.view);
+        recordLighting(commands, image, plan);
     }
 
     barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
@@ -1072,13 +1099,17 @@ Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capt
         barrier.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
         barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
         barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        vkCmdPipelineBarrier2(commands, &dependency);
+        if (plan) {
+            recordGraphBarriers(commands, image, *plan, PresentationPass::Copy);
+        } else {
+            vkCmdPipelineBarrier2(commands, &dependency);
+        }
         VkBufferImageCopy region{};
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.imageExtent = {m_swapchain.extent.width, m_swapchain.extent.height, 1};
         vkCmdCopyImageToBuffer(commands, image.handle, barrier.newLayout, capture, 1, &region);
         if (m_enableGBuffer) {
-            copyGBufferProbes(commands, capture);
+            copyGBufferProbes(commands, capture, plan != nullptr);
         }
 
         host.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
@@ -1099,7 +1130,12 @@ Presentation::record(VkCommandBuffer commands, const Image& image, VkBuffer capt
         barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     }
-    vkCmdPipelineBarrier2(commands, &dependency);
+    if (plan) {
+        recordGraphBarriers(commands, image, *plan, PresentationPass::Present);
+    }
+    if (!plan || capture) {
+        vkCmdPipelineBarrier2(commands, &dependency);
+    }
     result = vkEndCommandBuffer(commands);
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkEndCommandBuffer", result));
@@ -1160,10 +1196,28 @@ Presentation::draw(Frame& frame, bool capture) {
     }
     const bool suboptimalAcquire = result == VK_SUBOPTIMAL_KHR;
     frame.acquired.pending = true;
+    auto& image = m_swapchain.images[imageIndex];
+    auto& slot = m_swapchain.attachments[m_frameIndex];
+    std::optional<PresentationGraphPlan> graph;
+    if (m_planPresentation && m_enableGBuffer) {
+        auto states = slot.graphStates;
+        states[std::to_underlying(PresentationImage::Output)] = image.state;
+        auto planned =
+            m_planPresentation({states, m_lighting != nullptr, capture, m_environmentReady});
+        if (!planned) {
+            return std::unexpected(std::move(planned.error()));
+        }
+        if (!validGraphPlan(*planned)) {
+            return std::unexpected(
+                unavailable("presentation graph contains an invalid image binding"));
+        }
+        graph.emplace(std::move(*planned));
+    }
     if (auto recorded = record(
             frame.commands,
-            m_swapchain.images[imageIndex],
-            capture ? m_swapchain.readbacks[&frame - m_frames.data()].buffer : VK_NULL_HANDLE);
+            image,
+            capture ? m_swapchain.readbacks[&frame - m_frames.data()].buffer : VK_NULL_HANDLE,
+            graph ? &*graph : nullptr);
         !recorded) {
         return std::unexpected(std::move(recorded.error()));
     }
@@ -1194,6 +1248,13 @@ Presentation::draw(Frame& frame, bool capture) {
     }
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkQueueSubmit2", result));
+    }
+
+    if (graph) {
+        constexpr auto output = std::to_underlying(PresentationImage::Output);
+        image.state = graph->finalStates[output];
+        slot.graphStates = graph->finalStates;
+        slot.graphStates[output] = {};
     }
 
     VkSwapchainPresentFenceInfoKHR presentFence{};
