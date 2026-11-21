@@ -32,6 +32,8 @@ struct Options {
     bool verifyBindingRetirement = false;
     bool gbuffer = false;
     bool bindlessMaterials = false;
+    bool staticGpuDriven = false;
+    std::optional<std::uint32_t> indirectCapacity;
     bool hdrLighting = false;
     bool verifyIblRollback = false;
     std::optional<ar::render::EnvironmentPreset> ibl;
@@ -86,6 +88,10 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
                 return std::nullopt;
             }
             options.exposureEV = exposure;
+        } else if (arg == L"--static-gpu-driven") {
+            options.staticGpuDriven = true;
+            options.bindlessMaterials = true;
+            options.gbuffer = true;
         } else if (arg == L"--bindless-materials") {
             options.bindlessMaterials = true;
             options.gbuffer = true;
@@ -100,17 +106,21 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
             options.assetRoot = argv[++index];
         } else if (arg == L"--static-scene-test" && !options.sceneCandidate && index + 1 < argc) {
             options.sceneCandidate = argv[++index];
-        } else if (arg == L"--frames" && !options.frames && index + 1 < argc) {
+        } else if ((arg == L"--frames" || arg == L"--indirect-capacity") && index + 1 < argc) {
+            auto& target = arg == L"--frames" ? options.frames : options.indirectCapacity;
+            if (target) {
+                return std::nullopt;
+            }
             const std::wstring_view value = argv[++index];
             if (value.empty() || value.find_first_not_of(L"0123456789") != value.npos) {
                 return std::nullopt;
             }
             errno = 0;
             const unsigned long frames = std::wcstoul(value.data(), nullptr, 10);
-            if (errno == ERANGE || frames == 0) {
+            if (errno == ERANGE || (arg == L"--frames" && frames == 0)) {
                 return std::nullopt;
             }
-            options.frames = static_cast<std::uint32_t>(frames);
+            target = static_cast<std::uint32_t>(frames);
         } else if (arg == L"--screenshot" && !options.screenshot && index + 1 < argc) {
             options.screenshot = argv[++index];
             if (options.screenshot->empty()) {
@@ -137,7 +147,8 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
     if (options.gpuDriven && (options.clearOnly || options.setBinding)) {
         return std::nullopt;
     }
-    if ((options.verifyIblRollback && (!options.ibl || !options.frames || *options.frames < 2)) ||
+    if ((options.indirectCapacity && !options.staticGpuDriven) ||
+        (options.verifyIblRollback && (!options.ibl || !options.frames || *options.frames < 2)) ||
         (options.exposureEV && !options.hdrLighting) || (options.gbuffer && !options.scene) ||
         (options.gbufferProbes && options.gbufferProbes->empty()) ||
         options.scene.has_value() != options.assetRoot.has_value() ||
@@ -169,6 +180,11 @@ bool writeGBufferProbes(const std::filesystem::path& path, const ar::rhi::FrameS
     };
     out << "{\"extent\":";
     array(std::array{frame.width, frame.height});
+    if (frame.indirect) {
+        out << ",\"culling\":{\"visible\":" << frame.indirect->visible << ",\"drawn_ids\":";
+        array(frame.indirect->drawnIds);
+        out << '}';
+    }
     out << ",\"probes\":[";
     for (std::size_t i = 0; i < names.size(); ++i) {
         if (i) {
@@ -258,6 +274,7 @@ int wmain(int argc, wchar_t** argv) {
         std::fputs(
             "usage: ar_triangle [--frames N] [--hidden] [--clear-only] "
             "[--set-binding] [--static-scene JSON --asset-root DIRECTORY] "
+            "[--static-gpu-driven [--indirect-capacity N]] "
             "[--gbuffer [--gbuffer-probes PATH]] [--bindless-materials] [--hdr-lighting "
             "[--exposure-ev EV]] "
             "[--ibl constant|directional] [--screenshot PATH] [--output DIRECTORY]\n",
@@ -310,6 +327,19 @@ int wmain(int argc, wchar_t** argv) {
                     std::move(*display),
                     options->exposureEV.value_or(0.F),
                     options->ibl.has_value()});
+        }
+        if (options->staticGpuDriven) {
+            auto indirectVertex = readShader(shaderDir / "static_indirect.vert.spv");
+            auto indirectFragment = readShader(shaderDir / "static_indirect.frag.spv");
+            auto compute = readShader(shaderDir / "static_indirect.comp.spv");
+            if (!indirectVertex || !indirectFragment || !compute) {
+                return 1;
+            }
+            config.query.staticIndirect.emplace(
+                ar::rhi::StaticIndirectShaders{
+                    {std::move(*indirectVertex), std::move(*indirectFragment)},
+                    std::move(*compute),
+                    options->indirectCapacity.value_or(UINT32_MAX)});
         }
         if (options->gpuDriven) {
             auto compute = readShader(shaderDir / "gpu_cull.comp.spv");

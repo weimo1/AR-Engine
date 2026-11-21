@@ -95,7 +95,11 @@ StaticSceneDraw::~StaticSceneDraw() {
     }
 }
 
-std::expected<void, core::Error> StaticSceneDraw::open() {
+std::expected<void, core::Error> StaticSceneDraw::open(const StaticIndirectShaders* indirect) {
+    if (indirect) {
+        m_indirect.emplace(m_resources);
+        return m_indirect->open(*indirect);
+    }
     if (m_bindings) {
         return {};
     }
@@ -127,6 +131,10 @@ std::expected<void, core::Error> StaticSceneDraw::open() {
 
 VkDescriptorSetLayout StaticSceneDraw::layout() const noexcept {
     return m_bindings ? m_bindings->layout() : m_layout;
+}
+
+VkDescriptorSetLayout StaticSceneDraw::indirectLayout() const noexcept {
+    return m_indirect ? m_indirect->layout() : VK_NULL_HANDLE;
 }
 
 std::expected<StaticSceneDraw::Attachment, core::Error> StaticSceneDraw::createAttachment(
@@ -322,13 +330,17 @@ StaticSceneDraw::upload(const StaticMeshUpload& input) {
         slot = *buffer;
         return m_resources.writeAllocation(slot.allocation, 0, data);
     };
-    if (auto made = fill(mesh->vertices, std::as_bytes(input.vertices), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-        !made) {
-        return std::unexpected(made.error());
-    }
-    if (auto made = fill(mesh->indices, std::as_bytes(input.indices), VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
-        !made) {
-        return std::unexpected(made.error());
+    if (!m_indirect) {
+        if (auto made = fill(
+                mesh->vertices, std::as_bytes(input.vertices), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+            !made) {
+            return std::unexpected(made.error());
+        }
+        if (auto made =
+                fill(mesh->indices, std::as_bytes(input.indices), VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+            !made) {
+            return std::unexpected(made.error());
+        }
     }
     const std::uint32_t textureCount = m_enableGBuffer ? 2 : 1;
     const std::array descriptions{
@@ -432,14 +444,102 @@ std::expected<std::vector<StaticSceneDraw::Draw>, core::Error> StaticSceneDraw::
     return prepared;
 }
 
-void StaticSceneDraw::publish(std::vector<Draw> draws) noexcept {
+std::expected<std::shared_ptr<StaticSceneIndirect::Scene>, core::Error>
+StaticSceneDraw::prepareIndirect(
+    std::span<const Draw> draws, const StaticIndirectGeometry* geometry) {
+    if (!m_indirect) {
+        return nullptr;
+    }
+    if (!geometry || geometry->objectIds.size() != draws.size()) {
+        return invalid("missing static indirect geometry");
+    }
+    std::vector<StaticSceneIndirect::Instance> instances;
+    std::vector<StaticSceneIndirect::Material> materials;
+    instances.reserve(draws.size());
+    materials.reserve(draws.size());
+    for (const auto& draw : draws) {
+        const auto& instance = draw.instance;
+        if (instance.meshIndex >= geometry->ranges.size()) {
+            return invalid("static indirect mesh range is invalid");
+        }
+        const auto& range = geometry->ranges[instance.meshIndex];
+        const auto material = static_cast<std::uint32_t>(materials.size());
+        materials.push_back(
+            {instance.baseColorFactor,
+             instance.normalFromModel[3],
+             instance.normalFromModel[7],
+             static_cast<std::uint32_t>(draw.mesh->textures[0].binding->slot),
+             static_cast<std::uint32_t>(draw.mesh->textures[1].binding->slot)});
+        instances.push_back(
+            {instance.clipFromModel,
+             instance.normalFromModel,
+             {range.minimum[0], range.minimum[1], range.minimum[2], 0.F},
+             {range.maximum[0], range.maximum[1], range.maximum[2], 0.F},
+             range.firstIndex,
+             range.indexCount,
+             range.vertexOffset,
+             material});
+    }
+    return m_indirect->prepare(*geometry, instances, materials);
+}
+
+void StaticSceneDraw::publish(
+    std::vector<Draw> draws, std::shared_ptr<StaticSceneIndirect::Scene> indirect) noexcept {
     if (m_bindings) {
         m_bindings->publishCompleted(true, true);
     }
+    m_indirectScene = std::move(indirect);
     m_active = std::move(draws);
 }
 
-void StaticSceneDraw::record(VkCommandBuffer commands, VkPipelineLayout layout, float inverseAspect) const {
+void StaticSceneDraw::cull(
+    VkCommandBuffer commands,
+    std::size_t frame,
+    float aspect,
+    const PresentationGraphPlan& graph) const {
+    if (m_indirectScene) {
+        m_indirect->cull(*m_indirectScene, commands, frame, aspect, graph);
+    }
+}
+
+void StaticSceneDraw::indirectReadback(
+    VkCommandBuffer commands, std::size_t frame, const PresentationGraphPlan& graph) const {
+    if (m_indirectScene) {
+        m_indirect->barrier(*m_indirectScene, commands, frame, graph, IndirectPhase::Readback);
+    }
+}
+
+std::expected<void, core::Error>
+StaticSceneDraw::readVisibility(std::size_t frame, FrameScreenshot& data) {
+    if (m_indirectScene) {
+        auto visibility = m_indirect->visibility(*m_indirectScene, frame);
+        if (!visibility) {
+            return std::unexpected(visibility.error());
+        }
+        data.indirect = std::move(*visibility);
+    }
+    return {};
+}
+
+void StaticSceneDraw::abandon() noexcept {
+    m_abandoned = true;
+    if (m_indirect) {
+        m_indirect->abandon();
+    }
+}
+
+void StaticSceneDraw::record(
+    VkCommandBuffer commands,
+    VkPipelineLayout layout,
+    float inverseAspect,
+    std::size_t frame) const {
+    if (m_indirect) {
+        if (m_indirectScene) {
+            m_indirect->draw(
+                *m_indirectScene, commands, frame, inverseAspect, layout, m_bindings->set());
+        }
+        return;
+    }
     constexpr VkDeviceSize offset = 0;
     if (m_bindings) {
         const auto set = m_bindings->set();

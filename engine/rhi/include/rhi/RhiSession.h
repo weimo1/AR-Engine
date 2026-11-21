@@ -50,6 +50,12 @@ struct TriangleShaders {
     std::vector<std::uint32_t> fragment;
 };
 
+struct StaticIndirectShaders {
+    TriangleShaders graphics;
+    std::vector<std::uint32_t> compute;
+    std::uint32_t capacity = UINT32_MAX;
+};
+
 struct DeferredLighting {
     std::vector<std::uint32_t> vertex;
     std::vector<std::uint32_t> directFragment;
@@ -74,6 +80,11 @@ struct FrameScreenshot {
     std::vector<std::uint8_t> rgba;
     // Diagnostic GBuffer samples, ordered overlap, far-only, and background for the sample.
     std::vector<GBufferProbe> gbuffer{};
+    struct IndirectVisibility {
+        std::uint32_t visible;
+        std::vector<std::uint64_t> drawnIds;
+    };
+    std::optional<IndirectVisibility> indirect;
 };
 
 enum class PresentStatus { Presented, Retry };
@@ -117,6 +128,7 @@ struct QueryConfig {
     bool enableGBuffer = false;
     std::optional<DeferredLighting> deferredLighting;
     PlanPresentationGraph planPresentation = nullptr;
+    std::optional<StaticIndirectShaders> staticIndirect;
 };
 
 struct DescriptorHeapLimits {
@@ -181,7 +193,9 @@ public:
         std::span<const StaticInstanceDraw> draws,
         bool verifyRollback = false,
         std::array<float, 16> inverseProjection = {},
-        std::array<float, 12> viewToWorld = {});
+        std::array<float, 12> viewToWorld = {},
+        const StaticIndirectGeometry* indirect = nullptr);
+    [[nodiscard]] bool staticIndirectEnabled() const noexcept;
     [[nodiscard]] std::expected<void, core::Error>
     replaceEnvironment(const EnvironmentUpload& upload, bool verifyRollback = false);
 

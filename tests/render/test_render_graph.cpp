@@ -3,6 +3,7 @@
 #include <array>
 
 #include "render/RenderGraph.h"
+#include "render/PresentationGraph.h"
 
 namespace {
 
@@ -21,6 +22,33 @@ constexpr GraphAccess computeRead{0, 0, 0, GraphUsage::ComputeSample};
 constexpr GraphAccess discardWrite{0, 0, 0, GraphUsage::ColorWrite, true};
 
 } // namespace
+
+TEST_CASE("presentation graph orders indirect buffer consumers", "[render-graph-plan]") {
+    using namespace ar::rhi;
+    PresentationGraphInput input{};
+    input.indirect = true;
+    auto plan = ar::render::planPresentationGraph(input);
+    REQUIRE(plan);
+    const auto& cull = plan->indirectBarriers[static_cast<std::size_t>(IndirectPhase::Cull)];
+    REQUIRE(cull.size() == 1);
+    CHECK(cull.front().resource == IndirectBuffer::Counts);
+    CHECK(cull.front().source == IndirectUse::Clear);
+    CHECK(cull.front().destination == IndirectUse::ComputeReadWrite);
+    const auto& draw = plan->indirectBarriers[static_cast<std::size_t>(IndirectPhase::Geometry)];
+    REQUIRE(draw.size() == 3);
+    CHECK(draw[0].resource == IndirectBuffer::Commands);
+    CHECK(draw[0].source == IndirectUse::ComputeWrite);
+    CHECK(draw[0].destination == IndirectUse::DrawRead);
+    CHECK(draw[2].resource == IndirectBuffer::Counts);
+    CHECK(draw[2].source == IndirectUse::Clear);
+    constexpr auto readback = static_cast<std::size_t>(IndirectPhase::Readback);
+    CHECK(plan->indirectBarriers[readback].empty());
+    input.capture = true;
+    plan = ar::render::planPresentationGraph(input);
+    REQUIRE(plan);
+    REQUIRE(plan->indirectBarriers[readback].size() == 3);
+    CHECK(plan->indirectBarriers[readback][0].destination == IndirectUse::HostRead);
+}
 
 TEST_CASE("graph preserves both compatible readers before another write", "[render-graph-plan]") {
     const std::array passes{

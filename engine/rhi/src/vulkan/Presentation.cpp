@@ -131,16 +131,23 @@ std::expected<void, core::Error> Presentation::open(
         }
     }
     if (m_shaders) {
+        const auto indirectLayout =
+            m_staticScene ? m_staticScene->indirectLayout() : VK_NULL_HANDLE;
+        const std::array setLayouts{bindingLayout, indirectLayout};
         VkPipelineLayoutCreateInfo layout{};
         layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         if (bindingLayout) {
-            layout.setLayoutCount = 1;
-            layout.pSetLayouts = &bindingLayout;
+            layout.setLayoutCount = indirectLayout ? 2u : 1u;
+            layout.pSetLayouts = setLayouts.data();
         }
         const VkPushConstantRange matrix{
-            m_enableGBuffer ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
-                            : static_cast<VkShaderStageFlags>(VK_SHADER_STAGE_VERTEX_BIT),
-            0, m_enableGBuffer ? 128u : 64u};
+            m_enableGBuffer && !indirectLayout
+                ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
+                : static_cast<VkShaderStageFlags>(VK_SHADER_STAGE_VERTEX_BIT),
+            0,
+            indirectLayout    ? 4u
+            : m_enableGBuffer ? 128u
+                              : 64u};
         if (m_staticScene) {
             layout.pushConstantRangeCount = 1;
             layout.pPushConstantRanges = &matrix;
@@ -684,6 +691,12 @@ Presentation::readScreenshot(Frame& frame, FrameScreenshot& screenshot) {
             std::swap(captured.rgba[i], captured.rgba[i + 2]);
         }
     }
+    if (m_staticScene) {
+        if (auto visibility = m_staticScene->readVisibility(&frame - m_frames.data(), captured);
+            !visibility) {
+            return visibility;
+        }
+    }
     screenshot = std::move(captured);
     return {};
 }
@@ -1060,6 +1073,11 @@ std::expected<void, core::Error> Presentation::record(
     if (cull) {
         cull->recordCull(commands, m_cullObjects, true);
     }
+    const float inverseAspect = static_cast<float>(m_swapchain.extent.height) /
+                                static_cast<float>(m_swapchain.extent.width);
+    if (m_staticScene && plan) {
+        m_staticScene->cull(commands, m_frameIndex, inverseAspect, *plan);
+    }
     vkCmdBeginRendering(commands, &rendering);
     if (m_swapchain.pipeline) {
         vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, m_swapchain.pipeline);
@@ -1077,14 +1095,15 @@ std::expected<void, core::Error> Presentation::record(
         if (cull) {
             cull->drawCull(commands);
         } else if (m_staticScene) {
-            m_staticScene->record(commands, m_pipelineLayout,
-                                  static_cast<float>(m_swapchain.extent.height) /
-                                      static_cast<float>(m_swapchain.extent.width));
+            m_staticScene->record(commands, m_pipelineLayout, inverseAspect, m_frameIndex);
         } else {
             vkCmdDraw(commands, 3, 1, 0, 0);
         }
     }
     vkCmdEndRendering(commands);
+    if (capture && m_staticScene && plan) {
+        m_staticScene->indirectReadback(commands, m_frameIndex, *plan);
+    }
     if (m_lighting) {
         recordLighting(commands, image, plan);
     }
@@ -1202,14 +1221,18 @@ Presentation::draw(Frame& frame, bool capture) {
     if (m_planPresentation && m_enableGBuffer) {
         auto states = slot.graphStates;
         states[std::to_underlying(PresentationImage::Output)] = image.state;
-        auto planned =
-            m_planPresentation({states, m_lighting != nullptr, capture, m_environmentReady});
+        auto planned = m_planPresentation(
+            {states,
+             m_lighting != nullptr,
+             capture,
+             m_environmentReady,
+             m_staticScene && m_staticScene->indirectEnabled()});
         if (!planned) {
             return std::unexpected(std::move(planned.error()));
         }
-        if (!validGraphPlan(*planned)) {
+        if (!validGraphPlan(*planned, capture)) {
             return std::unexpected(
-                unavailable("presentation graph contains an invalid image binding"));
+                unavailable("presentation graph contains an invalid resource binding or barrier"));
         }
         graph.emplace(std::move(*planned));
     }
@@ -1404,12 +1427,13 @@ std::optional<core::Error> Presentation::drainFrames() {
 
 std::expected<void, core::Error> Presentation::publishStaticScene(
     std::vector<StaticSceneDraw::Draw> draws,
+    std::shared_ptr<StaticSceneIndirect::Scene> indirect,
     const std::array<float, 16>& inverseProjection,
     const std::array<float, 12>& viewToWorld) {
     if (auto error = drainFrames()) {
         return std::unexpected(std::move(*error));
     }
-    m_staticScene->publish(std::move(draws));
+    m_staticScene->publish(std::move(draws), std::move(indirect));
     m_inverseProjection = inverseProjection;
     m_viewToWorld = viewToWorld;
     return {};

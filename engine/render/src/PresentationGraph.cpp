@@ -102,6 +102,23 @@ planPresentationGraph(const rhi::PresentationGraphInput& input) {
                 {}});
     }
     rhi::PresentationGraphPlan result{};
+    if (input.indirect) {
+        using Buffer = rhi::IndirectBuffer;
+        using Use = rhi::IndirectUse;
+        using Phase = rhi::IndirectPhase;
+        result.indirectBarriers[std::to_underlying(Phase::Cull)] = {
+            {Buffer::Counts, Use::Clear, Use::ComputeReadWrite}};
+        result.indirectBarriers[std::to_underlying(Phase::Geometry)] = {
+            {Buffer::Commands, Use::ComputeWrite, Use::DrawRead},
+            {Buffer::Counts, Use::ComputeReadWrite, Use::DrawRead},
+            {Buffer::Counts, Use::Clear, Use::DrawRead}};
+        if (input.capture) {
+            result.indirectBarriers[std::to_underlying(Phase::Readback)] = {
+                {Buffer::Commands, Use::ComputeWrite, Use::HostRead},
+                {Buffer::Counts, Use::ComputeReadWrite, Use::HostRead},
+                {Buffer::Counts, Use::Clear, Use::HostRead}};
+        }
+    }
     static_assert(std::tuple_size_v<decltype(passes)> == std::to_underlying(Pass::Count));
     for (std::size_t pass = 0; pass < passes.size(); ++pass) {
         for (const auto& barrier : plan->beforePass[pass]) {

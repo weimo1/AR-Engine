@@ -10,6 +10,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "assets/StaticAssetCache.h"
+#include "render/StaticSceneDrawData.h"
 #include "rhi/RhiSession.h"
 
 namespace ar::render {
@@ -113,6 +114,32 @@ std::expected<void, core::Error> publishStaticScene(
     const auto cameraRotation = glm::mat4_cast(orientation);
     std::array<float, 12> viewToWorld;
     std::copy_n(glm::value_ptr(cameraRotation), viewToWorld.size(), viewToWorld.begin());
+    if (rhi.staticIndirectEnabled()) {
+        const auto packed = packStaticSceneDrawData(input);
+        if (!packed) {
+            return std::unexpected(packed.error());
+        }
+        std::vector<rhi::StaticVertex> sharedVertices;
+        sharedVertices.reserve(packed->vertices.size());
+        for (const auto& vertex : packed->vertices) {
+            sharedVertices.push_back({vertex.position, vertex.uv, vertex.normal});
+        }
+        std::vector<rhi::StaticIndexedRange> ranges;
+        ranges.reserve(packed->meshes.size());
+        for (const auto& mesh : packed->meshes) {
+            ranges.push_back(
+                {mesh.firstIndex, mesh.indexCount, mesh.vertexOffset, mesh.minimum, mesh.maximum});
+        }
+        std::vector<std::uint64_t> objectIds;
+        objectIds.reserve(packed->instances.size());
+        for (const auto& instance : packed->instances) {
+            objectIds.push_back(instance.objectId);
+        }
+        const rhi::StaticIndirectGeometry geometry{
+            sharedVertices, packed->indices, ranges, objectIds};
+        return rhi.replaceStaticScene(
+            meshes, draws, verifyRollback, inverseProjection, viewToWorld, &geometry);
+    }
     return rhi.replaceStaticScene(meshes, draws, verifyRollback, inverseProjection, viewToWorld);
 }
 

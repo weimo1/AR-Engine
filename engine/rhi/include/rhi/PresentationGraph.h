@@ -38,6 +38,15 @@ enum class PresentationImage : std::uint32_t {
     Count
 };
 enum class PresentationPass { Geometry, Lighting, Display, Copy, Present, Count };
+enum class IndirectBuffer { Commands, Counts };
+enum class IndirectUse { Clear, ComputeWrite, ComputeReadWrite, DrawRead, HostRead };
+enum class IndirectPhase { Cull, Geometry, Readback, Count };
+
+struct IndirectBufferBarrier {
+    IndirectBuffer resource;
+    IndirectUse source;
+    IndirectUse destination;
+};
 
 struct PresentationImageState {
     GraphLayout layout{};
@@ -51,6 +60,7 @@ struct PresentationGraphInput {
     bool lighting;
     bool capture;
     bool environment;
+    bool indirect = false;
 };
 
 struct PresentationBarrier {
@@ -66,6 +76,8 @@ struct PresentationGraphPlan {
     std::array<std::vector<PresentationBarrier>, static_cast<std::size_t>(PresentationPass::Count)>
         barriers;
     PresentationStates finalStates;
+    std::array<std::vector<IndirectBufferBarrier>, static_cast<std::size_t>(IndirectPhase::Count)>
+        indirectBarriers;
 };
 
 using PlanPresentationGraph =

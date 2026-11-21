@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DeviceResources.h"
+#include "StaticSceneIndirect.h"
 #include "rhi/EnvironmentUpload.h"
 
 namespace ar::rhi::detail {
@@ -27,8 +28,12 @@ public:
         StaticInstanceDraw instance;
     };
 
-    std::expected<void, core::Error> open();
+    std::expected<void, core::Error> open(const StaticIndirectShaders* indirect = nullptr);
     VkDescriptorSetLayout layout() const noexcept;
+    VkDescriptorSetLayout indirectLayout() const noexcept;
+    bool indirectEnabled() const noexcept {
+        return m_indirect.has_value();
+    }
     std::expected<Attachment, core::Error> createAttachment(
         VkExtent2D extent,
         VkFormat format,
@@ -45,9 +50,24 @@ public:
     std::expected<std::vector<Draw>, core::Error> prepare(
         std::span<const StaticMeshUpload> meshes, std::span<const StaticInstanceDraw> draws,
         bool verifyRollback);
-    void publish(std::vector<Draw> draws) noexcept;
-    void record(VkCommandBuffer commands, VkPipelineLayout layout, float inverseAspect) const;
-    void abandon() noexcept { m_abandoned = true; }
+    std::expected<std::shared_ptr<StaticSceneIndirect::Scene>, core::Error>
+    prepareIndirect(std::span<const Draw> draws, const StaticIndirectGeometry* geometry);
+    void
+    publish(std::vector<Draw> draws, std::shared_ptr<StaticSceneIndirect::Scene> indirect) noexcept;
+    void record(
+        VkCommandBuffer commands,
+        VkPipelineLayout layout,
+        float inverseAspect,
+        std::size_t frame) const;
+    void cull(
+        VkCommandBuffer commands,
+        std::size_t frame,
+        float aspect,
+        const PresentationGraphPlan& graph) const;
+    void indirectReadback(
+        VkCommandBuffer commands, std::size_t frame, const PresentationGraphPlan& graph) const;
+    std::expected<void, core::Error> readVisibility(std::size_t frame, FrameScreenshot& data);
+    void abandon() noexcept;
 
 private:
     std::expected<std::shared_ptr<Mesh>, core::Error> upload(const StaticMeshUpload& input);
@@ -57,6 +77,8 @@ private:
     VkDescriptorSetLayout m_layout = VK_NULL_HANDLE;
     VkSampler m_sampler = VK_NULL_HANDLE;
     std::vector<Draw> m_active;
+    std::optional<StaticSceneIndirect> m_indirect;
+    std::shared_ptr<StaticSceneIndirect::Scene> m_indirectScene;
     // A candidate whose transfer fence could not be settled is held until retry or close.
     Environment m_pendingEnvironment{};
     bool m_abandoned = false;

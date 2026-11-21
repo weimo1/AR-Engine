@@ -34,4 +34,19 @@ struct StaticInstanceDraw {
     std::array<float, 4> baseColorFactor{1, 1, 1, 1};
 };
 
+struct StaticIndexedRange {
+    std::uint32_t firstIndex;
+    std::uint32_t indexCount;
+    std::int32_t vertexOffset;
+    std::array<float, 3> minimum;
+    std::array<float, 3> maximum;
+};
+
+struct StaticIndirectGeometry {
+    std::span<const StaticVertex> vertices;
+    std::span<const std::uint32_t> indices;
+    std::span<const StaticIndexedRange> ranges;
+    std::span<const std::uint64_t> objectIds;
+};
+
 } // namespace ar::rhi

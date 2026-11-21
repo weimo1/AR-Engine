@@ -10,6 +10,7 @@ add_library(ar_rhi STATIC
     src/vulkan/resources/Transfers.cpp
     src/vulkan/resources/GpuCull.cpp
     src/vulkan/resources/StaticSceneDraw.cpp
+    src/vulkan/resources/StaticSceneIndirect.cpp
     src/vulkan/resources/Vma.cpp
 )
 

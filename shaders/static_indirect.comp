@@ -1,0 +1,53 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "static_indirect_scene.glsl"
+
+layout(local_size_x = 64) in;
+
+struct IndexedCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int vertexOffset;
+    uint firstInstance;
+};
+layout(std430, set = 0, binding = 0) readonly buffer Instances { StaticInstance instances[]; };
+layout(std430, set = 0, binding = 2) writeonly buffer Commands { IndexedCommand commands[]; };
+layout(std430, set = 0, binding = 3) buffer Counters { uint visibleCount; uint drawCount; };
+layout(push_constant) uniform Frame { float inverseAspect; uint count; uint capacity; } frame;
+
+bool visible(StaticInstance instance) {
+    // Maximize each homogeneous clip inequality over the local AABB.
+    mat4 rows = transpose(instance.clipFromModel);
+    vec4 x = rows[0] * frame.inverseAspect;
+    vec4 y = rows[1];
+    vec4 z = rows[2];
+    vec4 w = rows[3];
+    vec4 planes[6] = vec4[6](w + x, w - x, w + y, w - y, z, w - z);
+    for (int i = 0; i < 6; ++i) {
+        vec4 plane = planes[i];
+        vec3 furthest = mix(instance.boundsMin.xyz, instance.boundsMax.xyz,
+                            greaterThanEqual(plane.xyz, vec3(0)));
+        if (dot(plane, vec4(furthest, 1.0)) < 0.0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= frame.count) {
+        return;
+    }
+    StaticInstance instance = instances[index];
+    if (!visible(instance)) {
+        return;
+    }
+    uint slot = atomicAdd(visibleCount, 1);
+    if (slot < frame.capacity) {
+        commands[slot] = IndexedCommand(instance.indexCount, 1, instance.firstIndex,
+                                        instance.vertexOffset, index);
+        atomicAdd(drawCount, 1);
+    }
+}

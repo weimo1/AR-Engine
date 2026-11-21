@@ -102,7 +102,7 @@ void Presentation::recordGraphBarriers(
     }
 }
 
-bool Presentation::validGraphPlan(const PresentationGraphPlan& plan) const {
+bool Presentation::validGraphPlan(const PresentationGraphPlan& plan, bool capture) const {
     const auto& slot = m_swapchain.attachments[m_frameIndex];
     const std::array bound{
         true,
@@ -119,6 +119,26 @@ bool Presentation::validGraphPlan(const PresentationGraphPlan& plan) const {
                 return false;
             }
             seen[image] = true;
+        }
+    }
+    const bool indirect = m_staticScene && m_staticScene->indirectEnabled();
+    using Use = IndirectUse;
+    constexpr std::array destinations{Use::ComputeReadWrite, Use::DrawRead, Use::HostRead};
+    for (std::size_t index = 0; index < plan.indirectBarriers.size(); ++index) {
+        const auto& barriers = plan.indirectBarriers[index];
+        const bool expected =
+            indirect && (index != std::to_underlying(IndirectPhase::Readback) || capture);
+        if (expected == barriers.empty()) {
+            return false;
+        }
+        for (const auto& barrier : barriers) {
+            if ((barrier.resource != IndirectBuffer::Commands &&
+                 barrier.resource != IndirectBuffer::Counts) ||
+                (barrier.source != Use::Clear && barrier.source != Use::ComputeWrite &&
+                 barrier.source != Use::ComputeReadWrite) ||
+                barrier.destination != destinations[index]) {
+                return false;
+            }
         }
     }
     return true;

@@ -220,6 +220,21 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation,
             "GBuffer requires static scene presentation");
     }
+    if (config.staticIndirect) {
+        const auto validShader = [](const auto& words) {
+            return words.size() >= 5 && words.front() == 0x07230203u;
+        };
+        if (!config.enableGBuffer || !config.enableSetBinding || !config.planPresentation ||
+            config.gpuDriven || config.enableDescriptorHeap ||
+            !validShader(config.staticIndirect->graphics.vertex) ||
+            !validShader(config.staticIndirect->graphics.fragment) ||
+            !validShader(config.staticIndirect->compute)) {
+            return makeError(
+                core::ErrorCategory::InvalidArguments,
+                core::ErrorStage::Validation,
+                "static indirect requires the Set GBuffer graph and valid shaders");
+        }
+    }
     if (config.enableStaticScene &&
         (!config.presentation || !config.triangleShaders || config.gpuDriven ||
          config.enableSetBindingSample || (config.enableSetBinding && !config.enableGBuffer))) {
@@ -979,6 +994,39 @@ struct RhiSession::Impl {
         VkPhysicalDeviceVulkan12Features draw12{
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
         VkPhysicalDeviceFeatures drawFeatures{};
+        bool staticIndirect = false;
+        if (config.staticIndirect) {
+            VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            features.pNext = &draw12;
+            vkGetPhysicalDeviceFeatures2(physical, &features);
+            std::uint32_t queueCount = 0;
+            vkGetPhysicalDeviceQueueFamilyProperties(physical, &queueCount, nullptr);
+            std::vector<VkQueueFamilyProperties> availableQueues(queueCount);
+            vkGetPhysicalDeviceQueueFamilyProperties(physical, &queueCount, availableQueues.data());
+            staticIndirect = draw12.drawIndirectCount && features.features.multiDrawIndirect &&
+                             features.features.drawIndirectFirstInstance &&
+                             (availableQueues[families.graphics].queueFlags & VK_QUEUE_COMPUTE_BIT);
+            if (staticIndirect) {
+                drawFeatures.multiDrawIndirect = VK_TRUE;
+                drawFeatures.drawIndirectFirstInstance = VK_TRUE;
+                info.pEnabledFeatures = &drawFeatures;
+                draw12 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+                draw12.drawIndirectCount = VK_TRUE;
+                draw12.pNext = core13.pNext;
+                core13.pNext = &draw12;
+            } else {
+                const char* reason =
+                    !features.features.drawIndirectFirstInstance ? "drawIndirectFirstInstance"
+                    : !draw12.drawIndirectCount                  ? "drawIndirectCount"
+                    : !features.features.multiDrawIndirect       ? "multiDrawIndirect"
+                                                                 : "compute on the graphics queue";
+                emitEvent(
+                    *diagnostics,
+                    core::LogLevel::Info,
+                    "rhi.static-indirect.fallback",
+                    std::string("unavailable: ") + reason);
+            }
+        }
         if (config.gpuDriven) {
             VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
             features.pNext = &draw12;
@@ -1056,8 +1104,13 @@ struct RhiSession::Impl {
             indexing = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES};
             indexing.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
             indexing.runtimeDescriptorArray = bindlessMaterials ? VK_TRUE : VK_FALSE;
-            indexing.pNext = core13.pNext;
-            core13.pNext = &indexing;
+            if (staticIndirect) {
+                draw12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+                draw12.runtimeDescriptorArray = VK_TRUE;
+            } else {
+                indexing.pNext = core13.pNext;
+                core13.pNext = &indexing;
+            }
         }
         VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR maintenance{};
         if (surface != VK_NULL_HANDLE) {
@@ -1289,7 +1342,9 @@ struct RhiSession::Impl {
                 }
                 staticScene.emplace(
                     **owner, config.enableGBuffer, bindlessMaterials ? &*setBinding : nullptr);
-                if (auto ready = staticScene->open(); !ready) {
+                if (auto ready =
+                        staticScene->open(staticIndirect ? &*config.staticIndirect : nullptr);
+                    !ready) {
                     return ready;
                 }
             }
@@ -1299,7 +1354,9 @@ struct RhiSession::Impl {
                     families.graphics,
                     families.present,
                     {config.presentation->width, config.presentation->height},
-                    config.triangleShaders ? &*config.triangleShaders : nullptr,
+                    staticIndirect           ? &config.staticIndirect->graphics
+                    : config.triangleShaders ? &*config.triangleShaders
+                                             : nullptr,
                     config.enableScreenshot,
                     staticScene                     ? staticScene->layout()
                     : config.enableSetBindingSample ? setBinding->layout()
@@ -1956,7 +2013,8 @@ std::expected<void, core::Error> RhiSession::replaceStaticScene(
     std::span<const StaticInstanceDraw> draws,
     bool verifyRollback,
     std::array<float, 16> inverseProjection,
-    std::array<float, 12> viewToWorld) {
+    std::array<float, 12> viewToWorld,
+    const StaticIndirectGeometry* indirect) {
     if (m_impl->closed || !m_impl->staticScene || !m_impl->presenter) {
         return std::unexpected(makeError(
             core::ErrorCategory::InvalidState, core::ErrorStage::Capability,
@@ -1975,14 +2033,27 @@ std::expected<void, core::Error> RhiSession::replaceStaticScene(
                   candidate.error().message);
         return std::unexpected(candidate.error());
     }
+    auto indirectCandidate = m_impl->staticScene->prepareIndirect(*candidate, indirect);
+    if (!indirectCandidate) {
+        emitEvent(
+            *m_impl->diagnostics,
+            core::LogLevel::Info,
+            "rhi.static-scene.rollback",
+            indirectCandidate.error().message);
+        return std::unexpected(indirectCandidate.error());
+    }
     if (auto published = m_impl->presenter->publishStaticScene(
-            std::move(*candidate), inverseProjection, viewToWorld);
+            std::move(*candidate), std::move(*indirectCandidate), inverseProjection, viewToWorld);
         !published) {
         return published;
     }
     emitEvent(*m_impl->diagnostics, core::LogLevel::Info, "rhi.static-scene.ready",
               "draws=" + std::to_string(draws.size()));
     return {};
+}
+
+bool RhiSession::staticIndirectEnabled() const noexcept {
+    return m_impl->staticScene && m_impl->staticScene->indirectEnabled();
 }
 
 std::expected<void, core::Error>

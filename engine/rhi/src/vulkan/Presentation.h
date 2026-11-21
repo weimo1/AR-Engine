@@ -50,6 +50,7 @@ public:
         PlanPresentationGraph planner = nullptr);
     std::expected<void, core::Error> publishStaticScene(
         std::vector<StaticSceneDraw::Draw> draws,
+        std::shared_ptr<StaticSceneIndirect::Scene> indirect,
         const std::array<float, 16>& inverseProjection,
         const std::array<float, 12>& viewToWorld);
     std::expected<void, core::Error>
@@ -155,7 +156,7 @@ private:
         const Image& output,
         const PresentationGraphPlan& plan,
         PresentationPass pass) const;
-    bool validGraphPlan(const PresentationGraphPlan& plan) const;
+    bool validGraphPlan(const PresentationGraphPlan& plan, bool capture) const;
     VkResult drain(Frame& frame, std::uint64_t timeout);
     std::optional<core::Error> drainFrames();
 
