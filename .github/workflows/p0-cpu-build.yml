@@ -1,10 +1,13 @@
 name: Engine CPU build and test
 
-# First version: manual dispatch only. This job restores vcpkg from the network and builds
-# both configurations, so it stays off every push until the cloud image, the toolchain and
-# the real timings have been reviewed. The 15-minute workflow-checks job keeps owning the
-# document, workflow and SDD checks.
 on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - 'openspec/**'
+      - 'TASK.md'
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -91,15 +94,21 @@ jobs:
           }
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "VULKAN_SDK=$sdk" -Encoding utf8
 
-      # One command table drives everything: online vcpkg restore from the pinned baseline,
-      # toolchain and dependency records, identity prepare/check, both configurations from a
-      # real configure/build with the recorded cl command lines, CTest with the required case
-      # set, and a post-test re-check of the input hash. Binary caching stays off for the
-      # first round so the real restore cost is measured instead of hidden.
+      - name: Restore vcpkg binary archives
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/ar-vcpkg-binaries
+          key: ar-vcpkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'workflow/p0-toolchain-expectations.json') }}
+
       - name: Restore dependencies, build both configurations and run CTest
         shell: pwsh
         # The hosted runner has no Vulkan loader, so the cases labelled gpu stay local.
-        run: python scripts/build_checks.py --no-gpu
+        run: |
+          $cache = Join-Path $env:RUNNER_TEMP 'ar-vcpkg-binaries'
+          New-Item -ItemType Directory -Path $cache -Force | Out-Null
+          $env:VCPKG_BINARY_SOURCES = "clear;files,$cache,readwrite"
+          python scripts/build_checks.py --no-gpu
+          exit $LASTEXITCODE
 
       - name: Write the run summary
         if: always()

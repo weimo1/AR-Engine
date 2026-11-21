@@ -37,6 +37,23 @@ def fast_commands(table: dict) -> list[str]:
             and not command['id'].startswith(('clcmd-', 'verify-inputs-'))]
 
 
+def use_clean_builds(table: dict) -> None:
+    # The clean compiler-log build also produces the binaries consumed by CTest.
+    commands = table['commands']
+    clean_builds = {dependency for command in commands
+                    if command['parser_id'] == 'msbuild-cl'
+                    for dependency in command['depends_on']}
+    incremental_builds = {command['id']: command['depends_on'] for command in commands
+                          if command['id'] in clean_builds and command['parser_id'] == 'msbuild-log'}
+    for command in commands:
+        if command['parser_id'] == 'msbuild-cl':
+            command['depends_on'] = [prerequisite for dependency in command['depends_on']
+                                     for prerequisite in incremental_builds.get(dependency, [dependency])]
+    referenced = {dependency for command in commands for dependency in command['depends_on']}
+    table['commands'] = [command for command in commands
+                         if command['id'] not in incremental_builds or command['id'] in referenced]
+
+
 def without_gpu(table: dict) -> None:
     """Leave out the cases labelled `gpu` on a machine with no Vulkan loader or device."""
     for command in table['commands']:
@@ -90,6 +107,8 @@ def main(argv: list[str]) -> int:
             if not path.is_relative_to(tests_root) or not path.is_file():
                 raise ValueError(f'Test file missing or outside tests/: {name}')
         table = p0.load_table(table_path)
+        if not (args.fast or args.phase == 'build' or args.only):
+            use_clean_builds(table)
         if args.no_gpu:
             without_gpu(table)
         only = build_commands(table) if args.phase == 'build' else args.only

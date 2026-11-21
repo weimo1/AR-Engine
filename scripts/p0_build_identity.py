@@ -289,8 +289,9 @@ def dependencies_record(args: argparse.Namespace) -> int:
         f"--downloads-root={downloads}",
         f"--x-buildtrees-root={buildtrees}",
         f"--x-packages-root={packages}",
-        "--no-binarycaching",
     ]
+    if not env.get("VCPKG_BINARY_SOURCES"):
+        args_list.append("--no-binarycaching")
     completed = subprocess.run(
         args_list, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
         check=False,
