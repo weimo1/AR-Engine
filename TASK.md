@@ -113,13 +113,26 @@
 - [x] T33 [人工] P4a 里程碑验收。用户确认展示结果。直接光和方向环境光截图与 P3c 的 SHA-256 分别一致，双配置各 83/83。
   - 用户确认迁移前后展示结果与同步诊断证据。
 
+### 静态场景、Bindless 与 GPU 剔除整合
+
+参见 [整合设计](openspec/changes/p4a-static-scene-gpu-driven/design.md)。
+
+- [x] T34 共享几何与实例、材质数据。双配置各 84/84，DSH 独立评审 17/17 通过。
+  - 验收：`render-static-scene-draw-data` 核对多网格范围、共享实例、材质引用与无效输入。
+- [ ] T35 静态场景 Descriptor Set Bindless
+  - 验收：核对材质槽位、颜色与数据贴图解释、脏槽位更新及在途保护。
+- [ ] T36 GPU 剔除、Graph Buffer 同步与索引间接绘制
+  - 验收：`sample-static-scene-gpu-driven` 同场景对照 CPU 可见集合与像素，覆盖零可见和容量边界。
+
 ## 人工待办（不阻塞队列）
 
-- 云端 “Engine CPU build and test” 首跑（2026-11-10，run 42821435014，`49b5633`，4 分 52 秒）：工具链检查、依赖恢复、两配置编译通过，Debug CTest 47/49；失败的 `runtime-system-inspect`、`runtime-system-development` 需要真实 Vulkan 加载器。两项已标 `gpu`，云端改用 `build_checks.py --no-gpu`；推送后用 `gh workflow run` 再跑一次确认，绿了再决定是否改成推送触发 + vcpkg 缓存。
+- 云端 “Engine CPU build and test” 使用 `--no-gpu`，已配置自动触发与 vcpkg 二进制缓存。后续通过对应提交的 GitHub Actions 日志核对 Windows runner 与缓存命中。
 
 - 首次使用自动循环前：修正 Codex CLI 的默认模型（见 [自动运行](docs/workflow/自动运行.md) 的注意事项），设置 `CLAUDE_CODE_GIT_BASH_PATH`，然后用 `--max-tasks 1` 试跑 T01。
 
 ## 待办池（建议级，不阻塞）
+
+- T34 评审建议：按后续调用需要补带法线网格的容量边界及无效变换测试。T36 用网格局部包围盒和实例变换计算剔除输入。
 
 - T26 评审建议：按材质覆盖需要补 TEXCOORD_1、MASK、内嵌图片拒绝及更大贴图的用例；评估同源纹理的 CPU 像素复用。T27 的 GPU 纹理身份按采样用途区分。
 
@@ -131,7 +144,6 @@
 
 - T14 评审建议：T15 接入纹理复用时核对布局转换源同步范围、材质索引边界和 C++／GLSL 容量单一来源；可补 ready 事件字段断言，T16 按需复用资源计数钩子。
 
-- 完整门禁每个配置先增量构建、再干净重编一次（为了采集编译命令行），代码变多后耗时翻倍；评估去掉其中一次。
 - clang-tidy 需要 compile_commands.json，VS 生成器不产出；P1 后评估用 Ninja 预设跑静态检查。
 
 - CMake 目前必须先由脚本生成 build identity 才能配置；P1 有可执行程序后评估给缺省值，方便直接在 VS 打开。

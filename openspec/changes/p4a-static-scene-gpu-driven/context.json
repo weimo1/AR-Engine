@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "objective": "整合静态场景、Descriptor Set Bindless 和索引间接绘制。",
+  "non_goals": ["Descriptor Heap 接入", "阴影", "多队列", "性能指标承诺"],
+  "tags": ["native"],
+  "documents": [],
+  "skills": ["ar-cpp-oop-style", "ar-cpp-hpc-optimization", "ar-e2e-side-effect-safety"],
+  "write_paths": ["TASK.md", "openspec/changes/p4a-static-scene-gpu-driven/**", "engine/render/**", "engine/rhi/**", "engine/runtime/**", "shaders/**", "examples/**", "tests/**", "workflow/p0-checks.json"]
+}

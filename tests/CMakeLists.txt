@@ -319,11 +319,12 @@ set_tests_properties(sample-ibl-probes PROPERTIES
     LABELS "gpu"
     ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1")
 
-add_executable(ar_render_tests render/test_cull_reference.cpp render/test_environment_lighting.cpp render/test_render_graph.cpp)
-target_link_libraries(ar_render_tests PRIVATE ar_render Catch2::Catch2WithMain)
+add_executable(ar_render_tests render/test_cull_reference.cpp render/test_environment_lighting.cpp render/test_render_graph.cpp render/test_static_scene_draw_data.cpp)
+target_link_libraries(ar_render_tests PRIVATE ar_render ar_assets Catch2::Catch2WithMain)
 add_test(NAME render-culling-reference COMMAND ar_render_tests "[render-culling-reference]")
 add_test(NAME render-environment-lighting COMMAND ar_render_tests "[render-environment-lighting]")
 add_test(NAME render-graph-plan COMMAND ar_render_tests "[render-graph-plan]")
+add_test(NAME render-static-scene-draw-data COMMAND ar_render_tests "[render-static-scene-draw-data]")
 
 add_executable(ar_assets_tests assets/test_static_asset.cpp)
 target_link_libraries(ar_assets_tests PRIVATE ar_assets ar_runtime Catch2::Catch2WithMain)
