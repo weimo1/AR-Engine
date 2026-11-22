@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <expected>
 #include <limits>
@@ -123,10 +124,13 @@ planDescriptorHeaps(const DescriptorHeapLimits& limits, DescriptorHeapCapacity c
         return std::unexpected(DescriptorHeapLayoutError::Overflow);
     }
 
-    const auto resourceReservedOffset =
-        checkedAlignUp(*resourceUsedEnd, limits.resourceHeapAlignment);
-    const auto samplerReservedOffset =
-        checkedAlignUp(*samplerRegionSize, limits.samplerHeapAlignment);
+    const std::uint64_t resourceReservedAlignment =
+        (std::
+             max)({limits.resourceHeapAlignment, limits.imageDescriptorAlignment, limits.bufferDescriptorAlignment});
+    const std::uint64_t samplerReservedAlignment =
+        (std::max)(limits.samplerHeapAlignment, limits.samplerDescriptorAlignment);
+    const auto resourceReservedOffset = checkedAlignUp(*resourceUsedEnd, resourceReservedAlignment);
+    const auto samplerReservedOffset = checkedAlignUp(*samplerRegionSize, samplerReservedAlignment);
     if (!resourceReservedOffset || !samplerReservedOffset) {
         return std::unexpected(DescriptorHeapLayoutError::Overflow);
     }

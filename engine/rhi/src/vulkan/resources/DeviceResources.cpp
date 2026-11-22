@@ -77,9 +77,11 @@ DeviceResources::DeviceResources(
     VkDevice device,
     VkQueue queue,
     std::uint32_t queueFamily,
-    std::uint32_t apiVersion) noexcept
+    std::uint32_t apiVersion,
+    bool bufferDeviceAddress) noexcept
     : m_instance(instance), m_physical(physical), m_device(device), m_queue(queue),
-      m_queueFamily(queueFamily), m_apiVersion(apiVersion) {}
+      m_queueFamily(queueFamily), m_apiVersion(apiVersion),
+      m_bufferDeviceAddress(bufferDeviceAddress) {}
 
 DeviceResources::~DeviceResources() {
     if (!m_allocator) {
@@ -124,6 +126,9 @@ std::expected<void, core::Error> DeviceResources::ensureAllocator() {
     info.device = m_device;
     info.vulkanApiVersion = m_apiVersion;
     info.pVulkanFunctions = &functions;
+    if (m_bufferDeviceAddress) {
+        info.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+    }
     VmaAllocator allocator = VK_NULL_HANDLE;
     const VkResult result = vmaCreateAllocator(&info, &allocator);
     if (result != VK_SUCCESS) {
@@ -431,6 +436,25 @@ void DeviceResources::releaseSampledView(VkImageView handle) noexcept {
     }
 }
 
+std::expected<VkImage, core::Error> DeviceResources::retainSampledImage(ImageHandle handle) {
+    auto* image = findSlot(m_images, handle);
+    if (!image) {
+        return std::unexpected(invalid("image handle is invalid or expired"));
+    }
+    if (image->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        return std::unexpected(invalid("binding requires a sampled image"));
+    }
+    ++image->bindingReferences;
+    return image->image;
+}
+
+void DeviceResources::releaseSampledImage(ImageHandle handle) noexcept {
+    auto* image = findSlot(m_images, handle);
+    if (image && image->bindingReferences != 0) {
+        --image->bindingReferences;
+    }
+}
+
 std::expected<void, core::Error> DeviceResources::destroyImageView(ImageViewHandle handle) {
     auto* slot = findSlot(m_views, handle);
     if (!slot) {
@@ -453,6 +477,14 @@ std::expected<void, core::Error> DeviceResources::destroyImage(ImageHandle handl
     auto* slot = findSlot(m_images, handle);
     if (!slot) {
         return std::unexpected(invalid("image handle is invalid or expired"));
+    }
+    if (slot->bindingReferences != 0) {
+        return std::unexpected(
+            core::Error{
+                core::ErrorCategory::InvalidState,
+                core::ErrorStage::Capability,
+                "image is referenced by a descriptor binding",
+                std::nullopt});
     }
     if (std::ranges::any_of(
             m_views, [handle](const auto& view) { return view.view && view.image == handle; })) {

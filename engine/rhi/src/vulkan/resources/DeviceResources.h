@@ -28,15 +28,18 @@ public:
         VkDevice device,
         VkQueue queue,
         std::uint32_t queueFamily,
-        std::uint32_t apiVersion) noexcept;
+        std::uint32_t apiVersion,
+        bool bufferDeviceAddress = false) noexcept;
     ~DeviceResources();
 
     DeviceResources(const DeviceResources&) = delete;
     DeviceResources& operator=(const DeviceResources&) = delete;
 
     std::expected<void, core::Error> prepareCull(
-        std::span<const std::byte> planes, std::span<const std::byte> objects,
-        std::span<const std::uint32_t> shader, std::uint32_t capacity,
+        std::span<const std::byte> planes,
+        std::span<const std::byte> objects,
+        std::span<const std::uint32_t> shader,
+        std::uint32_t capacity,
         std::span<const float> positions = {});
     void recordCull(VkCommandBuffer commands, std::uint32_t objectCount, bool draw) const;
     void drawCull(VkCommandBuffer commands) const;
@@ -58,6 +61,17 @@ public:
     createSampledImage(ImageDesc desc, std::span<const std::byte> pixels);
     std::expected<VkImageView, core::Error> retainSampledView(ImageViewHandle view);
     void releaseSampledView(VkImageView view) noexcept;
+    std::expected<VkImage, core::Error> retainSampledImage(ImageHandle handle);
+    void releaseSampledImage(ImageHandle handle) noexcept;
+    [[nodiscard]] VmaAllocator_T* allocator() const noexcept {
+        return m_allocator;
+    }
+    void markExternalLost() noexcept {
+        m_transferLost = true;
+    }
+    void markExternalPending() noexcept {
+        m_pendingTransfer = true;
+    }
     std::expected<void, core::Error> destroyImageView(ImageViewHandle handle);
     std::expected<void, core::Error> destroyImage(ImageHandle handle);
     std::expected<TransferToken, core::Error>
@@ -76,6 +90,7 @@ public:
     }
 
 private:
+    friend class DescriptorHeapTable;
     friend class StaticSceneDraw;
     friend class StaticSceneIndirect;
     struct BufferSlot {
@@ -140,6 +155,7 @@ private:
     VkQueue m_queue;
     std::uint32_t m_queueFamily;
     std::uint32_t m_apiVersion;
+    bool m_bufferDeviceAddress = false;
     VkDeviceSize m_maxBufferSize = 0;
     VmaAllocator_T* m_allocator = nullptr;
     std::vector<BufferSlot> m_buffers;

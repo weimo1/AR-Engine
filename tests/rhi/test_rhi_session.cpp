@@ -1419,3 +1419,126 @@ TEST_CASE(
     }
     finishSession(*diagnostics, runId);
 }
+
+TEST_CASE(
+    "descriptor heap allocates, writes, binds and reads back sampled values",
+    "[rhi-descriptor-heap-readback]") {
+    const std::string runId = "rhi-descriptor-heap-readback";
+    const auto directory = freshRunDirectory(runId);
+    auto diagnostics = makeSession(directory, runId);
+
+    const auto shaderPath = std::filesystem::path(AR_HEAP_PROBE_SHADER);
+    REQUIRE(std::filesystem::is_regular_file(shaderPath));
+    const auto bytes = std::filesystem::file_size(shaderPath);
+    REQUIRE(bytes > 0);
+    REQUIRE(bytes % 4 == 0);
+    std::vector<std::uint32_t> shader(bytes / 4);
+    {
+        std::ifstream file(shaderPath, std::ios::binary);
+        REQUIRE(
+            file.read(reinterpret_cast<char*>(shader.data()), static_cast<std::streamsize>(bytes)));
+    }
+
+    // Vulkan 1.3 session without Descriptor Heap must reject verifyDescriptorHeap explicitly.
+    {
+        rhi::QueryConfig config;
+        config.requestedApi = rhi::makeApiVersion(1, 3);
+        config.createGraphicsDevice = true;
+        auto base = rhi::RhiSession::open(config, *diagnostics);
+        REQUIRE(base.has_value());
+        const std::array singleQuery{rhi::DescriptorHeapSampleQuery{0, 0, 0.5F, 0.5F}};
+        const auto rejected = (*base)->verifyDescriptorHeap(shader, singleQuery);
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error().category == core::ErrorCategory::InvalidState);
+        CHECK((*base)->close().resourcesReleased);
+    }
+
+    rhi::QueryConfig probeConfig;
+    probeConfig.requestedApi = rhi::makeApiVersion(1, 3);
+    probeConfig.device = rhi::ExplicitDeviceIndex{0};
+    auto probed = rhi::RhiSession::open(probeConfig, *diagnostics);
+    REQUIRE(probed.has_value());
+    const auto& report = (*probed)->report();
+    const bool supportsHeap = report.loaderApi >= rhi::kApiVersion1_4 &&
+                              report.deviceApi >= rhi::kApiVersion1_4 &&
+                              report.descriptorHeap == rhi::DescriptorHeapStatus::Supported;
+    REQUIRE((*probed)->close().resourcesReleased);
+
+    rhi::QueryConfig heapConfig;
+    heapConfig.requestedApi = rhi::kApiVersion1_4;
+    heapConfig.device = rhi::ExplicitDeviceIndex{0};
+    heapConfig.createGraphicsDevice = true;
+    heapConfig.enableDescriptorHeap = true;
+    auto opened = rhi::RhiSession::open(heapConfig, *diagnostics);
+    if (!supportsHeap) {
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().residualResources.empty());
+        finishSession(*diagnostics, runId);
+        CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
+        return;
+    }
+
+    INFO((opened ? "" : opened.error().error.message));
+    REQUIRE(opened.has_value());
+    auto& session = **opened;
+    const auto info = session.graphicsDeviceInfo();
+    REQUIRE(info.has_value());
+    REQUIRE(info->descriptorHeap.has_value());
+    const auto& limits = *info->descriptorHeap;
+
+    // Reject empty query list or malformed SPIR-V.
+    {
+        const auto emptyQueries = session.verifyDescriptorHeap(shader, {});
+        REQUIRE_FALSE(emptyQueries.has_value());
+        CHECK(emptyQueries.error().category == core::ErrorCategory::InvalidArguments);
+        const std::array badShader{std::uint32_t{0x12345678u}};
+        const std::array oneQuery{rhi::DescriptorHeapSampleQuery{0, 0, 0.5F, 0.5F}};
+        const auto invalidSpirv = session.verifyDescriptorHeap(badShader, oneQuery);
+        REQUIRE_FALSE(invalidSpirv.has_value());
+        CHECK(invalidSpirv.error().category == core::ErrorCategory::InvalidArguments);
+    }
+
+    // Q0: slot 0 default white with slot 0 nearest.
+    // Q1: slot 2 solid green with slot 0 nearest.
+    // Q2: slot 1 non-uniform 2x1 (red|blue) at non-texel-center u=0.45 with slot 0 nearest -> red.
+    // Q3: same texture & u=0.45 with non-zero slot 1 linear -> 0.60*red + 0.40*blue.
+    // Q4: same texture at midpoint u=0.50 with non-zero slot 1 linear -> 0.50*red + 0.50*blue.
+    const std::array queries{
+        rhi::DescriptorHeapSampleQuery{0, 0, 0.5F, 0.5F},
+        rhi::DescriptorHeapSampleQuery{2, 0, 0.5F, 0.5F},
+        rhi::DescriptorHeapSampleQuery{1, 0, 0.45F, 0.5F},
+        rhi::DescriptorHeapSampleQuery{1, 1, 0.45F, 0.5F},
+        rhi::DescriptorHeapSampleQuery{1, 1, 0.5F, 0.5F},
+    };
+    const auto result = session.verifyDescriptorHeap(shader, queries);
+    INFO((result ? "" : result.error().message));
+    REQUIRE(result.has_value());
+    CHECK(result->resourceHeapAddress != 0);
+    CHECK(result->samplerHeapAddress != 0);
+    CHECK(result->resourceHeapAddress % limits.resourceHeapAlignment == 0);
+    CHECK(result->samplerHeapAddress % limits.samplerHeapAlignment == 0);
+    REQUIRE(result->samples.size() == queries.size());
+
+    const auto nearValue = [](float actual, float expected, float tolerance = 0.03F) {
+        return std::abs(actual - expected) <= tolerance;
+    };
+    const auto checkColor = [&](std::size_t index, std::array<float, 4> expected) {
+        CAPTURE(index, result->samples[index], expected);
+        CHECK(nearValue(result->samples[index][0], expected[0]));
+        CHECK(nearValue(result->samples[index][1], expected[1]));
+        CHECK(nearValue(result->samples[index][2], expected[2]));
+        CHECK(nearValue(result->samples[index][3], expected[3]));
+    };
+
+    checkColor(0, {1.0F, 1.0F, 1.0F, 1.0F});
+    checkColor(1, {0.0F, 1.0F, 0.0F, 1.0F});
+    checkColor(2, {1.0F, 0.0F, 0.0F, 1.0F});
+    checkColor(3, {0.6F, 0.0F, 0.4F, 1.0F});
+    checkColor(4, {0.5F, 0.0F, 0.5F, 1.0F});
+    // Explicitly distinguish non-zero linear sampler (Q3) from default nearest sampler (Q2).
+    CHECK(std::abs(result->samples[3][2] - result->samples[2][2]) > 0.3F);
+
+    CHECK(session.close().resourcesReleased);
+    finishSession(*diagnostics, runId);
+    CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
+}

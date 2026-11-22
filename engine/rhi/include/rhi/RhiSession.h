@@ -147,6 +147,19 @@ struct DescriptorHeapLimits {
     std::uint64_t maxPushDataSize = 0;
 };
 
+struct DescriptorHeapSampleQuery {
+    std::uint32_t imageSlot = 0;
+    std::uint32_t samplerSlot = 0;
+    float u = 0.F;
+    float v = 0.F;
+};
+
+struct DescriptorHeapProbeResult {
+    std::uint64_t resourceHeapAddress = 0;
+    std::uint64_t samplerHeapAddress = 0;
+    std::vector<std::array<float, 4>> samples;
+};
+
 struct GraphicsDeviceInfo {
     std::uint32_t graphicsQueueFamily = 0;
     bool validationEnabled = false;
@@ -213,6 +226,10 @@ public:
         std::span<const std::uint32_t> shader,
         std::span<std::uint32_t> ids,
         std::span<std::array<std::uint32_t, 4>> commands);
+    // Explicit synchronous Vulkan 1.4 Descriptor Heap verification path.
+    [[nodiscard]] std::expected<DescriptorHeapProbeResult, core::Error> verifyDescriptorHeap(
+        std::span<const std::uint32_t> computeShader,
+        std::span<const DescriptorHeapSampleQuery> queries);
     [[nodiscard]] std::expected<BufferHandle, core::Error> createBuffer(BufferDesc desc);
     // Byte offsets refer to the logical size. Only HostVisible buffers allow direct CPU access.
     [[nodiscard]] std::expected<void, core::Error>

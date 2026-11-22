@@ -308,6 +308,17 @@ fixtureGetPhysicalDeviceFeatures2(VkPhysicalDevice physical, VkPhysicalDeviceFea
             auto* address = reinterpret_cast<VkPhysicalDeviceBufferDeviceAddressFeatures*>(next);
             address->bufferDeviceAddress = spec.descriptorHeapPresent ? VK_TRUE : VK_FALSE;
         }
+        if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES) {
+            auto* indexing = reinterpret_cast<VkPhysicalDeviceDescriptorIndexingFeatures*>(next);
+            indexing->shaderSampledImageArrayNonUniformIndexing =
+                spec.descriptorHeapPresent ? VK_TRUE : VK_FALSE;
+        }
+#if defined(VK_VERSION_1_4)
+        if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES) {
+            auto* maint5 = reinterpret_cast<VkPhysicalDeviceMaintenance5Features*>(next);
+            maint5->maintenance5 = spec.descriptorHeapPresent ? VK_TRUE : VK_FALSE;
+        }
+#endif
 #if defined(VK_EXT_descriptor_heap)
         if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT) {
             auto* heap = reinterpret_cast<VkPhysicalDeviceDescriptorHeapFeaturesEXT*>(next);

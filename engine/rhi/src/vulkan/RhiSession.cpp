@@ -23,6 +23,8 @@
 #include "TestingHooks.h"
 #include "VulkanResult.h"
 #include "binding/DescriptorHeapLayout.h"
+#include "binding/DescriptorHeapProbe.h"
+#include "binding/DescriptorHeapTable.h"
 #include "binding/SetBindingLimits.h"
 #include "binding/SetBindingTable.h"
 #include "resources/DeviceResources.h"
@@ -267,6 +269,12 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorStage::Validation,
             "Descriptor Set binding requires a graphics device");
     }
+    if (config.enableDescriptorHeap && config.enableSetBinding) {
+        return makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "choose either Descriptor Set or Descriptor Heap binding");
+    }
     if (config.enableDescriptorHeap &&
         (!config.createGraphicsDevice || version < VK_API_VERSION_1_4)) {
         return makeError(
@@ -359,6 +367,7 @@ struct RhiSession::Impl {
     std::optional<detail::StaticSceneDraw> staticScene;
     std::array<std::optional<detail::DeviceResources>, 2> cullFrames;
     std::optional<detail::SetBindingTable> setBinding;
+    detail::DescriptorHeapDispatch heapDispatch{};
     ImageHandle retirementImage;
     VkImageView replacementView = VK_NULL_HANDLE;
     unsigned retirementFrame = 0;
@@ -400,7 +409,8 @@ struct RhiSession::Impl {
                 graphicsDevice,
                 graphicsQueue,
                 graphicsInfo->graphicsQueueFamily,
-                compatibilityVersion(config.requestedApi));
+                compatibilityVersion(config.requestedApi),
+                config.enableDescriptorHeap);
         }
         return &*resources;
     }
@@ -917,15 +927,24 @@ struct RhiSession::Impl {
 
         VkPhysicalDeviceBufferDeviceAddressFeatures address{};
         address.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+        VkPhysicalDeviceDescriptorIndexingFeatures heapIndexing{};
+        heapIndexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+        VkPhysicalDeviceMaintenance5Features heapMaint5{};
+        heapMaint5.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES;
         VkPhysicalDeviceFeatures2 features{};
         features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         features.pNext = &address;
+        address.pNext = &heapIndexing;
+        heapIndexing.pNext = &heapMaint5;
         vkGetPhysicalDeviceFeatures2(physical, &features);
-        if (address.bufferDeviceAddress != VK_TRUE) {
+        if (address.bufferDeviceAddress != VK_TRUE ||
+            heapIndexing.shaderSampledImageArrayNonUniformIndexing != VK_TRUE ||
+            heapMaint5.maintenance5 != VK_TRUE) {
             return std::unexpected(makeError(
                 core::ErrorCategory::QueryFailed,
                 core::ErrorStage::Capability,
-                "Descriptor Heap requires bufferDeviceAddress"));
+                "Descriptor Heap requires bufferDeviceAddress, non-uniform sampled image "
+                "indexing, and maintenance5"));
         }
 
         VkPhysicalDeviceDescriptorHeapPropertiesEXT heap{};
@@ -987,6 +1006,8 @@ struct RhiSession::Impl {
         std::vector<const char*> extensions;
         std::optional<DescriptorHeapLimits> heapLimits;
         VkPhysicalDeviceBufferDeviceAddressFeatures address{};
+        VkPhysicalDeviceDescriptorIndexingFeatures heapIndexing{};
+        VkPhysicalDeviceMaintenance5Features heapMaint5{};
         VkPhysicalDeviceDescriptorHeapFeaturesEXT heap{};
         if (config.enableDescriptorHeap) {
             auto limits = queryHeapLimits(physical);
@@ -996,10 +1017,16 @@ struct RhiSession::Impl {
             heapLimits = *limits;
             address.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
             address.bufferDeviceAddress = VK_TRUE;
+            heapIndexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+            heapIndexing.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+            heapMaint5.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES;
+            heapMaint5.maintenance5 = VK_TRUE;
             heap.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT;
             heap.descriptorHeap = VK_TRUE;
             core13.pNext = &address;
-            address.pNext = &heap;
+            address.pNext = &heapIndexing;
+            heapIndexing.pNext = &heapMaint5;
+            heapMaint5.pNext = &heap;
             extensions.push_back(VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME);
         }
         VkPhysicalDeviceVulkan12Features draw12{
@@ -1153,25 +1180,38 @@ struct RhiSession::Impl {
         }
         graphicsPhysical = physical;
         if (heapLimits) {
-            for (const char* command :
-                 {"vkWriteResourceDescriptorsEXT",
-                  "vkWriteSamplerDescriptorsEXT",
-                  "vkCmdBindResourceHeapEXT",
-                  "vkCmdBindSamplerHeapEXT",
-                  "vkCmdPushDataEXT"}) {
-                if (vkGetDeviceProcAddr(graphicsDevice, command) == nullptr) {
+            const auto resolveHeapCommand = [&](const char* command) -> PFN_vkVoidFunction {
+                return vkGetDeviceProcAddr(graphicsDevice, command);
+            };
+            const std::array<std::pair<const char*, PFN_vkVoidFunction*>, 5> commands{{
+                {"vkWriteResourceDescriptorsEXT",
+                 reinterpret_cast<PFN_vkVoidFunction*>(&heapDispatch.writeResourceDescriptors)},
+                {"vkWriteSamplerDescriptorsEXT",
+                 reinterpret_cast<PFN_vkVoidFunction*>(&heapDispatch.writeSamplerDescriptors)},
+                {"vkCmdBindResourceHeapEXT",
+                 reinterpret_cast<PFN_vkVoidFunction*>(&heapDispatch.cmdBindResourceHeap)},
+                {"vkCmdBindSamplerHeapEXT",
+                 reinterpret_cast<PFN_vkVoidFunction*>(&heapDispatch.cmdBindSamplerHeap)},
+                {"vkCmdPushDataEXT",
+                 reinterpret_cast<PFN_vkVoidFunction*>(&heapDispatch.cmdPushData)},
+            }};
+            for (const auto& [command, slot] : commands) {
+                const PFN_vkVoidFunction entry = resolveHeapCommand(command);
+                if (entry == nullptr) {
+                    heapDispatch = {};
                     return std::unexpected(makeError(
                         core::ErrorCategory::LoaderSymbolMissing,
                         core::ErrorStage::Capability,
                         std::string("enabled Descriptor Heap has no device entry point: ") +
                             command));
                 }
+                *slot = entry;
             }
             emitEvent(
                 *diagnostics,
                 core::LogLevel::Info,
                 "rhi.device.descriptor-heap.enabled",
-                "VK_EXT_descriptor_heap enabled and write/bind device entry points resolved");
+                "VK_EXT_descriptor_heap enabled and write/bind/push device entry points resolved");
         }
         graphicsInfo =
             GraphicsDeviceInfo{families.graphics, debugMessenger != VK_NULL_HANDLE, heapLimits};
@@ -2018,6 +2058,31 @@ std::expected<std::array<std::uint32_t, 2>, core::Error> RhiSession::verifyGpuCu
         return std::unexpected(std::move(resources.error()));
     }
     return (*resources)->verifyGpuCull(planes, objects, shader, ids, commands);
+}
+
+std::expected<DescriptorHeapProbeResult, core::Error> RhiSession::verifyDescriptorHeap(
+    std::span<const std::uint32_t> computeShader,
+    std::span<const DescriptorHeapSampleQuery> queries) {
+    if (!m_impl->graphicsInfo || !m_impl->graphicsInfo->descriptorHeap) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "Descriptor Heap verification requires a session with Descriptor Heap enabled"));
+    }
+    auto resources = m_impl->resourcesForCreation();
+    if (!resources) {
+        return std::unexpected(std::move(resources.error()));
+    }
+    return detail::runDescriptorHeapProbe(
+        m_impl->graphicsPhysical,
+        m_impl->graphicsDevice,
+        m_impl->graphicsQueue,
+        m_impl->graphicsInfo->graphicsQueueFamily,
+        **resources,
+        *m_impl->graphicsInfo->descriptorHeap,
+        m_impl->heapDispatch,
+        computeShader,
+        queries);
 }
 
 std::expected<void, core::Error> RhiSession::replaceStaticScene(

@@ -74,6 +74,7 @@ set(AR_REQUIRED_RHI_CASES
     rhi-upload-retirement
     rhi-set-binding-limits
     rhi-descriptor-heap-layout
+    rhi-descriptor-heap-readback
     rhi-set-binding-retirement
     rhi-gpu-culling-reference
     rhi-set-binding-device
@@ -130,7 +131,7 @@ endforeach()
 
 set_tests_properties(rhi-device-create rhi-device-vulkan14-heap rhi-vma-buffer rhi-vma-image-view
     PROPERTIES LABELS gpu TIMEOUT 30)
-set_tests_properties(rhi-upload-readback rhi-upload-retirement rhi-set-binding-device rhi-gpu-culling-reference PROPERTIES LABELS gpu TIMEOUT 30
+set_tests_properties(rhi-upload-readback rhi-upload-retirement rhi-set-binding-device rhi-gpu-culling-reference rhi-descriptor-heap-readback PROPERTIES LABELS gpu TIMEOUT 30
     ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>;VK_VALIDATION_VALIDATE_SYNC=1")
 
 set(AR_REQUIRED_RUNTIME_CASES
@@ -355,4 +356,5 @@ set_tests_properties(scene-static-roundtrip PROPERTIES
 target_link_libraries(ar_rhi_tests PRIVATE ar_render)
 add_dependencies(ar_rhi_tests ar_triangle_shaders)
 target_compile_definitions(ar_rhi_tests PRIVATE
-    AR_GPU_CULL_SHADER=u8"${CMAKE_BINARY_DIR}/shaders/gpu_cull.comp.spv")
+    AR_GPU_CULL_SHADER=u8"${CMAKE_BINARY_DIR}/shaders/gpu_cull.comp.spv"
+    AR_HEAP_PROBE_SHADER=u8"${CMAKE_BINARY_DIR}/shaders/heap_probe.comp.spv")
