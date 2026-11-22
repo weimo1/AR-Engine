@@ -138,6 +138,13 @@ struct DescriptorHeapLimits {
     std::uint64_t maxResourceHeapSize = 0;
     std::uint64_t minSamplerHeapReservedRange = 0;
     std::uint64_t minResourceHeapReservedRange = 0;
+    std::uint64_t samplerDescriptorSize = 0;
+    std::uint64_t samplerDescriptorAlignment = 0;
+    std::uint64_t imageDescriptorSize = 0;
+    std::uint64_t imageDescriptorAlignment = 0;
+    std::uint64_t bufferDescriptorSize = 0;
+    std::uint64_t bufferDescriptorAlignment = 0;
+    std::uint64_t maxPushDataSize = 0;
 };
 
 struct GraphicsDeviceInfo {

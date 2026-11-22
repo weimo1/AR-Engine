@@ -17,6 +17,8 @@
 //   device-ext=ok|failed
 //   destroy=ok|missing      omit vkDestroyInstance from vkGetInstanceProcAddr
 //   heap=present|absent     advertise VK_EXT_descriptor_heap and its feature
+//   heap-entry=ok|missing-push-data omit vkCmdPushDataEXT from vkGetDeviceProcAddr
+//   heap-limits=ok|zero     report zero imageDescriptorSize in heap properties
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -45,6 +47,8 @@ struct Spec {
     bool deviceExtensionsFail = false;
     bool destroyUnavailable = false;
     bool descriptorHeapPresent = false;
+    bool missingPushData = false;
+    bool heapLimitsZero = false;
     std::string dynamicRendering;
     // Raw device-name bytes as hex, so a test can hand the runtime text that is not valid UTF-8.
     std::string deviceNameHex;
@@ -114,6 +118,10 @@ Spec readSpec() {
             spec.destroyUnavailable = value == "missing";
         } else if (key == "heap") {
             spec.descriptorHeapPresent = value == "present";
+        } else if (key == "heap-entry") {
+            spec.missingPushData = value == "missing-push-data";
+        } else if (key == "heap-limits") {
+            spec.heapLimitsZero = value == "zero";
         } else if (key == "dynamic") {
             spec.dynamicRendering = value;
         } else if (key == "device-name-hex") {
@@ -221,21 +229,54 @@ VKAPI_ATTR VkResult VKAPI_CALL fixtureEnumerateDeviceExtensionProperties(
     if (spec.deviceExtensionsFail) {
         return VK_ERROR_FEATURE_NOT_PRESENT;
     }
-    const std::uint32_t available = spec.descriptorHeapPresent ? 1U : 0U;
+    const std::uint32_t available = spec.descriptorHeapPresent ? 2U : 0U;
     if (properties == nullptr) {
         *count = available;
         return VK_SUCCESS;
     }
+    constexpr const char* kHeapExtensions[2] = {
+        "VK_EXT_descriptor_heap", "VK_KHR_shader_untyped_pointers"};
     std::uint32_t written = 0;
-    if (available > 0 && *count > 0) {
-        std::memset(properties[0].extensionName, 0, sizeof(properties[0].extensionName));
-        const char* name = "VK_EXT_descriptor_heap";
-        std::memcpy(properties[0].extensionName, name, std::strlen(name));
-        properties[0].specVersion = 1;
-        written = 1;
+    for (std::uint32_t index = 0; index < available && index < *count; ++index) {
+        std::memset(properties[index].extensionName, 0, sizeof(properties[index].extensionName));
+        const char* name = kHeapExtensions[index];
+        std::memcpy(properties[index].extensionName, name, std::strlen(name));
+        properties[index].specVersion = 1;
+        ++written;
     }
     *count = written;
-    return VK_SUCCESS;
+    return written < available ? VK_INCOMPLETE : VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL fixtureGetPhysicalDeviceProperties2(
+    VkPhysicalDevice physical, VkPhysicalDeviceProperties2* properties) {
+    if (properties == nullptr) {
+        return;
+    }
+    fixtureGetPhysicalDeviceProperties(physical, &properties->properties);
+    const Spec spec = currentSpec();
+    auto* next = static_cast<VkBaseOutStructure*>(properties->pNext);
+    while (next != nullptr) {
+#if defined(VK_EXT_descriptor_heap)
+        if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT) {
+            auto* heap = reinterpret_cast<VkPhysicalDeviceDescriptorHeapPropertiesEXT*>(next);
+            heap->samplerHeapAlignment = 128;
+            heap->resourceHeapAlignment = 256;
+            heap->maxSamplerHeapSize = 65536;
+            heap->maxResourceHeapSize = 1048576;
+            heap->minSamplerHeapReservedRange = 256;
+            heap->minResourceHeapReservedRange = 512;
+            heap->samplerDescriptorSize = 32;
+            heap->samplerDescriptorAlignment = 32;
+            heap->imageDescriptorSize = spec.heapLimitsZero ? 0 : 64;
+            heap->imageDescriptorAlignment = 32;
+            heap->bufferDescriptorSize = 32;
+            heap->bufferDescriptorAlignment = 16;
+            heap->maxPushDataSize = 128;
+        }
+#endif
+        next = next->pNext;
+    }
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -253,6 +294,19 @@ fixtureGetPhysicalDeviceFeatures2(VkPhysicalDevice physical, VkPhysicalDeviceFea
                                  (first && spec.dynamicRendering == "first-missing");
             core13->dynamicRendering = missing ? VK_FALSE : VK_TRUE;
             core13->synchronization2 = VK_TRUE;
+        }
+#if defined(VK_VERSION_1_4)
+        if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES) {
+            auto* core14 = reinterpret_cast<VkPhysicalDeviceVulkan14Features*>(next);
+            core14->maintenance5 = VK_TRUE;
+            core14->maintenance6 = VK_TRUE;
+            core14->dynamicRenderingLocalRead = VK_TRUE;
+            core14->hostImageCopy = VK_TRUE;
+        }
+#endif
+        if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES) {
+            auto* address = reinterpret_cast<VkPhysicalDeviceBufferDeviceAddressFeatures*>(next);
+            address->bufferDeviceAddress = spec.descriptorHeapPresent ? VK_TRUE : VK_FALSE;
         }
 #if defined(VK_EXT_descriptor_heap)
         if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT) {
@@ -339,6 +393,26 @@ fixtureGetDeviceQueue(VkDevice, std::uint32_t family, std::uint32_t index, VkQue
 
 VKAPI_ATTR void VKAPI_CALL fixtureDestroyDevice(VkDevice, const VkAllocationCallbacks*) {}
 
+VKAPI_ATTR void VKAPI_CALL fixtureHeapCommandStub() {}
+
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL fixtureGetDeviceProcAddr(VkDevice, const char* name) {
+    if (name == nullptr) {
+        return nullptr;
+    }
+    const Spec spec = currentSpec();
+    const std::string_view requested(name);
+    if (requested == "vkWriteResourceDescriptorsEXT" ||
+        requested == "vkWriteSamplerDescriptorsEXT" || requested == "vkCmdBindResourceHeapEXT" ||
+        requested == "vkCmdBindSamplerHeapEXT") {
+        return reinterpret_cast<PFN_vkVoidFunction>(&fixtureHeapCommandStub);
+    }
+    if (requested == "vkCmdPushDataEXT") {
+        return spec.missingPushData ? nullptr
+                                    : reinterpret_cast<PFN_vkVoidFunction>(&fixtureHeapCommandStub);
+    }
+    return nullptr;
+}
+
 } // namespace
 
 extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
@@ -365,6 +439,12 @@ vkGetInstanceProcAddr(VkInstance, const char* name) {
     }
     if (requested == "vkGetPhysicalDeviceProperties") {
         return reinterpret_cast<PFN_vkVoidFunction>(&fixtureGetPhysicalDeviceProperties);
+    }
+    if (requested == "vkGetPhysicalDeviceProperties2") {
+        return reinterpret_cast<PFN_vkVoidFunction>(&fixtureGetPhysicalDeviceProperties2);
+    }
+    if (requested == "vkGetDeviceProcAddr") {
+        return reinterpret_cast<PFN_vkVoidFunction>(&fixtureGetDeviceProcAddr);
     }
     if (requested == "vkEnumerateDeviceExtensionProperties") {
         return reinterpret_cast<PFN_vkVoidFunction>(&fixtureEnumerateDeviceExtensionProperties);

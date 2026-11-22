@@ -73,6 +73,7 @@ set(AR_REQUIRED_RHI_CASES
     rhi-resource-retirement
     rhi-upload-retirement
     rhi-set-binding-limits
+    rhi-descriptor-heap-layout
     rhi-set-binding-retirement
     rhi-gpu-culling-reference
     rhi-set-binding-device

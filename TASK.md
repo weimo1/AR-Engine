@@ -124,6 +124,19 @@
 - [x] T36 GPU 剔除、Graph Buffer 同步与索引间接绘制。CPU/GPU 可见集合、GBuffer 与 PNG 一致，双配置各 86/86 零警告，DSH 独立评审 27/27 通过。
   - 验收：`sample-static-scene-gpu-driven` 同场景对照 CPU 可见集合与像素，覆盖零可见和容量边界。
 
+### P5 Vulkan 1.4 Descriptor Heap 独立原型
+
+参见 [P5 第一批方案](openspec/changes/p5-descriptor-heap/design.md)。保留 Vulkan 1.3 Descriptor Set 路径；先验证独立原型，通过后再进入第二批同场景 Set/Heap 对照。
+
+- [x] T37 Descriptor Heap 能力扩展、纯 CPU 布局规划与槽位生命周期。真机 RTX 4060（API 1.4.357）实际启用 Heap 并通过全字段规划，`rhi-descriptor-heap-layout` 与双配置 87/87 零告警通过，DSH 独立评审 15/15 PASS。
+  - 验收：`rhi-descriptor-heap-layout` 核对步长/对齐/保留区、溢出与超限拒绝、fixture 缺能力/缺 `vkCmdPushDataEXT` 拒绝及槽位退役复用。
+- [ ] T38 Descriptor Heap 分配、写入、绑定与 Shader 数值读回
+  - 验收：`rhi-descriptor-heap-readback`（标签 `gpu`）在真机验证对齐地址、默认槽、多纹理槽与 nearest/linear sampler 读回及 Debug Validation 零错误。
+- [ ] T39 Descriptor Heap 在途槽位退役与底层图像保护
+  - 验收：`rhi-descriptor-heap-retirement` 验证旧句柄立即失效、在途完成前保护槽位与底层 Image、完成后覆写默认描述符并安全复用及有序关闭。
+- [ ] T40 [人工] P5 第一批独立原型验收
+  - 用户确认真机数值读回、在途退役保护与 Validation 证据，决定进入 P5 第二批（同场景 Set/Heap 对照）。
+
 ## 人工待办（不阻塞队列）
 
 - 云端 “Engine CPU build and test” 使用 `--no-gpu`，已配置自动触发与 vcpkg 二进制缓存。后续通过对应提交的 GitHub Actions 日志核对 Windows runner 与缓存命中。
@@ -131,6 +144,8 @@
 - 首次使用自动循环前：修正 Codex CLI 的默认模型（见 [自动运行](docs/workflow/自动运行.md) 的注意事项），设置 `CLAUDE_CODE_GIT_BASH_PATH`，然后用 `--max-tasks 1` 试跑 T01。
 
 ## 待办池（建议级，不阻塞）
+
+- T37 评审提示：若后续需要 buffer-only/sampler-less Heap 布局再放开 `imageCount`/`samplerCount >= 1` 限制；`bufferCount == 0` 时调用方不得引用 `bufferBaseOffset`；启用日志文案可补充 push data 入口，T38 按需扩展 fixture 的 `vkGetDeviceProcAddr`。
 
 - T36 评审建议：补缺少间接绘制特性时的直接绘制回退验证，以及显式容量为零的测试。
 

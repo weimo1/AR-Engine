@@ -22,6 +22,7 @@
 #include "Presentation.h"
 #include "TestingHooks.h"
 #include "VulkanResult.h"
+#include "binding/DescriptorHeapLayout.h"
 #include "binding/SetBindingLimits.h"
 #include "binding/SetBindingTable.h"
 #include "resources/DeviceResources.h"
@@ -211,13 +212,16 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
         if (!config.enableGBuffer || !validSpirv(lighting.vertex) ||
             !validSpirv(lighting.directFragment) || !validSpirv(lighting.displayFragment) ||
             !std::isfinite(lighting.exposureEV) || std::abs(lighting.exposureEV) > 16.F) {
-            return makeError(core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation,
-                             "deferred lighting requires GBuffer, valid SPIR-V and EV in [-16, 16]");
+            return makeError(
+                core::ErrorCategory::InvalidArguments,
+                core::ErrorStage::Validation,
+                "deferred lighting requires GBuffer, valid SPIR-V and EV in [-16, 16]");
         }
     }
     if (config.enableGBuffer && !config.enableStaticScene) {
         return makeError(
-            core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation,
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
             "GBuffer requires static scene presentation");
     }
     if (config.staticIndirect) {
@@ -239,7 +243,8 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
         (!config.presentation || !config.triangleShaders || config.gpuDriven ||
          config.enableSetBindingSample || (config.enableSetBinding && !config.enableGBuffer))) {
         return makeError(
-            core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation,
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
             "static scene requires presentation and dedicated graphics shaders");
     }
     if (config.verifyBindingRetirement &&
@@ -929,21 +934,27 @@ struct RhiSession::Impl {
         properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
         properties.pNext = &heap;
         vkGetPhysicalDeviceProperties2(physical, &properties);
-        if (heap.samplerHeapAlignment == 0 || heap.resourceHeapAlignment == 0 ||
-            heap.maxSamplerHeapSize <= heap.minSamplerHeapReservedRange ||
-            heap.maxResourceHeapSize <= heap.minResourceHeapReservedRange) {
-            return std::unexpected(makeError(
-                core::ErrorCategory::QueryFailed,
-                core::ErrorStage::Capability,
-                "Vulkan reports unusable Descriptor Heap limits"));
-        }
-        return DescriptorHeapLimits{
+        const DescriptorHeapLimits limits{
             heap.samplerHeapAlignment,
             heap.resourceHeapAlignment,
             heap.maxSamplerHeapSize,
             heap.maxResourceHeapSize,
             heap.minSamplerHeapReservedRange,
-            heap.minResourceHeapReservedRange};
+            heap.minResourceHeapReservedRange,
+            heap.samplerDescriptorSize,
+            heap.samplerDescriptorAlignment,
+            heap.imageDescriptorSize,
+            heap.imageDescriptorAlignment,
+            heap.bufferDescriptorSize,
+            heap.bufferDescriptorAlignment,
+            heap.maxPushDataSize};
+        if (!detail::validateDescriptorHeapLimits(limits)) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::QueryFailed,
+                core::ErrorStage::Capability,
+                "Vulkan reports unusable Descriptor Heap limits"));
+        }
+        return limits;
     }
 
     std::expected<void, core::Error>
@@ -1146,7 +1157,8 @@ struct RhiSession::Impl {
                  {"vkWriteResourceDescriptorsEXT",
                   "vkWriteSamplerDescriptorsEXT",
                   "vkCmdBindResourceHeapEXT",
-                  "vkCmdBindSamplerHeapEXT"}) {
+                  "vkCmdBindSamplerHeapEXT",
+                  "vkCmdPushDataEXT"}) {
                 if (vkGetDeviceProcAddr(graphicsDevice, command) == nullptr) {
                     return std::unexpected(makeError(
                         core::ErrorCategory::LoaderSymbolMissing,
@@ -2017,20 +2029,25 @@ std::expected<void, core::Error> RhiSession::replaceStaticScene(
     const StaticIndirectGeometry* indirect) {
     if (m_impl->closed || !m_impl->staticScene || !m_impl->presenter) {
         return std::unexpected(makeError(
-            core::ErrorCategory::InvalidState, core::ErrorStage::Capability,
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
             "no active static scene presenter"));
     }
 #ifndef AR_ENABLE_TEST_HOOKS
     if (verifyRollback) {
         return std::unexpected(makeError(
-            core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation,
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
             "static scene rollback verification requires test hooks"));
     }
 #endif
     auto candidate = m_impl->staticScene->prepare(meshes, draws, verifyRollback);
     if (!candidate) {
-        emitEvent(*m_impl->diagnostics, core::LogLevel::Info, "rhi.static-scene.rollback",
-                  candidate.error().message);
+        emitEvent(
+            *m_impl->diagnostics,
+            core::LogLevel::Info,
+            "rhi.static-scene.rollback",
+            candidate.error().message);
         return std::unexpected(candidate.error());
     }
     auto indirectCandidate = m_impl->staticScene->prepareIndirect(*candidate, indirect);
@@ -2047,8 +2064,11 @@ std::expected<void, core::Error> RhiSession::replaceStaticScene(
         !published) {
         return published;
     }
-    emitEvent(*m_impl->diagnostics, core::LogLevel::Info, "rhi.static-scene.ready",
-              "draws=" + std::to_string(draws.size()));
+    emitEvent(
+        *m_impl->diagnostics,
+        core::LogLevel::Info,
+        "rhi.static-scene.ready",
+        "draws=" + std::to_string(draws.size()));
     return {};
 }
 

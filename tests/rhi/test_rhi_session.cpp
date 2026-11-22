@@ -18,6 +18,7 @@
 #include "core/Diagnostics.h"
 #include "rhi/RhiSession.h"
 #include "render/CullReference.h"
+#include "vulkan/binding/DescriptorHeapLayout.h"
 #include "vulkan/binding/SetBindingLimits.h"
 #include "vulkan/binding/SetBindingSlots.h"
 #include "vulkan/resources/ResourceLifetime.h"
@@ -523,12 +524,23 @@ TEST_CASE(
         REQUIRE(info->descriptorHeap.has_value());
         CHECK(info->descriptorHeap->resourceHeapAlignment > 0);
         CHECK(info->descriptorHeap->samplerHeapAlignment > 0);
+        CHECK(info->descriptorHeap->imageDescriptorSize > 0);
+        CHECK(info->descriptorHeap->imageDescriptorAlignment > 0);
+        CHECK(info->descriptorHeap->samplerDescriptorSize > 0);
+        CHECK(info->descriptorHeap->samplerDescriptorAlignment > 0);
+        CHECK(info->descriptorHeap->bufferDescriptorSize > 0);
+        CHECK(info->descriptorHeap->bufferDescriptorAlignment > 0);
+        CHECK(info->descriptorHeap->maxPushDataSize > 0);
         CHECK(
             info->descriptorHeap->maxResourceHeapSize >
             info->descriptorHeap->minResourceHeapReservedRange);
         CHECK(
             info->descriptorHeap->maxSamplerHeapSize >
             info->descriptorHeap->minSamplerHeapReservedRange);
+        const auto plan = rhi::detail::planDescriptorHeaps(*info->descriptorHeap, {8, 2, 4});
+        REQUIRE(plan.has_value());
+        CHECK(plan->resourceHeapSize <= info->descriptorHeap->maxResourceHeapSize);
+        CHECK(plan->samplerHeapSize <= info->descriptorHeap->maxSamplerHeapSize);
         CHECK(session.close().resourcesReleased);
     } else {
         REQUIRE_FALSE(opened.has_value());
@@ -1206,4 +1218,204 @@ TEST_CASE("GPU culling matches the fixed CPU reference", "[rhi-gpu-culling-refer
     CHECK((*session)->close().resourcesReleased);
     finishSession(*diagnostics, runId);
     CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
+}
+
+TEST_CASE(
+    "descriptor heap layout enforces alignment, reserved ranges, limits and slot retirement",
+    "[rhi-descriptor-heap-layout]") {
+    using rhi::DescriptorHeapLimits;
+    using rhi::detail::DescriptorHeapCapacity;
+    using rhi::detail::DescriptorHeapLayoutError;
+    using rhi::detail::planDescriptorHeaps;
+
+    DescriptorHeapLimits limits{};
+    limits.samplerHeapAlignment = 128;
+    limits.resourceHeapAlignment = 256;
+    limits.maxSamplerHeapSize = 1024;
+    limits.maxResourceHeapSize = 4096;
+    limits.minSamplerHeapReservedRange = 256;
+    limits.minResourceHeapReservedRange = 512;
+    limits.samplerDescriptorSize = 20;
+    limits.samplerDescriptorAlignment = 16;
+    limits.imageDescriptorSize = 48;
+    limits.imageDescriptorAlignment = 32;
+    limits.bufferDescriptorSize = 24;
+    limits.bufferDescriptorAlignment = 16;
+    limits.maxPushDataSize = 128;
+
+    const auto planned = planDescriptorHeaps(limits, DescriptorHeapCapacity{5, 2, 3});
+    REQUIRE(planned.has_value());
+    CHECK(planned->imageStride == 64);
+    CHECK(planned->imageRegionSize == 320);
+    CHECK(planned->bufferBaseOffset == 320);
+    CHECK(planned->bufferStride == 32);
+    CHECK(planned->bufferRegionSize == 64);
+    CHECK(planned->resourceReservedOffset == 512);
+    CHECK(planned->resourceReservedSize == 512);
+    CHECK(planned->resourceHeapSize == 1024);
+    CHECK(planned->samplerStride == 32);
+    CHECK(planned->samplerRegionSize == 96);
+    CHECK(planned->samplerReservedOffset == 128);
+    CHECK(planned->samplerReservedSize == 256);
+    CHECK(planned->samplerHeapSize == 384);
+
+    // Non-multiple image region aligns up to bufferDescriptorAlignment.
+    auto bufferAligned = limits;
+    bufferAligned.imageDescriptorSize = 32;
+    bufferAligned.imageDescriptorAlignment = 32;
+    bufferAligned.bufferDescriptorSize = 48;
+    bufferAligned.bufferDescriptorAlignment = 64;
+    const auto padded = planDescriptorHeaps(bufferAligned, DescriptorHeapCapacity{3, 1, 2});
+    REQUIRE(padded.has_value());
+    CHECK(padded->imageRegionSize == 96);
+    CHECK(padded->bufferBaseOffset == 128);
+    CHECK(padded->bufferStride == 64);
+    CHECK(padded->resourceReservedOffset == 256);
+
+    // Zero buffer slots is valid.
+    const auto noBuffers = planDescriptorHeaps(limits, DescriptorHeapCapacity{2, 0, 2});
+    REQUIRE(noBuffers.has_value());
+    CHECK(noBuffers->bufferRegionSize == 0);
+    CHECK(noBuffers->bufferBaseOffset == noBuffers->imageRegionSize);
+
+    // Reject invalid limits.
+    {
+        auto bad = limits;
+        bad.resourceHeapAlignment = 48;
+        const auto rejected = planDescriptorHeaps(bad, {2, 1, 2});
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error() == DescriptorHeapLayoutError::InvalidLimits);
+    }
+    {
+        auto bad = limits;
+        bad.imageDescriptorSize = 0;
+        const auto rejected = planDescriptorHeaps(bad, {2, 1, 2});
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error() == DescriptorHeapLayoutError::InvalidLimits);
+    }
+    {
+        auto bad = limits;
+        bad.maxPushDataSize = 0;
+        const auto rejected = planDescriptorHeaps(bad, {2, 1, 2});
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error() == DescriptorHeapLayoutError::InvalidLimits);
+    }
+    {
+        auto bad = limits;
+        bad.maxSamplerHeapSize = bad.minSamplerHeapReservedRange;
+        const auto rejected = planDescriptorHeaps(bad, {2, 1, 2});
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error() == DescriptorHeapLayoutError::InvalidLimits);
+    }
+
+    // Reject zero image or sampler capacity (slot 0 holds defaults).
+    {
+        const auto rejected = planDescriptorHeaps(limits, {0, 1, 2});
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error() == DescriptorHeapLayoutError::InvalidCapacity);
+    }
+    {
+        const auto rejected = planDescriptorHeaps(limits, {2, 1, 0});
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error() == DescriptorHeapLayoutError::InvalidCapacity);
+    }
+
+    // Reject heap size exceedance.
+    {
+        const auto rejected = planDescriptorHeaps(limits, {64, 1, 2});
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error() == DescriptorHeapLayoutError::ResourceHeapExceeded);
+    }
+    {
+        const auto rejected = planDescriptorHeaps(limits, {2, 1, 32});
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error() == DescriptorHeapLayoutError::SamplerHeapExceeded);
+    }
+
+    // Reject arithmetic overflow in alignUp or multiplication.
+    {
+        auto huge = limits;
+        huge.imageDescriptorSize = (std::numeric_limits<std::uint64_t>::max)() - 8;
+        huge.maxResourceHeapSize = (std::numeric_limits<std::uint64_t>::max)();
+        const auto rejected = planDescriptorHeaps(huge, {2, 0, 1});
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error() == DescriptorHeapLayoutError::Overflow);
+    }
+    {
+        auto huge = limits;
+        huge.imageDescriptorSize = (std::numeric_limits<std::uint64_t>::max)() / 4;
+        huge.imageDescriptorAlignment = 1;
+        huge.maxResourceHeapSize = (std::numeric_limits<std::uint64_t>::max)();
+        const auto rejected = planDescriptorHeaps(huge, {8, 0, 1});
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error() == DescriptorHeapLayoutError::Overflow);
+    }
+
+    // Heap slot retirement reuses the generational slot state machine.
+    {
+        rhi::detail::SetBindingSlots<std::uint32_t, 4> slots{100u, 2};
+        const auto handle = slots.registerPending(201u);
+        REQUIRE(handle.has_value());
+        CHECK_FALSE(slots.resolve(*handle).has_value());
+        CHECK(slots.applyCompleted(true, true));
+        REQUIRE(slots.resolve(*handle) == 1u);
+        CHECK(slots.retire(*handle));
+        CHECK_FALSE(slots.resolve(*handle).has_value());
+        CHECK(slots.descriptor(1) == 201u);
+        CHECK_FALSE(slots.applyCompleted(true, false));
+        CHECK(slots.descriptor(1) == 201u);
+        CHECK_FALSE(slots.registerPending(202u).has_value());
+        std::uint32_t released = 0;
+        CHECK(slots.applyCompleted(
+            true,
+            true,
+            [](std::size_t, std::uint32_t) {},
+            [&](std::uint32_t value) { released = value; }));
+        CHECK(released == 201u);
+        CHECK(slots.descriptor(1) == 100u);
+        const auto reused = slots.registerPending(202u);
+        REQUIRE(reused.has_value());
+        CHECK(reused->slot == 1u);
+        CHECK(reused->generation > handle->generation);
+    }
+
+    // Fixture checks for Vulkan 1.4 Descriptor Heap entry points and limits.
+    const std::string runId = "rhi-descriptor-heap-layout";
+    auto diagnostics = makeSession(freshRunDirectory(runId), runId);
+    {
+        auto config = fixtureConfig("device=1.4;heap=present;heap-entry=missing-push-data");
+        config.createGraphicsDevice = true;
+        config.enableDescriptorHeap = true;
+        auto opened = rhi::RhiSession::open(config, *diagnostics);
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().error.category == core::ErrorCategory::LoaderSymbolMissing);
+        CHECK(opened.error().error.message.find("vkCmdPushDataEXT") != std::string::npos);
+        CHECK(opened.error().residualResources.empty());
+    }
+    {
+        auto config = fixtureConfig("device=1.4;heap=present;heap-limits=zero");
+        config.createGraphicsDevice = true;
+        config.enableDescriptorHeap = true;
+        auto opened = rhi::RhiSession::open(config, *diagnostics);
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().error.category == core::ErrorCategory::QueryFailed);
+        CHECK(opened.error().residualResources.empty());
+    }
+    {
+        auto config = fixtureConfig("device=1.4;heap=present");
+        config.createGraphicsDevice = true;
+        config.enableDescriptorHeap = true;
+        auto opened = rhi::RhiSession::open(config, *diagnostics);
+        INFO((opened ? "" : opened.error().error.message));
+        REQUIRE(opened.has_value());
+        const auto info = (*opened)->graphicsDeviceInfo();
+        REQUIRE(info.has_value());
+        REQUIRE(info->descriptorHeap.has_value());
+        const auto fixturePlan = planDescriptorHeaps(*info->descriptorHeap, {8, 2, 4});
+        REQUIRE(fixturePlan.has_value());
+        CHECK(fixturePlan->resourceHeapSize <= info->descriptorHeap->maxResourceHeapSize);
+        CHECK(fixturePlan->samplerHeapSize <= info->descriptorHeap->maxSamplerHeapSize);
+        CHECK((*opened)->close().resourcesReleased);
+    }
+    finishSession(*diagnostics, runId);
 }
