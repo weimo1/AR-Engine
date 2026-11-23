@@ -143,7 +143,7 @@
 
 - [x] T41 每帧相机视图与静态场景解耦。新增 `rhi::FrameView`、`render::buildFrameView`、`RhiSession::setFrameView` 与 `RuntimeSession::setCamera`，间接路径双帧槽 128B UBO 每帧更新、不重传静态网格/贴图/SSBO（`staticSceneUploadCount == 1`）；`render-frame-view` 与 `sample-camera-view-update`（含直接/间接及 Debug Sync Validation）全过，双配置 91/91 零告警，DSH 独立评审 28/28 PASS。
   - 验收：`render-frame-view`（CPU）与 `sample-camera-view-update`（标签 `gpu`）验证移动/旋转相机不重传静态网格、贴图与 SSBO（`staticSceneUploadCount == 1`），可见集合、Reverse-Z 深度、视图位置与复位像素正确，Debug Sync Validation 零错误。
-- [ ] T42a 测试验证入口从 RhiSession 主头剥离
+- [x] T42a 测试验证入口从 RhiSession 主头剥离。新增公开验证头 `rhi/RhiVerification.h` 承接 `verifyGpuCull`、`verifyDescriptorHeap`、`verifyDescriptorHeapRetirement` 及探针结果类型，主头仅保留私有友元转发；`header_rhi_verification` 独立编译探针与负向 concept 断言生效，双配置 91/91 零告警，DSH 独立评审 9/9 PASS。
   - 验收：`verifyGpuCull`、`verifyDescriptorHeap`、`verifyDescriptorHeapRetirement` 及探针结果类型迁至 `rhi/RhiVerification.h`，`public-headers` 与全量用例通过。
 - [ ] T42b 渲染管线规格与 RenderGraph Pass 编排归位 render
   - 验收：GBuffer/延迟光照/IBL 管线配置、探针解码与 Pass 声明由 `render` 驱动，`rhi` 收窄为设备、资源、绑定与执行原语，既有全部渲染回归维持原容差、零告警零 Validation 错误。

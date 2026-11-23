@@ -18,4 +18,18 @@ ar::rhi::CloseResult makeClosed() {
     return result;
 }
 
+template <class Session>
+concept HasVerificationMembers = requires(
+                                     Session& session,
+                                     std::span<const std::byte> bytes,
+                                     std::span<const std::uint32_t> words,
+                                     std::span<std::uint32_t> ids,
+                                     std::span<std::array<std::uint32_t, 4>> commands) {
+    session.verifyGpuCull(bytes, bytes, words, ids, commands);
+} || requires(Session& session, std::span<const std::uint32_t> words) {
+    session.verifyDescriptorHeapRetirement(words);
+};
+
+static_assert(!HasVerificationMembers<ar::rhi::RhiSession>);
+
 } // namespace

@@ -24,6 +24,10 @@
 
 namespace ar::rhi {
 
+namespace detail {
+struct VerificationAccess;
+}
+
 struct TransferToken {
     std::uint64_t value = 0;
 };
@@ -147,56 +151,6 @@ struct DescriptorHeapLimits {
     std::uint64_t maxPushDataSize = 0;
 };
 
-struct DescriptorHeapSampleQuery {
-    std::uint32_t imageSlot = 0;
-    std::uint32_t samplerSlot = 0;
-    float u = 0.F;
-    float v = 0.F;
-};
-
-struct DescriptorHeapProbeResult {
-    std::uint64_t resourceHeapAddress = 0;
-    std::uint64_t samplerHeapAddress = 0;
-    std::vector<std::array<float, 4>> samples;
-};
-
-struct DescriptorHeapRetirementResult {
-    std::uint32_t retiredImageSlot = 0;
-    std::uint64_t retiredImageGeneration = 0;
-    std::uint32_t reusedImageSlot = 0;
-    std::uint64_t reusedImageGeneration = 0;
-    std::uint32_t retiredSamplerSlot = 0;
-    std::uint64_t retiredSamplerGeneration = 0;
-    std::uint32_t reusedSamplerSlot = 0;
-    std::uint64_t reusedSamplerGeneration = 0;
-
-    bool pendingRetireFreedImmediately = false;
-    bool pendingImageDestroySucceeded = false;
-    bool staleImageHandleRejectedOnRetire = false;
-    bool duplicateImageRetireRejected = false;
-    bool incompletePublishDeferred = false;
-    bool inFlightDestroyRejected = false;
-    bool inFlightUploadRejected = false;
-    bool inFlightReadbackRejected = false;
-    bool inFlightReuseBlocked = false;
-    bool staleSamplerHandleRejectedOnRetire = false;
-    bool duplicateSamplerRetireRejected = false;
-    bool inFlightSamplerReuseBlocked = false;
-    bool completedPublishApplied = false;
-    bool postCompletionReadbackSucceeded = false;
-    bool postCompletionUploadSucceeded = false;
-    bool postCompletionDestroySucceeded = false;
-    bool staleHandleRejectedAfterReuse = false;
-    bool orderedCloseReleasedActiveSlotImage = false;
-
-    std::array<float, 4> inFlightRetiredImageSample{};
-    std::array<float, 4> inFlightRetiredSamplerSample{};
-    std::array<float, 4> postRetirementDefaultImageSample{};
-    std::array<float, 4> postRetirementDefaultSamplerSample{};
-    std::array<float, 4> reusedImageSample{};
-    std::array<float, 4> reusedSamplerSample{};
-};
-
 struct GraphicsDeviceInfo {
     std::uint32_t graphicsQueueFamily = 0;
     bool validationEnabled = false;
@@ -256,19 +210,6 @@ public:
     [[nodiscard]] std::expected<void, core::Error>
     replaceEnvironment(const EnvironmentUpload& upload, bool verifyRollback = false);
 
-    // Explicit synchronous verification path. Object records use the 32-byte std430 layout.
-    std::expected<std::array<std::uint32_t, 2>, core::Error> verifyGpuCull(
-        std::span<const std::byte> planes,
-        std::span<const std::byte> objects,
-        std::span<const std::uint32_t> shader,
-        std::span<std::uint32_t> ids,
-        std::span<std::array<std::uint32_t, 4>> commands);
-    // Explicit synchronous Vulkan 1.4 Descriptor Heap verification paths.
-    [[nodiscard]] std::expected<DescriptorHeapProbeResult, core::Error> verifyDescriptorHeap(
-        std::span<const std::uint32_t> computeShader,
-        std::span<const DescriptorHeapSampleQuery> queries);
-    [[nodiscard]] std::expected<DescriptorHeapRetirementResult, core::Error>
-    verifyDescriptorHeapRetirement(std::span<const std::uint32_t> computeShader);
     [[nodiscard]] std::expected<BufferHandle, core::Error> createBuffer(BufferDesc desc);
     // Byte offsets refer to the logical size. Only HostVisible buffers allow direct CPU access.
     [[nodiscard]] std::expected<void, core::Error>
@@ -299,6 +240,7 @@ public:
 
 private:
     struct Impl;
+    friend struct detail::VerificationAccess;
 
     explicit RhiSession(std::unique_ptr<Impl> impl) noexcept;
 

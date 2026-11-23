@@ -1,4 +1,5 @@
 #include "rhi/RhiSession.h"
+#include "rhi/RhiVerification.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -2048,64 +2049,79 @@ RhiSession::presentFrame(std::uint32_t width, std::uint32_t height, FrameScreens
     return result;
 }
 
-std::expected<std::array<std::uint32_t, 2>, core::Error> RhiSession::verifyGpuCull(
+namespace detail {
+
+struct VerificationAccess {
+    static RhiSession::Impl& impl(RhiSession& session) noexcept {
+        return *session.m_impl;
+    }
+};
+
+} // namespace detail
+
+std::expected<std::array<std::uint32_t, 2>, core::Error> verifyGpuCull(
+    RhiSession& session,
     std::span<const std::byte> planes,
     std::span<const std::byte> objects,
     std::span<const std::uint32_t> shader,
     std::span<std::uint32_t> ids,
     std::span<std::array<std::uint32_t, 4>> commands) {
-    auto resources = m_impl->resourcesForCreation();
+    auto& impl = detail::VerificationAccess::impl(session);
+    auto resources = impl.resourcesForCreation();
     if (!resources) {
         return std::unexpected(std::move(resources.error()));
     }
     return (*resources)->verifyGpuCull(planes, objects, shader, ids, commands);
 }
 
-std::expected<DescriptorHeapProbeResult, core::Error> RhiSession::verifyDescriptorHeap(
+std::expected<DescriptorHeapProbeResult, core::Error> verifyDescriptorHeap(
+    RhiSession& session,
     std::span<const std::uint32_t> computeShader,
     std::span<const DescriptorHeapSampleQuery> queries) {
-    if (!m_impl->graphicsInfo || !m_impl->graphicsInfo->descriptorHeap) {
+    auto& impl = detail::VerificationAccess::impl(session);
+    if (!impl.graphicsInfo || !impl.graphicsInfo->descriptorHeap) {
         return std::unexpected(makeError(
             core::ErrorCategory::InvalidState,
             core::ErrorStage::Capability,
             "Descriptor Heap verification requires a session with Descriptor Heap enabled"));
     }
-    auto resources = m_impl->resourcesForCreation();
+    auto resources = impl.resourcesForCreation();
     if (!resources) {
         return std::unexpected(std::move(resources.error()));
     }
     return detail::runDescriptorHeapProbe(
-        m_impl->graphicsPhysical,
-        m_impl->graphicsDevice,
-        m_impl->graphicsQueue,
-        m_impl->graphicsInfo->graphicsQueueFamily,
+        impl.graphicsPhysical,
+        impl.graphicsDevice,
+        impl.graphicsQueue,
+        impl.graphicsInfo->graphicsQueueFamily,
         **resources,
-        *m_impl->graphicsInfo->descriptorHeap,
-        m_impl->heapDispatch,
+        *impl.graphicsInfo->descriptorHeap,
+        impl.heapDispatch,
         computeShader,
         queries);
 }
 
 std::expected<DescriptorHeapRetirementResult, core::Error>
-RhiSession::verifyDescriptorHeapRetirement(std::span<const std::uint32_t> computeShader) {
-    if (!m_impl->graphicsInfo || !m_impl->graphicsInfo->descriptorHeap) {
+verifyDescriptorHeapRetirement(RhiSession& session, std::span<const std::uint32_t> computeShader) {
+    auto& impl = detail::VerificationAccess::impl(session);
+    if (!impl.graphicsInfo || !impl.graphicsInfo->descriptorHeap) {
         return std::unexpected(makeError(
             core::ErrorCategory::InvalidState,
             core::ErrorStage::Capability,
             "Descriptor Heap verification requires a session with Descriptor Heap enabled"));
     }
-    auto resources = m_impl->resourcesForCreation();
+    auto resources = impl.resourcesForCreation();
     if (!resources) {
         return std::unexpected(std::move(resources.error()));
     }
     return detail::runDescriptorHeapRetirementProbe(
-        m_impl->graphicsPhysical,
-        m_impl->graphicsDevice,
-        m_impl->graphicsQueue,
-        m_impl->graphicsInfo->graphicsQueueFamily,
+        impl.graphicsPhysical,
+        impl.graphicsDevice,
+        impl.graphicsQueue,
+        impl.graphicsInfo->graphicsQueueFamily,
         **resources,
-        *m_impl->graphicsInfo->descriptorHeap,
-        m_impl->heapDispatch,
+        *impl.graphicsInfo->descriptorHeap,
+        impl.heapDispatch,
         computeShader);
 }
 

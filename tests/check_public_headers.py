@@ -20,6 +20,7 @@ EXPECTED_STEMS = (
     "header_rhi_buffer",
     "header_rhi_image",
     "header_rhi_session",
+    "header_rhi_verification",
     "header_runtime_config",
     "header_runtime_session",
     "header_platform_window",

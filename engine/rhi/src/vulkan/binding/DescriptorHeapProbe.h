@@ -9,6 +9,7 @@
 #include "binding/DescriptorHeapTable.h"
 #include "core/Error.h"
 #include "rhi/RhiSession.h"
+#include "rhi/RhiVerification.h"
 
 namespace ar::rhi::detail {
 

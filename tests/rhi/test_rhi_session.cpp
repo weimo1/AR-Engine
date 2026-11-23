@@ -17,6 +17,7 @@
 #include "core/BuildInfo.h"
 #include "core/Diagnostics.h"
 #include "rhi/RhiSession.h"
+#include "rhi/RhiVerification.h"
 #include "render/CullReference.h"
 #include "vulkan/binding/DescriptorHeapLayout.h"
 #include "vulkan/binding/SetBindingLimits.h"
@@ -1183,7 +1184,8 @@ TEST_CASE("GPU culling matches the fixed CPU reference", "[rhi-gpu-culling-refer
         const auto reference = ar::render::cullReference(scene.frustum, objects, expected);
         std::array<std::uint32_t, 4> ids{};
         std::array<std::array<std::uint32_t, 4>, 4> commands{};
-        auto result = (*session)->verifyGpuCull(
+        auto result = rhi::verifyGpuCull(
+            **session,
             std::as_bytes(std::span{scene.frustum}),
             std::as_bytes(objects),
             shader,
@@ -1447,7 +1449,7 @@ TEST_CASE(
         auto base = rhi::RhiSession::open(config, *diagnostics);
         REQUIRE(base.has_value());
         const std::array singleQuery{rhi::DescriptorHeapSampleQuery{0, 0, 0.5F, 0.5F}};
-        const auto rejected = (*base)->verifyDescriptorHeap(shader, singleQuery);
+        const auto rejected = rhi::verifyDescriptorHeap(**base, shader, singleQuery);
         REQUIRE_FALSE(rejected.has_value());
         CHECK(rejected.error().category == core::ErrorCategory::InvalidState);
         CHECK((*base)->close().resourcesReleased);
@@ -1488,12 +1490,12 @@ TEST_CASE(
 
     // Reject empty query list or malformed SPIR-V.
     {
-        const auto emptyQueries = session.verifyDescriptorHeap(shader, {});
+        const auto emptyQueries = rhi::verifyDescriptorHeap(session, shader, {});
         REQUIRE_FALSE(emptyQueries.has_value());
         CHECK(emptyQueries.error().category == core::ErrorCategory::InvalidArguments);
         const std::array badShader{std::uint32_t{0x12345678u}};
         const std::array oneQuery{rhi::DescriptorHeapSampleQuery{0, 0, 0.5F, 0.5F}};
-        const auto invalidSpirv = session.verifyDescriptorHeap(badShader, oneQuery);
+        const auto invalidSpirv = rhi::verifyDescriptorHeap(session, badShader, oneQuery);
         REQUIRE_FALSE(invalidSpirv.has_value());
         CHECK(invalidSpirv.error().category == core::ErrorCategory::InvalidArguments);
     }
@@ -1510,7 +1512,7 @@ TEST_CASE(
         rhi::DescriptorHeapSampleQuery{1, 1, 0.45F, 0.5F},
         rhi::DescriptorHeapSampleQuery{1, 1, 0.5F, 0.5F},
     };
-    const auto result = session.verifyDescriptorHeap(shader, queries);
+    const auto result = rhi::verifyDescriptorHeap(session, shader, queries);
     INFO((result ? "" : result.error().message));
     REQUIRE(result.has_value());
     CHECK(result->resourceHeapAddress != 0);
@@ -1671,7 +1673,7 @@ TEST_CASE(
         config.createGraphicsDevice = true;
         auto base = rhi::RhiSession::open(config, *diagnostics);
         REQUIRE(base.has_value());
-        const auto rejected = (*base)->verifyDescriptorHeapRetirement(shader);
+        const auto rejected = rhi::verifyDescriptorHeapRetirement(**base, shader);
         REQUIRE_FALSE(rejected.has_value());
         CHECK(rejected.error().category == core::ErrorCategory::InvalidState);
         CHECK((*base)->close().resourcesReleased);
@@ -1709,12 +1711,12 @@ TEST_CASE(
     // Reject malformed SPIR-V.
     {
         const std::array badShader{std::uint32_t{0x12345678u}};
-        const auto invalidSpirv = session.verifyDescriptorHeapRetirement(badShader);
+        const auto invalidSpirv = rhi::verifyDescriptorHeapRetirement(session, badShader);
         REQUIRE_FALSE(invalidSpirv.has_value());
         CHECK(invalidSpirv.error().category == core::ErrorCategory::InvalidArguments);
     }
 
-    const auto result = session.verifyDescriptorHeapRetirement(shader);
+    const auto result = rhi::verifyDescriptorHeapRetirement(session, shader);
     INFO((result ? "" : result.error().message));
     REQUIRE(result.has_value());
 

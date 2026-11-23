@@ -252,6 +252,7 @@ add_library(ar_public_header_probe OBJECT
     public_headers/header_rhi_buffer.cpp
     public_headers/header_rhi_image.cpp
     public_headers/header_rhi_session.cpp
+    public_headers/header_rhi_verification.cpp
     public_headers/header_runtime_config.cpp
     public_headers/header_runtime_session.cpp
     public_headers/header_platform_window.cpp
