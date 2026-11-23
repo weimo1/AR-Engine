@@ -134,7 +134,7 @@
   - 验收：`rhi-descriptor-heap-readback`（标签 `gpu`）在真机验证对齐地址、默认槽、多纹理槽与 nearest/linear sampler 读回及 Debug Validation 零错误。
 - [x] T39 Descriptor Heap 在途槽位退役与底层图像保护。CPU 受控状态机与真机 RTX 4060（API 1.4.357）三阶段在途退役/底层图像保护/默认槽覆写/递增代数复用及有序关闭全过（106 assertions），双配置 89/89 零告警、Sync Validation 零错误，DSH 独立评审 11/11 PASS。
   - 验收：`rhi-descriptor-heap-retirement` 验证旧句柄立即失效、在途完成前保护槽位与底层 Image、完成后覆写默认描述符并安全复用及有序关闭。
-- [ ] T40 [人工] P5 第一批独立原型验收
+- [x] T40 [人工] P5 第一批独立原型验收。用户核对 T37–T39 真机 RTX 4060（API 1.4.357）数值读回、在途退役保护与 Sync Validation 零错误证据后确认通过，双配置各 89/89。
   - 用户确认真机数值读回、在途退役保护与 Validation 证据，决定进入 P5 第二批（同场景 Set/Heap 对照）。
 
 ## 人工待办（不阻塞队列）
