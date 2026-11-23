@@ -143,7 +143,29 @@ class ClParserTests(unittest.TestCase):
                        self.DEBUG_LOG, ".")
         self.assertEqual(detail["crt"], "/MDd")
         self.assertEqual(detail["counts"]["preview"], 2)
+        self.assertEqual(detail["counts"]["cxx23"], 0)
         self.assertEqual(detail["counts"]["latest"], 0)
+
+    def test_accepts_stable_cxx23_switch(self):
+        log = ("cl.exe /c /MDd /std:c++23 /EHsc /permissive- x.cpp\n"
+               "cl.exe /c /MDd /std:c++23 /EHsc /permissive- y.cpp\n")
+        detail = parse("msbuild-cl", make_command(), ["cmake", "--build", "b", "--config", "Debug"],
+                       log, ".")
+        self.assertEqual(detail["crt"], "/MDd")
+        self.assertEqual(detail["counts"]["preview"], 0)
+        self.assertEqual(detail["counts"]["cxx23"], 2)
+        self.assertEqual(detail["counts"]["latest"], 0)
+
+    def test_rejects_mixed_cxx23_and_preview_switches(self):
+        log = ("cl.exe /c /MDd /std:c++23preview /EHsc x.cpp\n"
+               "cl.exe /c /MDd /std:c++23 /EHsc y.cpp\n")
+        with self.assertRaises(ValueError):
+            parse("msbuild-cl", make_command(), ["x", "--config", "Debug"], log, ".")
+
+    def test_rejects_cxx20_without_cxx23(self):
+        with self.assertRaises(ValueError):
+            parse("msbuild-cl", make_command(), ["x", "--config", "Debug"],
+                  "cl.exe /c /MDd /std:c++20 /EHsc x.cpp\n", ".")
 
     def test_rejects_latest(self):
         with self.assertRaises(ValueError):

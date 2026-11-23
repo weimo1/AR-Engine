@@ -404,8 +404,9 @@ def parse_msbuild_cl(command: dict, argv: list[str], log: str, root: Path) -> di
     if not configuration:
         raise ValueError(f"{command['id']}: build command does not name a configuration")
     counts = {
-        "preview": log.count("/std:c++23preview"),
-        "latest": log.count("/std:c++latest"),
+        "preview": len(re.findall(r"/std:c\+\+23preview(?![\w-])", log)),
+        "cxx23": len(re.findall(r"/std:c\+\+23(?![\w-])", log)),
+        "latest": len(re.findall(r"/std:c\+\+latest(?![\w-])", log)),
         "ehsc": log.count("/EHsc"),
         "c4530": log.count("C4530"),
         "mdd": len(re.findall(r"/MDd(?![d\w])", log)),
@@ -415,8 +416,10 @@ def parse_msbuild_cl(command: dict, argv: list[str], log: str, root: Path) -> di
         "warnings": len(re.findall(r"\bwarning C\d{4}\b", log)),
     }
     problems = []
-    if counts["preview"] < 1:
-        problems.append("no /std:c++23preview in any compiler invocation")
+    if counts["preview"] + counts["cxx23"] < 1:
+        problems.append("no /std:c++23preview or /std:c++23 in any compiler invocation")
+    if counts["preview"] and counts["cxx23"]:
+        problems.append("build mixes /std:c++23preview and /std:c++23")
     if counts["latest"]:
         problems.append(f"/std:c++latest appears {counts['latest']} time(s)")
     if counts["ehsc"] < 1:
