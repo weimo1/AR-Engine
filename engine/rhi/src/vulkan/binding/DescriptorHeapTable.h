@@ -38,8 +38,8 @@ class DescriptorHeapTable {
         VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
     };
 
-    using ImageSlots = SetBindingSlots<HeapImageDescriptor, kStaticSceneImageLimit>;
-    using SamplerSlots = SetBindingSlots<VkSamplerCreateInfo, kSetSamplerCount>;
+    using ImageSlots = SetBindingSlots<HeapImageDescriptor, kHeapSceneImageLimit>;
+    using SamplerSlots = SetBindingSlots<VkSamplerCreateInfo, kHeapSceneSamplerCount>;
 
 public:
     using ImageBinding = ImageSlots::Handle;
@@ -82,8 +82,15 @@ public:
         return m_imageSlots ? m_imageSlots->descriptor(slot).image : VK_NULL_HANDLE;
     }
 
+    [[nodiscard]] std::expected<void, core::Error> writeBufferSlot(
+        std::uint32_t slot,
+        VkDeviceAddress address,
+        VkDeviceSize size,
+        VkDescriptorType type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     [[nodiscard]] std::expected<void, core::Error>
-    writeBufferSlot(std::uint32_t slot, VkDeviceAddress address, VkDeviceSize size);
+    writeExternalImageSlot(std::uint32_t slot, const VkImageViewCreateInfo& viewInfo);
+    [[nodiscard]] std::expected<void, core::Error>
+    resetExternalImageSlotToDefault(std::uint32_t slot);
 
     [[nodiscard]] VkBindHeapInfoEXT resourceBindInfo() const noexcept;
     [[nodiscard]] VkBindHeapInfoEXT samplerBindInfo() const noexcept;
@@ -105,6 +112,8 @@ public:
     void abandon() noexcept {
         m_imageSlots.reset();
         m_samplerSlots.reset();
+        m_defaultImage = VK_NULL_HANDLE;
+        m_defaultImageFormat = VK_FORMAT_UNDEFINED;
         m_device = VK_NULL_HANDLE;
         m_resources = nullptr;
         m_resourceBuffer = VK_NULL_HANDLE;
@@ -128,6 +137,8 @@ private:
         std::byte*& outMapped,
         VkDeviceAddress& outAddress);
     [[nodiscard]] std::expected<void, core::Error>
+    writeImageViewSlot(std::uint32_t slot, const VkImageViewCreateInfo& viewInfo);
+    [[nodiscard]] std::expected<void, core::Error>
     writeImageSlot(std::uint32_t slot, VkImage image, VkFormat format);
     [[nodiscard]] std::expected<void, core::Error>
     writeSamplerSlot(std::uint32_t slot, const VkSamplerCreateInfo& sampler);
@@ -138,6 +149,8 @@ private:
     DescriptorHeapDispatch m_dispatch{};
     DescriptorHeapCapacity m_capacity{};
     DescriptorHeapPlan m_plan{};
+    VkImage m_defaultImage = VK_NULL_HANDLE;
+    VkFormat m_defaultImageFormat = VK_FORMAT_UNDEFINED;
 
     std::optional<ImageSlots> m_imageSlots;
     std::optional<SamplerSlots> m_samplerSlots;

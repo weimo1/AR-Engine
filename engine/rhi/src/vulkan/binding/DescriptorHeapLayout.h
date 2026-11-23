@@ -10,6 +10,18 @@
 
 namespace ar::rhi::detail {
 
+inline constexpr std::uint32_t kHeapSceneImageLimit = 256;
+inline constexpr std::uint32_t kHeapExternalImageBase = kHeapSceneImageLimit;
+inline constexpr std::uint32_t kHeapAttachmentSlotsPerFrame = 5;
+inline constexpr std::uint32_t kHeapFrameSlotCount = 2;
+inline constexpr std::uint32_t kHeapEnvironmentImageBase =
+    kHeapExternalImageBase + kHeapFrameSlotCount * kHeapAttachmentSlotsPerFrame;
+inline constexpr std::uint32_t kHeapEnvironmentImageCount = 3;
+inline constexpr std::uint32_t kHeapTotalSceneImages =
+    kHeapEnvironmentImageBase + kHeapEnvironmentImageCount;
+inline constexpr std::uint32_t kHeapSceneBufferCount = 8;
+inline constexpr std::uint32_t kHeapSceneSamplerCount = 4;
+
 struct DescriptorHeapCapacity {
     std::uint32_t imageCount = 0;
     std::uint32_t bufferCount = 0;

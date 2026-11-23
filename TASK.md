@@ -150,6 +150,19 @@
 - [x] T43 [人工] 架构收口里程碑验收。用户核对 T41–T42b 边界改动、双配置 92/92 零告警门禁与三轮 DSH 独立评审（28/28、9/9、20/20 PASS）证据后确认通过，决定进入 P5 第二批（同场景 Set/Heap 对照）。
   - 用户确认模块边界、动态相机更新与全量回归证据后，进入 P5 第二批（同场景 Set/Heap 对照）与 P4b（方向光阴影与相机漫游）。
 
+### P5 第二批：同场景 Descriptor Set 与 Descriptor Heap 对照
+
+参见 [P5 第二批方案](openspec/changes/p5-descriptor-heap-scene/design.md)。复用意既有 GLSL/SPIR-V 着色器，保持 1.3 Descriptor Set 基线不退化，在 1.4 `RequireProduct` 下全链路切换至 `VK_EXT_descriptor_heap` 并做同场景像素/探针/剔除等价对照。
+
+- [x] T44 HeapTable 扩展与直接 Bindless GBuffer Heap 路径：场景 Heap 扩至 269 图像/8 缓冲/4 采样器槽并接入直绘 Bindless GBuffer 与 `RequireProduct` 窗口失败映射，双配置各 94/94 零警告、RTX 4060 Set/Heap 探针与像素一致、Debug Sync Validation 零错误，DSH 独立评审 22/22 PASS。
+  - 验收：`rhi-descriptor-heap-scene-layout`（CPU，含布局、版本不足 vs. 1.4 缺 Heap 能力失败映射与窗口资源清理）与 `sample-static-scene-heap-gbuffer`（标签 `gpu`）验证 UBO/内部附件槽/多固定 Sampler 布局、`RequireProduct` 窗口呈现、同场景 Set vs. Heap GBuffer 探针与 PNG 一致、`setCamera` 零重传（`staticSceneUploadCount == 1`）及 Debug Sync Validation 零错误。
+- [ ] T45 GPU-Driven 间接绘制与延迟光照/IBL/Display 全链路接入 Heap
+  - 验收：`sample-static-scene-heap-gpu-driven`（标签 `gpu`）验证同一场景下 1.3 Set 与 1.4 Heap 的非溢出可见集合/HDR/IBL 探针/SDR 输出一致、容量截断溢出各自满足合法子集与无越界、交换链 Resize 与运行期环境替换（`Constant`→回滚→`Directional`）无过期描述符、Debug Sync Validation 零错误。
+- [ ] T46 `ar_triangle --descriptor-heap` 入口与端到端 Set/Heap 对照脚本
+  - 验收：`sample-descriptor-heap-scene-parity`（标签 `gpu`）通过 `ar_triangle` 端到端对照 Set 与 `--descriptor-heap`（含 `--static-gpu-driven --hdr-lighting --ibl directional`）的可见性、探针与 PNG，且冲突/不支持组合显式拒绝、不静默回退。
+- [ ] T47 [人工] P5 第二批（同场景 Set vs. Heap 对照）里程碑验收
+  - 用户核对同场景 Set/Heap 画面、探针、剔除与 Resize/Validation 证据后，决定进入 P4b（方向光阴影与相机漫游）。
+
 ## 人工待办（不阻塞队列）
 
 - 云端 “Engine CPU build and test” 使用 `--no-gpu`，已配置自动触发与 vcpkg 二进制缓存。后续通过对应提交的 GitHub Actions 日志核对 Windows runner 与缓存命中。

@@ -27,6 +27,7 @@ enum class PresentStatus;
 namespace ar::rhi::detail {
 
 // Owns the swapchain and its frame resources. The parent closes it before releasing the device.
+class DescriptorHeapTable;
 class DeviceResources;
 class Presentation {
 public:
@@ -49,7 +50,8 @@ public:
         bool enableGBuffer = false,
         const DeferredLighting* lighting = nullptr,
         PlanPresentationGraph planner = nullptr,
-        const PresentationSpec* spec = nullptr);
+        const PresentationSpec* spec = nullptr,
+        DescriptorHeapTable* heapBinding = nullptr);
     std::expected<void, core::Error> publishStaticScene(
         std::vector<StaticSceneDraw::Draw> draws,
         std::shared_ptr<StaticSceneIndirect::Scene> indirect);
@@ -187,6 +189,7 @@ private:
     VkExtent2D m_requestedExtent{};
     SwapchainResources m_swapchain;
     VkDescriptorSet m_bindingSet = VK_NULL_HANDLE;
+    DescriptorHeapTable* m_heapBinding = nullptr;
     StaticSceneDraw* m_staticScene = nullptr;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     std::array<Frame, 2> m_frames{};

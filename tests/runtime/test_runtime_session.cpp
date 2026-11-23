@@ -23,10 +23,14 @@
 #include "core/BuildInfo.h"
 #include "core/Diagnostics.h"
 #include "core/Error.h"
+#include "platform/Window.h"
+#include "render/PresentationGraph.h"
+#include "render/PresentationSpec.h"
 #include "rhi/Capabilities.h"
 #include "rhi/RhiSession.h"
 #include "runtime/RuntimeConfig.h"
 #include "runtime/RuntimeSession.h"
+#include "vulkan/binding/DescriptorHeapLayout.h"
 
 namespace core = ar::core;
 namespace rhi = ar::rhi;
@@ -1176,4 +1180,622 @@ TEST_CASE(
 #else
     (void)sawValidationEnabled;
 #endif
+}
+
+TEST_CASE(
+    "Descriptor Heap scene layout and RequireProduct window failure mapping",
+    "[rhi-descriptor-heap-scene-layout]") {
+    using namespace rhi::detail;
+
+    // Scene Heap slot partitions match design.md: 256 scene + 10 per-frame attachments + 3 IBL.
+    STATIC_REQUIRE(kHeapSceneImageLimit == 256u);
+    STATIC_REQUIRE(kHeapExternalImageBase == 256u);
+    STATIC_REQUIRE(kHeapAttachmentSlotsPerFrame == 5u);
+    STATIC_REQUIRE(kHeapFrameSlotCount == 2u);
+    STATIC_REQUIRE(kHeapEnvironmentImageBase == 266u);
+    STATIC_REQUIRE(kHeapEnvironmentImageCount == 3u);
+    STATIC_REQUIRE(kHeapTotalSceneImages == 269u);
+    STATIC_REQUIRE(kHeapSceneBufferCount == 8u);
+    STATIC_REQUIRE(kHeapSceneSamplerCount == 4u);
+
+    rhi::DescriptorHeapLimits limits{};
+    limits.samplerHeapAlignment = 128;
+    limits.resourceHeapAlignment = 256;
+    limits.maxSamplerHeapSize = 65536;
+    limits.maxResourceHeapSize = 1048576;
+    limits.minSamplerHeapReservedRange = 256;
+    limits.minResourceHeapReservedRange = 512;
+    limits.samplerDescriptorSize = 20;
+    limits.samplerDescriptorAlignment = 32;
+    limits.imageDescriptorSize = 48;
+    limits.imageDescriptorAlignment = 32;
+    limits.bufferDescriptorSize = 24;
+    limits.bufferDescriptorAlignment = 16;
+    limits.maxPushDataSize = 128;
+
+    const DescriptorHeapCapacity sceneCapacity{
+        kHeapTotalSceneImages, kHeapSceneBufferCount, kHeapSceneSamplerCount};
+    const auto plan = planDescriptorHeaps(limits, sceneCapacity);
+    REQUIRE(plan.has_value());
+    CHECK(plan->imageStride == 64u);
+    CHECK(plan->imageRegionSize == 269u * 64u);
+    CHECK(plan->bufferStride == 32u);
+    CHECK(plan->bufferBaseOffset >= plan->imageRegionSize);
+    CHECK((plan->bufferBaseOffset % limits.bufferDescriptorAlignment) == 0u);
+    CHECK(plan->bufferRegionSize == 8u * 32u);
+    CHECK(
+        (kHeapEnvironmentImageBase + kHeapEnvironmentImageCount) * plan->imageStride <=
+        plan->bufferBaseOffset);
+    CHECK(plan->resourceReservedOffset >= plan->bufferBaseOffset + plan->bufferRegionSize);
+    CHECK((plan->resourceReservedOffset % limits.resourceHeapAlignment) == 0u);
+    CHECK(
+        plan->resourceHeapSize ==
+        plan->resourceReservedOffset + limits.minResourceHeapReservedRange);
+    CHECK(plan->resourceHeapSize <= limits.maxResourceHeapSize);
+    CHECK(plan->samplerStride == 32u);
+    CHECK(plan->samplerRegionSize == 4u * 32u);
+    CHECK(plan->samplerReservedOffset >= plan->samplerRegionSize);
+    CHECK((plan->samplerReservedOffset % limits.samplerHeapAlignment) == 0u);
+    CHECK(
+        plan->samplerHeapSize == plan->samplerReservedOffset + limits.minSamplerHeapReservedRange);
+    CHECK(plan->samplerHeapSize <= limits.maxSamplerHeapSize);
+
+    // Reject tight heap budgets, overflow, and invalid limits/capacities.
+    {
+        auto tight = limits;
+        tight.maxResourceHeapSize = plan->resourceHeapSize - 1u;
+        const auto rejected = planDescriptorHeaps(tight, sceneCapacity);
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error() == DescriptorHeapLayoutError::ResourceHeapExceeded);
+    }
+    {
+        auto tight = limits;
+        tight.maxSamplerHeapSize = plan->samplerHeapSize - 1u;
+        const auto rejected = planDescriptorHeaps(tight, sceneCapacity);
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error() == DescriptorHeapLayoutError::SamplerHeapExceeded);
+    }
+    {
+        auto overflow = limits;
+        overflow.bufferDescriptorSize = (std::numeric_limits<std::uint64_t>::max)() / 4u;
+        overflow.bufferDescriptorAlignment = 1;
+        overflow.maxResourceHeapSize = (std::numeric_limits<std::uint64_t>::max)();
+        const auto rejected = planDescriptorHeaps(overflow, sceneCapacity);
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error() == DescriptorHeapLayoutError::Overflow);
+    }
+    {
+        auto badLimits = limits;
+        badLimits.maxPushDataSize = 0;
+        const auto rejected = planDescriptorHeaps(badLimits, sceneCapacity);
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error() == DescriptorHeapLayoutError::InvalidLimits);
+    }
+    {
+        const auto rejected = planDescriptorHeaps(limits, {0u, kHeapSceneBufferCount, 4u});
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error() == DescriptorHeapLayoutError::InvalidCapacity);
+    }
+
+    // RHI request validation for Heap scene presentation (T44 scope).
+    const std::vector<std::uint32_t> dummySpirv{0x07230203u, 0u, 0u, 0u, 0u};
+    {
+        const std::string runId = "rhi-descriptor-heap-scene-validation";
+        const auto runRoot = freshRunDirectory(runId);
+        const core::BuildInfo& build = core::buildInfo();
+        core::RunSummaryIdentity identity{
+            build.buildId, build.inputHash, build.configuration, build.source};
+        auto diagnostics = core::DiagnosticSession::create({runRoot, runId}, identity);
+        REQUIRE(diagnostics.has_value());
+
+        const auto makeBase = [&]() {
+            rhi::QueryConfig query;
+            query.loader = rhi::ExplicitLoaderPath{fixtureModule()};
+            query.requestedApi = rhi::kApiVersion1_4;
+            query.createGraphicsDevice = true;
+            query.enableDescriptorHeap = true;
+            query.enableStaticScene = true;
+            query.enableGBuffer = true;
+            query.presentation = rhi::Win32Presentation{
+                reinterpret_cast<void*>(static_cast<std::uintptr_t>(1)),
+                {"VK_KHR_surface", "VK_KHR_win32_surface"},
+                320u,
+                180u};
+            query.triangleShaders = rhi::TriangleShaders{dummySpirv, dummySpirv};
+            query.planPresentation = ar::render::planPresentationGraph;
+            query.presentationSpec = ar::render::buildDeferredPresentationSpec(0.F);
+            return query;
+        };
+
+        auto bothModes = makeBase();
+        bothModes.enableSetBinding = true;
+        auto opened = rhi::RhiSession::open(bothModes, **diagnostics);
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
+
+        auto oldApi = makeBase();
+        oldApi.requestedApi = rhi::makeApiVersion(1, 3);
+        opened = rhi::RhiSession::open(oldApi, **diagnostics);
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
+
+        auto noGBuffer = makeBase();
+        noGBuffer.enableGBuffer = false;
+        noGBuffer.planPresentation = nullptr;
+        noGBuffer.presentationSpec.reset();
+        opened = rhi::RhiSession::open(noGBuffer, **diagnostics);
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
+
+        auto noStaticScene = makeBase();
+        noStaticScene.enableStaticScene = false;
+        noStaticScene.enableGBuffer = false;
+        noStaticScene.planPresentation = nullptr;
+        noStaticScene.presentationSpec.reset();
+        opened = rhi::RhiSession::open(noStaticScene, **diagnostics);
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
+
+        auto deferredInT44 = makeBase();
+        deferredInT44.deferredLighting =
+            rhi::DeferredLighting{dummySpirv, dummySpirv, dummySpirv, 0.F, false};
+        opened = rhi::RhiSession::open(deferredInT44, **diagnostics);
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
+
+        auto indirectInT44 = makeBase();
+        indirectInT44.staticIndirect =
+            rhi::StaticIndirectShaders{{dummySpirv, dummySpirv}, dummySpirv, UINT32_MAX};
+        opened = rhi::RhiSession::open(indirectInT44, **diagnostics);
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
+
+        core::RunSummaryInput summary;
+        summary.runId = runId;
+        summary.identity = identity;
+        summary.primaryResult = core::ResultKind::Success;
+        summary.resourcesReleased = true;
+        CHECK((*diagnostics)->finish(summary).diagnosticsComplete);
+    }
+
+    // Runtime mode validation: Inspect + window and RequireProduct + window without device fail
+    // before touching the Vulkan loader.
+    {
+        runtime::RuntimeConfig noDevice =
+            fixtureConfig("rhi-heap-window-no-device", "devices=1;device=1.4");
+        noDevice.mode = runtime::QueryMode::RequireProduct;
+        noDevice.query.requestedApi = rhi::kApiVersion1_4;
+        noDevice.query.createGraphicsDevice = false;
+        noDevice.window.emplace();
+        noDevice.window->visible = false;
+        rhi::detail::resetProcessCounters();
+        auto started = runtime::RuntimeSession::start(noDevice);
+        REQUIRE_FALSE(started.has_value());
+        CHECK(started.error().endResult.result == core::ResultKind::InvalidArguments);
+        CHECK(rhi::detail::processCounters().loadCalls == 0);
+
+        runtime::RuntimeConfig inspectWindow =
+            fixtureConfig("rhi-heap-window-inspect", "devices=1;device=1.4");
+        inspectWindow.mode = runtime::QueryMode::Inspect;
+        inspectWindow.query.requestedApi = rhi::kApiVersion1_4;
+        inspectWindow.query.createGraphicsDevice = true;
+        inspectWindow.window.emplace();
+        inspectWindow.window->visible = false;
+        rhi::detail::resetProcessCounters();
+        started = runtime::RuntimeSession::start(inspectWindow);
+        REQUIRE_FALSE(started.has_value());
+        CHECK(started.error().endResult.result == core::ResultKind::InvalidArguments);
+        CHECK(rhi::detail::processCounters().loadCalls == 0);
+    }
+
+    const auto makeHeapWindowConfig = [&](const std::string& runId, const char* fixtureSpec) {
+        runtime::RuntimeConfig config = fixtureConfig(runId, fixtureSpec);
+        config.mode = runtime::QueryMode::RequireProduct;
+        config.query.requestedApi = rhi::kApiVersion1_4;
+        config.query.createGraphicsDevice = true;
+        config.query.enableDescriptorHeap = true;
+        config.query.enableStaticScene = true;
+        config.query.enableGBuffer = true;
+        config.query.triangleShaders = rhi::TriangleShaders{dummySpirv, dummySpirv};
+        config.window.emplace();
+        config.window->width = 320;
+        config.window->height = 180;
+        config.window->visible = false;
+        config.window->title = "AR heap failure " + runId;
+        return config;
+    };
+
+    const auto verifyWindowCanReopen = [](const char* title) {
+        ar::platform::WindowConfig checkWindow;
+        checkWindow.width = 160;
+        checkWindow.height = 90;
+        checkWindow.visible = false;
+        checkWindow.title = title;
+        auto reopened = ar::platform::Window::open(checkWindow);
+        INFO((reopened ? "" : reopened.error().message));
+        REQUIRE(reopened.has_value());
+        reopened->reset();
+    };
+
+    // Failure mapping 1: RequireProduct window on Vulkan 1.3 device -> ApiVersionUnsupported.
+    {
+        const auto config = makeHeapWindowConfig(
+            "rhi-heap-window-api13", "loader=1.4;device=1.3;devices=1;surface=ok");
+        auto started = runtime::RuntimeSession::start(config);
+        REQUIRE_FALSE(started.has_value());
+        const auto& failure = started.error();
+        CHECK(failure.endResult.result == core::ResultKind::Unsupported);
+        REQUIRE(failure.endResult.primaryError.has_value());
+        CHECK(
+            failure.endResult.primaryError->category == core::ErrorCategory::ApiVersionUnsupported);
+        CHECK(failure.endResult.resourcesReleased);
+        CHECK(failure.endResult.residualResources.empty());
+        CHECK(failure.endResult.cleanupErrors.empty());
+        verifyWindowCanReopen("AR window release after api13");
+    }
+
+    // Failure mapping 2: Vulkan 1.4 device missing VK_EXT_descriptor_heap -> preserve QueryFailed.
+    {
+        const auto config = makeHeapWindowConfig(
+            "rhi-heap-window-no-heap", "loader=1.4;device=1.4;devices=1;surface=ok;heap=absent");
+        auto started = runtime::RuntimeSession::start(config);
+        REQUIRE_FALSE(started.has_value());
+        const auto& failure = started.error();
+        CHECK(failure.endResult.result == core::ResultKind::InitializationFailed);
+        REQUIRE(failure.endResult.primaryError.has_value());
+        CHECK(failure.endResult.primaryError->category == core::ErrorCategory::QueryFailed);
+        CHECK(
+            failure.endResult.primaryError->message.find("VK_EXT_descriptor_heap") !=
+            std::string::npos);
+        CHECK(failure.endResult.resourcesReleased);
+        CHECK(failure.endResult.residualResources.empty());
+        CHECK(failure.endResult.cleanupErrors.empty());
+        verifyWindowCanReopen("AR window release after missing heap");
+    }
+
+    // Failure mapping 3: Vulkan 1.4 device with invalid Heap limits or missing entry point.
+    {
+        const auto config = makeHeapWindowConfig(
+            "rhi-heap-window-zero-limits",
+            "loader=1.4;device=1.4;devices=1;surface=ok;heap=present;heap-limits=zero");
+        auto started = runtime::RuntimeSession::start(config);
+        REQUIRE_FALSE(started.has_value());
+        const auto& failure = started.error();
+        CHECK(failure.endResult.result == core::ResultKind::InitializationFailed);
+        REQUIRE(failure.endResult.primaryError.has_value());
+        CHECK(failure.endResult.primaryError->category == core::ErrorCategory::QueryFailed);
+        CHECK(failure.endResult.resourcesReleased);
+        CHECK(failure.endResult.residualResources.empty());
+        verifyWindowCanReopen("AR window release after zero limits");
+    }
+    {
+        const auto config = makeHeapWindowConfig(
+            "rhi-heap-window-missing-entry",
+            "loader=1.4;device=1.4;devices=1;surface=ok;heap=present;heap-entry=missing-push-data");
+        auto started = runtime::RuntimeSession::start(config);
+        REQUIRE_FALSE(started.has_value());
+        const auto& failure = started.error();
+        CHECK(failure.endResult.result == core::ResultKind::InitializationFailed);
+        REQUIRE(failure.endResult.primaryError.has_value());
+        CHECK(failure.endResult.primaryError->category == core::ErrorCategory::LoaderSymbolMissing);
+        CHECK(failure.endResult.resourcesReleased);
+        CHECK(failure.endResult.residualResources.empty());
+        verifyWindowCanReopen("AR window release after missing entry");
+    }
+
+    // Failure mapping 4: Post-open RequireProduct rejection when API is 1.4 but required
+    // capability extension is absent -> QueryFailed (not ApiVersionUnsupported).
+    {
+        runtime::RuntimeConfig config = fixtureConfig(
+            "rhi-heap-require-product-capability", "loader=1.4;device=1.4;devices=1;heap=absent");
+        config.mode = runtime::QueryMode::RequireProduct;
+        config.query.requestedApi = rhi::kApiVersion1_4;
+        config.query.requiredDeviceExtensions = {"VK_EXT_descriptor_heap"};
+        auto started = runtime::RuntimeSession::start(config);
+        REQUIRE_FALSE(started.has_value());
+        const auto& failure = started.error();
+        CHECK(failure.endResult.result == core::ResultKind::InitializationFailed);
+        REQUIRE(failure.endResult.primaryError.has_value());
+        CHECK(failure.endResult.primaryError->category == core::ErrorCategory::QueryFailed);
+        CHECK(failure.report.judgments.apiVersionSupported);
+        CHECK_FALSE(failure.report.judgments.requiredCapabilitiesSupported);
+        CHECK(failure.endResult.resourcesReleased);
+        CHECK(failure.endResult.residualResources.empty());
+    }
+}
+
+TEST_CASE(
+    "Direct bindless GBuffer Descriptor Heap path matches Descriptor Set baseline",
+    "[sample-static-scene-heap-gbuffer]") {
+    const auto shader = [](const char* name) {
+        std::ifstream input(
+            std::filesystem::path(AR_TEST_SHADER_DIR) / name, std::ios::binary | std::ios::ate);
+        const auto size = static_cast<std::streamoff>(input.tellg());
+        REQUIRE(size > 0);
+        REQUIRE(size % 4 == 0);
+        std::vector<std::uint32_t> words(static_cast<std::size_t>(size / 4));
+        REQUIRE(input.seekg(0).read(reinterpret_cast<char*>(words.data()), size));
+        return words;
+    };
+
+    const std::string baseRunId = "sample-static-scene-heap-gbuffer";
+    const std::filesystem::path runRoot = freshRunDirectory(baseRunId);
+    const std::filesystem::path assetRoot = runRoot / "assets";
+    const std::filesystem::path modelsDir = assetRoot / "models";
+    std::filesystem::create_directories(modelsDir);
+
+    // Probe real GPU Vulkan 1.4 + VK_EXT_descriptor_heap capability before running the comparison.
+    bool supportsHeap = false;
+    {
+        runtime::RuntimeConfig probe;
+        probe.mode = runtime::QueryMode::Inspect;
+        probe.query.loader = rhi::SystemLoader{};
+        probe.query.requestedApi = rhi::makeApiVersion(1, 3);
+        probe.query.device = rhi::ExplicitDeviceIndex{0};
+        probe.diagnostics.outputRoot = runRoot;
+        probe.diagnostics.runId = "probe";
+        auto probed = runtime::RuntimeSession::start(probe);
+        INFO(describeStart(probed));
+        REQUIRE(probed.has_value());
+        const auto& report = (*probed)->report();
+        supportsHeap = report.loaderApi >= rhi::kApiVersion1_4 &&
+                       report.deviceApi >= rhi::kApiVersion1_4 &&
+                       report.descriptorHeap == rhi::DescriptorHeapStatus::Supported;
+        REQUIRE((*probed)->close().resourcesReleased);
+    }
+
+    // Two distinct textured meshes placed over Probe 0 (0.5, 0.38) and Probe 1 (0.5, 0.76) while
+    // leaving Probe 2 (0.05, 0.05) on clear background, exercising multi-slot bindless indexing.
+    const std::array<float, 12> positions{
+        -1.F, -1.F, 0.F, 1.F, -1.F, 0.F, 1.F, 1.F, 0.F, -1.F, 1.F, 0.F};
+    const std::array<float, 8> uvs{0.F, 0.F, 1.F, 0.F, 1.F, 1.F, 0.F, 1.F};
+    const std::array<std::uint16_t, 6> indices{0, 1, 2, 0, 2, 3};
+    const std::array<float, 12> normals{0.F, 0.F, 1.F, 0.F, 0.F, 1.F, 0.F, 0.F, 1.F, 0.F, 0.F, 1.F};
+    constexpr std::array<unsigned char, 71> redBluePng{
+        137, 80,  78, 71,  13,  10,  26,  10, 0,   0,   0,   13,  73, 72,  68,  82, 0,   0,
+        0,   2,   0,  0,   0,   1,   8,   6,  0,   0,   0,   244, 34, 127, 138, 0,  0,   0,
+        14,  73,  68, 65,  84,  120, 156, 99, 248, 207, 192, 0,   66, 255, 1,   15, 249, 3,
+        253, 133, 17, 153, 118, 0,   0,   0,  0,   73,  69,  78,  68, 174, 66,  96, 130};
+    constexpr std::array<unsigned char, 70> greenPng{
+        137, 80,  78, 71,  13, 10,  26,  10, 0,  0,   0,   13,  73,  72,  68,  82, 0, 0,
+        0,   1,   0,  0,   0,  1,   8,   6,  0,  0,   0,   31,  21,  196, 137, 0,  0, 0,
+        13,  73,  68, 65,  84, 120, 156, 99, 96, 248, 207, 240, 31,  0,   4,   1,  1, 255,
+        113, 235, 71, 229, 0,  0,   0,   0,  73, 69,  78,  68,  174, 66,  96,  130};
+
+    {
+        std::ofstream bin(modelsDir / "quad.bin", std::ios::binary);
+        bin.write(
+            reinterpret_cast<const char*>(positions.data()),
+            static_cast<std::streamsize>(sizeof(positions)));
+        bin.write(
+            reinterpret_cast<const char*>(uvs.data()), static_cast<std::streamsize>(sizeof(uvs)));
+        bin.write(
+            reinterpret_cast<const char*>(indices.data()),
+            static_cast<std::streamsize>(sizeof(indices)));
+        bin.write(
+            reinterpret_cast<const char*>(normals.data()),
+            static_cast<std::streamsize>(sizeof(normals)));
+        REQUIRE(bin.good());
+    }
+    {
+        std::ofstream img(modelsDir / "red_blue.png", std::ios::binary);
+        img.write(
+            reinterpret_cast<const char*>(redBluePng.data()),
+            static_cast<std::streamsize>(sizeof(redBluePng)));
+        REQUIRE(img.good());
+    }
+    {
+        std::ofstream img(modelsDir / "green.png", std::ios::binary);
+        img.write(
+            reinterpret_cast<const char*>(greenPng.data()),
+            static_cast<std::streamsize>(sizeof(greenPng)));
+        REQUIRE(img.good());
+    }
+    const auto writeGltf = [&](const char* fileName,
+                               const char* imageName,
+                               const char* metallic,
+                               const char* roughness) {
+        std::ofstream gltf(modelsDir / fileName, std::ios::binary);
+        gltf << R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],)"
+             << R"("nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":)"
+             << R"({"POSITION":0,"TEXCOORD_0":1,"NORMAL":3},"indices":2,"material":0,"mode":4}]}],)"
+             << R"("buffers":[{"uri":"quad.bin","byteLength":140}],)"
+             << R"("bufferViews":[{"buffer":0,"byteLength":48},)"
+             << R"({"buffer":0,"byteOffset":48,"byteLength":32},)"
+             << R"({"buffer":0,"byteOffset":80,"byteLength":12},)"
+             << R"({"buffer":0,"byteOffset":92,"byteLength":48}],)"
+             << R"("accessors":[{"bufferView":0,"byteOffset":0,"componentType":5126,"count":4,)"
+             << R"("type":"VEC3","min":[-1,-1,0],"max":[1,1,0]},)"
+             << R"({"bufferView":1,"byteOffset":0,"componentType":5126,"count":4,"type":"VEC2"},)"
+             << R"({"bufferView":2,"byteOffset":0,"componentType":5123,"count":6,"type":"SCALAR"},)"
+             << R"({"bufferView":3,"byteOffset":0,"componentType":5126,"count":4,"type":"VEC3"}],)"
+             << R"("materials":[{"pbrMetallicRoughness":{"baseColorFactor":[1,1,1,1],)"
+             << R"("baseColorTexture":{"index":0},"metallicFactor":)" << metallic
+             << R"(,"roughnessFactor":)" << roughness << R"(}}],)"
+             << R"("textures":[{"source":0}],"images":[{"uri":")" << imageName << R"("}]})";
+        REQUIRE(gltf.good());
+    };
+    writeGltf("upper.gltf", "red_blue.png", "0.25", "0.75");
+    writeGltf("lower.gltf", "green.png", "0.85", "0.35");
+
+    const std::filesystem::path scenePath = runRoot / "scene.json";
+    const ar::render::StaticCamera initialCamera{
+        {0.F, 0.F, 3.F}, {0.F, 0.F, 0.F, 1.F}, std::numbers::pi_v<float> * 0.5F, 0.1F, 100.F};
+    const float halfAngle = std::numbers::pi_v<float> / 18.F;
+    const ar::render::StaticCamera orbitedCamera{
+        {0.6F, 0.F, 2.6F},
+        {0.F, std::sin(halfAngle), 0.F, std::cos(halfAngle)},
+        initialCamera.verticalFovRadians,
+        initialCamera.nearPlane,
+        initialCamera.farPlane};
+    {
+        std::ofstream scene(scenePath, std::ios::binary);
+        scene << Json{
+            {"version", 1},
+            {"camera",
+             {{"position", {0.0, 0.0, 3.0}},
+              {"orientation", {0.0, 0.0, 0.0, 1.0}},
+              {"fov_y", std::numbers::pi_v<double> * 0.5},
+              {"near", 0.1},
+              {"far", 100.0}}},
+            {"objects",
+             {{{"id", 1},
+               {"asset", "models/upper.gltf"},
+               {"position", {0.0, 0.72, 0.0}},
+               {"rotation", {0.0, 0.0, 0.0, 1.0}},
+               {"scale", {1.0, 0.5, 1.0}}},
+              {{"id", 2},
+               {"asset", "models/lower.gltf"},
+               {"position", {0.0, -2.08, -1.0}},
+               {"rotation", {0.0, 0.0, 0.0, 1.0}},
+               {"scale", {1.2, 0.7, 1.0}}}}}};
+        REQUIRE(scene.good());
+    }
+
+    const rhi::TriangleShaders directShaders{
+        shader("gbuffer.vert.spv"), shader("gbuffer_bindless.frag.spv")};
+
+    struct RunResult {
+        rhi::FrameScreenshot initial;
+        rhi::FrameScreenshot orbited1;
+        rhi::FrameScreenshot orbited2;
+        rhi::FrameScreenshot restored;
+    };
+
+    const auto makeConfig = [&](bool heapMode, const std::string& runId) {
+        runtime::RuntimeConfig config;
+        config.mode =
+            heapMode ? runtime::QueryMode::RequireProduct : runtime::QueryMode::Development;
+        config.query.loader = rhi::SystemLoader{};
+        config.query.device = rhi::ExplicitDeviceIndex{0};
+        config.query.requestedApi = heapMode ? rhi::kApiVersion1_4 : rhi::makeApiVersion(1, 3);
+        config.query.createGraphicsDevice = true;
+        config.query.enableScreenshot = true;
+        config.query.enableSetBinding = !heapMode;
+        config.query.enableDescriptorHeap = heapMode;
+        config.query.enableGBuffer = true;
+        config.staticAssetRoot = assetRoot;
+        config.query.triangleShaders = directShaders;
+        config.window.emplace();
+        config.window->width = 320;
+        config.window->height = 180;
+        config.window->visible = false;
+        config.window->title =
+            "AR heap gbuffer " + runId + " " + std::to_string(GetCurrentProcessId());
+        config.diagnostics.runId = runId;
+        config.diagnostics.outputRoot = runRoot;
+        return config;
+    };
+
+    const auto runPath = [&](bool heapMode, const std::string& runId) -> RunResult {
+        const auto config = makeConfig(heapMode, runId);
+        auto session = runtime::RuntimeSession::start(config);
+        INFO(describeStart(session));
+        REQUIRE(session.has_value());
+        CHECK((*session)->staticSceneUploadCount() == 0);
+        REQUIRE((*session)->openStaticScene(scenePath));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+
+        const auto capture = [&](rhi::FrameScreenshot& out) {
+            auto status = (*session)->presentFrame(&out);
+            INFO((status ? "" : status.error().message));
+            REQUIRE(status.has_value());
+            REQUIRE(*status == runtime::FrameStatus::Presented);
+            REQUIRE(out.gbuffer.size() == 3);
+        };
+
+        RunResult result;
+        capture(result.initial);
+        REQUIRE((*session)->setCamera(orbitedCamera));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+        capture(result.orbited1);
+        capture(result.orbited2);
+        REQUIRE((*session)->setCamera(initialCamera));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+        capture(result.restored);
+
+        const auto closed = (*session)->close();
+        REQUIRE(closed.result == core::ResultKind::Success);
+        REQUIRE(closed.resourcesReleased);
+        CHECK((*session)->staticSceneUploadCount() == 1);
+
+        std::ifstream events(runRoot / runId / "events.jsonl");
+        REQUIRE(events);
+        bool sawValidationEnabled = false;
+        bool sawHeapReady = false;
+        bool sawSetReady = false;
+        for (std::string line; std::getline(events, line);) {
+            const auto id = Json::parse(line).at("event_id").get<std::string>();
+            CHECK(id != "rhi.validation.error");
+            sawValidationEnabled |= (id == "rhi.validation.enabled");
+            sawHeapReady |= (id == "rhi.binding.heap.ready");
+            sawSetReady |= (id == "rhi.binding.set.ready");
+        }
+#ifdef _DEBUG
+        CHECK(sawValidationEnabled);
+#else
+        (void)sawValidationEnabled;
+#endif
+        CHECK(sawHeapReady == heapMode);
+        CHECK(sawSetReady == !heapMode);
+        return result;
+    };
+
+    if (!supportsHeap) {
+        auto rejected = runtime::RuntimeSession::start(makeConfig(true, "heap-unsupported"));
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error().endResult.resourcesReleased);
+        CHECK(rejected.error().endResult.residualResources.empty());
+        return;
+    }
+
+    const RunResult setResult = runPath(false, "set-gbuffer");
+    const RunResult heapResult = runPath(true, "heap-gbuffer");
+
+    // Sanity-check concrete physical GBuffer probe values on both materials and background.
+    const float expectedDepthUpper = 0.1F * (100.F - 3.F) / (3.F * (100.F - 0.1F));
+    const float expectedDepthLower = 0.1F * (100.F - 4.F) / (4.F * (100.F - 0.1F));
+    CHECK(setResult.initial.gbuffer[0].depth == Catch::Approx(expectedDepthUpper).margin(1e-4F));
+    CHECK(setResult.initial.gbuffer[1].depth == Catch::Approx(expectedDepthLower).margin(1e-4F));
+    CHECK(setResult.initial.gbuffer[0].depth > setResult.initial.gbuffer[1].depth);
+    CHECK(setResult.initial.gbuffer[2].depth == 0.F);
+    CHECK(setResult.initial.gbuffer[0].material[0] == Catch::Approx(0.25F).margin(0.02F));
+    CHECK(setResult.initial.gbuffer[0].material[1] == Catch::Approx(0.75F).margin(0.02F));
+    CHECK(setResult.initial.gbuffer[1].material[0] == Catch::Approx(0.85F).margin(0.02F));
+    CHECK(setResult.initial.gbuffer[1].material[1] == Catch::Approx(0.35F).margin(0.02F));
+    CHECK(setResult.initial.gbuffer[1].baseColor[1] > 0.9F);
+    CHECK(setResult.initial.gbuffer[1].baseColor[0] < 0.05F);
+    CHECK(setResult.initial.gbuffer[1].baseColor[2] < 0.05F);
+    CHECK(setResult.orbited1.rgba != setResult.initial.rgba);
+    CHECK(setResult.orbited2.rgba == setResult.orbited1.rgba);
+    CHECK(setResult.restored.rgba == setResult.initial.rgba);
+
+    const auto checkParity = [](const rhi::FrameScreenshot& expected,
+                                const rhi::FrameScreenshot& actual) {
+        CHECK(actual.width == expected.width);
+        CHECK(actual.height == expected.height);
+        CHECK(actual.rgba == expected.rgba);
+        REQUIRE(actual.gbuffer.size() == expected.gbuffer.size());
+        for (std::size_t i = 0; i < expected.gbuffer.size(); ++i) {
+            const auto& lhs = expected.gbuffer[i];
+            const auto& rhs = actual.gbuffer[i];
+            CHECK(rhs.pixel == lhs.pixel);
+            CHECK(rhs.depth == Catch::Approx(lhs.depth).margin(1e-5F));
+            for (std::size_t c = 0; c < 4; ++c) {
+                CHECK(rhs.baseColor[c] == Catch::Approx(lhs.baseColor[c]).margin(2.F / 255.F));
+            }
+            for (std::size_t c = 0; c < 3; ++c) {
+                CHECK(rhs.normal[c] == Catch::Approx(lhs.normal[c]).margin(1e-4F));
+                CHECK(rhs.viewPosition[c] == Catch::Approx(lhs.viewPosition[c]).margin(1e-3F));
+            }
+            for (std::size_t c = 0; c < 2; ++c) {
+                CHECK(rhs.material[c] == Catch::Approx(lhs.material[c]).margin(2.F / 255.F));
+            }
+        }
+    };
+
+    checkParity(setResult.initial, heapResult.initial);
+    checkParity(setResult.orbited1, heapResult.orbited1);
+    checkParity(setResult.orbited2, heapResult.orbited2);
+    checkParity(setResult.restored, heapResult.restored);
 }

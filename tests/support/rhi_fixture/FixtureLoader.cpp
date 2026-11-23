@@ -28,6 +28,7 @@
 // The fixture implements the entry points itself, so the headers must not declare them.
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
+#include <vulkan/vulkan_win32.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -49,6 +50,7 @@ struct Spec {
     bool descriptorHeapPresent = false;
     bool missingPushData = false;
     bool heapLimitsZero = false;
+    bool surfacePresent = false;
     std::string dynamicRendering;
     // Raw device-name bytes as hex, so a test can hand the runtime text that is not valid UTF-8.
     std::string deviceNameHex;
@@ -122,6 +124,8 @@ Spec readSpec() {
             spec.missingPushData = value == "missing-push-data";
         } else if (key == "heap-limits") {
             spec.heapLimitsZero = value == "zero";
+        } else if (key == "surface") {
+            spec.surfacePresent = value == "ok";
         } else if (key == "dynamic") {
             spec.dynamicRendering = value;
         } else if (key == "device-name-hex") {
@@ -151,9 +155,17 @@ VKAPI_ATTR VkResult VKAPI_CALL fixtureCreateInstance(
         std::string_view(info->ppEnabledLayerNames[0]) != "VK_LAYER_KHRONOS_validation") {
         return VK_ERROR_LAYER_NOT_PRESENT;
     }
-    if (info->enabledExtensionCount != 0 &&
-        std::string_view(info->ppEnabledExtensionNames[0]) != VK_EXT_DEBUG_UTILS_EXTENSION_NAME) {
-        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    for (std::uint32_t i = 0; i < info->enabledExtensionCount; ++i) {
+        const std::string_view ext(info->ppEnabledExtensionNames[i]);
+        const bool allowedDebug = ext == VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+        const bool allowedSurface =
+            spec.surfacePresent &&
+            (ext == VK_KHR_SURFACE_EXTENSION_NAME || ext == VK_KHR_WIN32_SURFACE_EXTENSION_NAME ||
+             ext == VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME ||
+             ext == VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
+        if (!allowedDebug && !allowedSurface) {
+            return VK_ERROR_EXTENSION_NOT_PRESENT;
+        }
     }
     if (instance != nullptr) {
         *instance = spec.createResult == VK_SUCCESS
@@ -229,17 +241,24 @@ VKAPI_ATTR VkResult VKAPI_CALL fixtureEnumerateDeviceExtensionProperties(
     if (spec.deviceExtensionsFail) {
         return VK_ERROR_FEATURE_NOT_PRESENT;
     }
-    const std::uint32_t available = spec.descriptorHeapPresent ? 2U : 0U;
+    const char* names[4]{};
+    std::uint32_t available = 0;
+    if (spec.descriptorHeapPresent) {
+        names[available++] = "VK_EXT_descriptor_heap";
+        names[available++] = "VK_KHR_shader_untyped_pointers";
+    }
+    if (spec.surfacePresent) {
+        names[available++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+        names[available++] = VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
+    }
     if (properties == nullptr) {
         *count = available;
         return VK_SUCCESS;
     }
-    constexpr const char* kHeapExtensions[2] = {
-        "VK_EXT_descriptor_heap", "VK_KHR_shader_untyped_pointers"};
     std::uint32_t written = 0;
     for (std::uint32_t index = 0; index < available && index < *count; ++index) {
         std::memset(properties[index].extensionName, 0, sizeof(properties[index].extensionName));
-        const char* name = kHeapExtensions[index];
+        const char* name = names[index];
         std::memcpy(properties[index].extensionName, name, std::strlen(name));
         properties[index].specVersion = 1;
         ++written;
@@ -287,6 +306,13 @@ fixtureGetPhysicalDeviceFeatures2(VkPhysicalDevice physical, VkPhysicalDeviceFea
     const Spec spec = currentSpec();
     auto* next = static_cast<VkBaseOutStructure*>(features->pNext);
     while (next != nullptr) {
+        if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES) {
+            auto* core12 = reinterpret_cast<VkPhysicalDeviceVulkan12Features*>(next);
+            const VkBool32 supported = spec.descriptorHeapPresent ? VK_TRUE : VK_FALSE;
+            core12->bufferDeviceAddress = supported;
+            core12->shaderSampledImageArrayNonUniformIndexing = supported;
+            core12->runtimeDescriptorArray = supported;
+        }
         if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES) {
             auto* core13 = reinterpret_cast<VkPhysicalDeviceVulkan13Features*>(next);
             const bool first = reinterpret_cast<std::uintptr_t>(physical) == 0x10;
@@ -312,6 +338,11 @@ fixtureGetPhysicalDeviceFeatures2(VkPhysicalDevice physical, VkPhysicalDeviceFea
             auto* indexing = reinterpret_cast<VkPhysicalDeviceDescriptorIndexingFeatures*>(next);
             indexing->shaderSampledImageArrayNonUniformIndexing =
                 spec.descriptorHeapPresent ? VK_TRUE : VK_FALSE;
+            indexing->runtimeDescriptorArray = spec.descriptorHeapPresent ? VK_TRUE : VK_FALSE;
+        }
+        if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR) {
+            auto* maint = reinterpret_cast<VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR*>(next);
+            maint->swapchainMaintenance1 = spec.surfacePresent ? VK_TRUE : VK_FALSE;
         }
 #if defined(VK_VERSION_1_4)
         if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES) {
@@ -404,6 +435,28 @@ fixtureGetDeviceQueue(VkDevice, std::uint32_t family, std::uint32_t index, VkQue
 
 VKAPI_ATTR void VKAPI_CALL fixtureDestroyDevice(VkDevice, const VkAllocationCallbacks*) {}
 
+VKAPI_ATTR VkResult VKAPI_CALL fixtureCreateWin32SurfaceKHR(
+    VkInstance,
+    const VkWin32SurfaceCreateInfoKHR*,
+    const VkAllocationCallbacks*,
+    VkSurfaceKHR* surface) {
+    if (surface != nullptr) {
+        *surface = reinterpret_cast<VkSurfaceKHR>(static_cast<std::uintptr_t>(0x50));
+    }
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL
+fixtureDestroySurfaceKHR(VkInstance, VkSurfaceKHR, const VkAllocationCallbacks*) {}
+
+VKAPI_ATTR VkResult VKAPI_CALL fixtureGetPhysicalDeviceSurfaceSupportKHR(
+    VkPhysicalDevice, std::uint32_t queueFamilyIndex, VkSurfaceKHR, VkBool32* supported) {
+    if (supported != nullptr) {
+        *supported = queueFamilyIndex == 1 ? VK_TRUE : VK_FALSE;
+    }
+    return VK_SUCCESS;
+}
+
 VKAPI_ATTR void VKAPI_CALL fixtureHeapCommandStub() {}
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL fixtureGetDeviceProcAddr(VkDevice, const char* name) {
@@ -480,6 +533,20 @@ vkGetInstanceProcAddr(VkInstance, const char* name) {
     }
     if (requested == "vkDestroyDevice") {
         return reinterpret_cast<PFN_vkVoidFunction>(&fixtureDestroyDevice);
+    }
+    if (requested == "vkCreateWin32SurfaceKHR") {
+        return spec.surfacePresent
+                   ? reinterpret_cast<PFN_vkVoidFunction>(&fixtureCreateWin32SurfaceKHR)
+                   : nullptr;
+    }
+    if (requested == "vkDestroySurfaceKHR") {
+        return spec.surfacePresent ? reinterpret_cast<PFN_vkVoidFunction>(&fixtureDestroySurfaceKHR)
+                                   : nullptr;
+    }
+    if (requested == "vkGetPhysicalDeviceSurfaceSupportKHR") {
+        return spec.surfacePresent ? reinterpret_cast<PFN_vkVoidFunction>(
+                                         &fixtureGetPhysicalDeviceSurfaceSupportKHR)
+                                   : nullptr;
     }
     if (requested == "vkDestroyInstance") {
         if (spec.destroyUnavailable) {

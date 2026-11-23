@@ -8,6 +8,7 @@
 
 #include <vk_mem_alloc.h>
 
+#include "binding/DescriptorHeapTable.h"
 #include "binding/SetBindingTable.h"
 
 namespace ar::rhi::detail {
@@ -61,15 +62,24 @@ struct StaticSceneDraw::Mesh {
             vkDestroyDescriptorPool(resources.m_device, pool, nullptr);
         }
         bool retirePublished = false;
+        bool retireHeapPublished = false;
         for (const auto& texture : textures) {
             if (texture.binding) {
                 retirePublished |= owner.m_bindings->resolveImage(*texture.binding).has_value();
                 owner.m_bindings->retireImage(*texture.binding);
             }
+            if (texture.heapBinding) {
+                retireHeapPublished |=
+                    owner.m_heapBindings->resolveImage(*texture.heapBinding).has_value();
+                owner.m_heapBindings->retireImage(*texture.heapBinding);
+            }
         }
         // Published meshes are destroyed after Presentation has drained their submissions.
         if (retirePublished) {
             owner.m_bindings->publishCompleted(true, true);
+        }
+        if (retireHeapPublished) {
+            static_cast<void>(owner.m_heapBindings->publishCompleted(true));
         }
         for (const auto& texture : textures) {
             if (texture.sampled) {
@@ -97,6 +107,7 @@ struct StaticSceneDraw::Mesh {
         ImageViewHandle view;
         VkImageView sampled = VK_NULL_HANDLE;
         std::optional<SetBindingTable::ImageBinding> binding;
+        std::optional<DescriptorHeapTable::ImageBinding> heapBinding;
     };
     std::array<Texture, 2> textures{};
     VkDescriptorPool pool = VK_NULL_HANDLE;
@@ -105,8 +116,12 @@ struct StaticSceneDraw::Mesh {
 };
 
 StaticSceneDraw::StaticSceneDraw(
-    DeviceResources& resources, bool enableGBuffer, SetBindingTable* bindings)
-    : m_resources(resources), m_bindings(bindings), m_enableGBuffer(enableGBuffer) {}
+    DeviceResources& resources,
+    bool enableGBuffer,
+    SetBindingTable* bindings,
+    DescriptorHeapTable* heapBindings)
+    : m_resources(resources), m_bindings(bindings), m_heapBindings(heapBindings),
+      m_enableGBuffer(enableGBuffer) {}
 
 StaticSceneDraw::~StaticSceneDraw() {
     m_active.clear();
@@ -126,7 +141,7 @@ std::expected<void, core::Error> StaticSceneDraw::open(const StaticIndirectShade
         m_indirect.emplace(m_resources);
         return m_indirect->open(*indirect);
     }
-    if (m_bindings) {
+    if (m_bindings || m_heapBindings) {
         return {};
     }
     const std::array bindings{
@@ -379,6 +394,14 @@ StaticSceneDraw::upload(const StaticMeshUpload& input) {
             return std::unexpected(image.error());
         }
         texture.image = *image;
+        if (m_heapBindings) {
+            auto binding = m_heapBindings->registerImage(*image);
+            if (!binding) {
+                return std::unexpected(std::move(binding.error()));
+            }
+            texture.heapBinding = *binding;
+            continue;
+        }
         auto view = m_resources.createImageView(*image);
         if (!view) {
             return std::unexpected(view.error());
@@ -398,7 +421,7 @@ StaticSceneDraw::upload(const StaticMeshUpload& input) {
             texture.sampled = *sampled;
         }
     }
-    if (m_bindings) {
+    if (m_bindings || m_heapBindings) {
         return mesh;
     }
     const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, textureCount};
@@ -512,13 +535,19 @@ StaticSceneDraw::prepareIndirect(
     return m_indirect->prepare(*geometry, instances, materials);
 }
 
-void StaticSceneDraw::publish(
-    std::vector<Draw> draws, std::shared_ptr<StaticSceneIndirect::Scene> indirect) noexcept {
+std::expected<void, core::Error> StaticSceneDraw::publish(
+    std::vector<Draw> draws, std::shared_ptr<StaticSceneIndirect::Scene> indirect) {
     if (m_bindings) {
         m_bindings->publishCompleted(true, true);
     }
+    if (m_heapBindings) {
+        if (auto published = m_heapBindings->publishCompleted(true); !published) {
+            return std::unexpected(std::move(published.error()));
+        }
+    }
     m_indirectScene = std::move(indirect);
     m_active = std::move(draws);
+    return {};
 }
 
 std::expected<void, core::Error>
@@ -595,18 +624,42 @@ void StaticSceneDraw::record(
                 const auto slots = draw.mesh->textures[0].binding->slot |
                                    (draw.mesh->textures[1].binding->slot << 8);
                 normal[11] = static_cast<float>(slots);
+            } else if (m_heapBindings) {
+                static_assert(kHeapSceneImageLimit <= 256);
+                const auto slots = draw.mesh->textures[0].heapBinding->slot |
+                                   (draw.mesh->textures[1].heapBinding->slot << 8);
+                normal[11] = static_cast<float>(slots);
             }
-            vkCmdPushConstants(commands, layout, stages, 0, sizeof(matrix), matrix.data());
-            vkCmdPushConstants(
-                commands, layout, stages, sizeof(matrix), sizeof(normal), normal.data());
-            vkCmdPushConstants(commands, layout, stages, sizeof(matrix) + sizeof(draw.instance.normalFromModel),
-                               sizeof(draw.instance.baseColorFactor), draw.instance.baseColorFactor.data());
+            if (m_heapBindings) {
+                struct DirectGBufferPush {
+                    std::array<float, 16> clipFromModel;
+                    std::array<float, 12> normalColumns;
+                    std::array<float, 4> baseColorFactor;
+                };
+                static_assert(sizeof(DirectGBufferPush) == 128);
+                const DirectGBufferPush push{matrix, normal, draw.instance.baseColorFactor};
+                VkPushDataInfoEXT pushInfo{VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT};
+                pushInfo.offset = 0;
+                pushInfo.data = {&push, sizeof(push)};
+                m_heapBindings->dispatch().cmdPushData(commands, &pushInfo);
+            } else {
+                vkCmdPushConstants(commands, layout, stages, 0, sizeof(matrix), matrix.data());
+                vkCmdPushConstants(
+                    commands, layout, stages, sizeof(matrix), sizeof(normal), normal.data());
+                vkCmdPushConstants(
+                    commands,
+                    layout,
+                    stages,
+                    sizeof(matrix) + sizeof(draw.instance.normalFromModel),
+                    sizeof(draw.instance.baseColorFactor),
+                    draw.instance.baseColorFactor.data());
+            }
         } else {
             vkCmdPushConstants(commands, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(matrix), matrix.data());
         }
         vkCmdBindVertexBuffers(commands, 0, 1, &draw.mesh->vertices.buffer, &offset);
         vkCmdBindIndexBuffer(commands, draw.mesh->indices.buffer, 0, VK_INDEX_TYPE_UINT32);
-        if (!m_bindings) {
+        if (!m_bindings && !m_heapBindings) {
             vkCmdBindDescriptorSets(
                 commands,
                 VK_PIPELINE_BIND_POINT_GRAPHICS,

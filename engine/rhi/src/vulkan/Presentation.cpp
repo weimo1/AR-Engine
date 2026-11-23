@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "PresentationUtil.h"
+#include "binding/DescriptorHeapTable.h"
 #include "core/Diagnostics.h"
 #include "resources/DeviceResources.h"
 #include "rhi/RhiSession.h"
@@ -46,7 +47,8 @@ std::expected<void, core::Error> Presentation::open(
     bool enableGBuffer,
     const DeferredLighting* lighting,
     PlanPresentationGraph planner,
-    const PresentationSpec* spec) {
+    const PresentationSpec* spec,
+    DescriptorHeapTable* heapBinding) {
     if (!vkGetPhysicalDeviceSurfaceCapabilitiesKHR || !vkGetPhysicalDeviceSurfaceFormatsKHR ||
         !vkCreateSwapchainKHR || !vkDestroySwapchainKHR || !vkGetSwapchainImagesKHR ||
         !vkAcquireNextImageKHR || !vkQueuePresentKHR) {
@@ -64,17 +66,32 @@ std::expected<void, core::Error> Presentation::open(
     m_shaders = shaders;
     m_enableScreenshot = enableScreenshot;
     m_bindingSet = bindingSet;
+    m_heapBinding = heapBinding;
     m_staticScene = staticScene;
     m_enableGBuffer = enableGBuffer;
     m_spec = spec ? *spec : PresentationSpec{};
     m_planPresentation = planner;
     m_lighting = lighting;
+    if (m_heapBinding) {
+        const auto& plan = m_heapBinding->plan();
+        if (plan.imageStride > (std::numeric_limits<std::uint32_t>::max)() ||
+            plan.samplerStride > (std::numeric_limits<std::uint32_t>::max)() ||
+            plan.bufferBaseOffset > (std::numeric_limits<std::uint32_t>::max)() ||
+            plan.bufferStride > (std::numeric_limits<std::uint32_t>::max)()) {
+            return std::unexpected(
+                core::Error{
+                    core::ErrorCategory::QueryFailed,
+                    core::ErrorStage::Capability,
+                    "Descriptor Heap offsets or strides exceed 32-bit mapping fields",
+                    std::nullopt});
+        }
+    }
     for (Frame& frame : m_frames) {
         if (auto created = createFrame(frame, graphicsFamily); !created) {
             return created;
         }
     }
-    if (m_shaders) {
+    if (m_shaders && !m_heapBinding) {
         const auto indirectLayout =
             m_staticScene ? m_staticScene->indirectLayout() : VK_NULL_HANDLE;
         const std::array setLayouts{bindingLayout, indirectLayout};
@@ -386,6 +403,12 @@ std::expected<void, core::Error> Presentation::record(
     VkResult result = vkBeginCommandBuffer(commands, &begin);
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkBeginCommandBuffer", result));
+    }
+    if (m_heapBinding) {
+        const VkBindHeapInfoEXT resourceBind = m_heapBinding->resourceBindInfo();
+        const VkBindHeapInfoEXT samplerBind = m_heapBinding->samplerBindInfo();
+        m_heapBinding->dispatch().cmdBindResourceHeap(commands, &resourceBind);
+        m_heapBinding->dispatch().cmdBindSamplerHeap(commands, &samplerBind);
     }
 
     VkImageMemoryBarrier2 barrier{};
@@ -823,8 +846,7 @@ std::expected<void, core::Error> Presentation::publishStaticScene(
     if (auto error = drainFrames()) {
         return std::unexpected(std::move(*error));
     }
-    m_staticScene->publish(std::move(draws), std::move(indirect));
-    return {};
+    return m_staticScene->publish(std::move(draws), std::move(indirect));
 }
 
 std::expected<void, core::Error>

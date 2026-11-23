@@ -276,6 +276,7 @@
         "rhi-resource-retirement",
         "rhi-set-binding-limits",
         "rhi-descriptor-heap-layout",
+        "rhi-descriptor-heap-scene-layout",
         "rhi-set-binding-retirement",
         "sample-clear-frames",
         "sample-triangle-frames",
@@ -321,6 +322,7 @@
         "runtime-system-development",
         "sample-resize",
         "sample-camera-view-update",
+        "sample-static-scene-heap-gbuffer",
         "runtime-system-inspect",
         "platform-window-create",
         "platform-window-vulkan-extensions"
@@ -352,6 +354,7 @@
         "runtime-system-development",
         "sample-resize",
         "sample-camera-view-update",
+        "sample-static-scene-heap-gbuffer",
         "runtime-system-inspect"
       ]
     },
@@ -601,6 +604,7 @@
         "rhi-resource-retirement",
         "rhi-set-binding-limits",
         "rhi-descriptor-heap-layout",
+        "rhi-descriptor-heap-scene-layout",
         "rhi-set-binding-retirement",
         "sample-clear-frames",
         "sample-triangle-frames",
@@ -646,6 +650,7 @@
         "runtime-system-development",
         "sample-resize",
         "sample-camera-view-update",
+        "sample-static-scene-heap-gbuffer",
         "runtime-system-inspect",
         "platform-window-create",
         "platform-window-vulkan-extensions"
@@ -677,6 +682,7 @@
         "runtime-system-development",
         "sample-resize",
         "sample-camera-view-update",
+        "sample-static-scene-heap-gbuffer",
         "runtime-system-inspect"
       ]
     },

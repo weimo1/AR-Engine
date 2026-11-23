@@ -208,6 +208,12 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorStage::Validation,
             "a graphics device requires a Vulkan API request of at least 1.3");
     }
+    if (config.enableDescriptorHeap && config.deferredLighting) {
+        return makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "deferred lighting is not yet enabled for Descriptor Heap");
+    }
     if (config.deferredLighting) {
         const auto& lighting = *config.deferredLighting;
         const auto validSpirv = [](const auto& words) {
@@ -333,7 +339,8 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
     }
     if (config.enableStaticScene &&
         (!config.presentation || !config.triangleShaders || config.gpuDriven ||
-         config.enableSetBindingSample || (config.enableSetBinding && !config.enableGBuffer))) {
+         config.enableSetBindingSample || (config.enableSetBinding && !config.enableGBuffer) ||
+         (config.enableDescriptorHeap && !config.enableGBuffer))) {
         return makeError(
             core::ErrorCategory::InvalidArguments,
             core::ErrorStage::Validation,
@@ -371,6 +378,12 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorCategory::InvalidArguments,
             core::ErrorStage::Validation,
             "Descriptor Heap requires a Vulkan 1.4 graphics device request");
+    }
+    if (config.enableDescriptorHeap && config.presentation && !config.enableStaticScene) {
+        return makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "Descriptor Heap presentation requires static scene GBuffer");
     }
     if (config.gpuDriven && (!config.presentation || !config.triangleShaders ||
                              config.enableSetBinding || config.enableDescriptorHeap)) {
@@ -457,6 +470,7 @@ struct RhiSession::Impl {
     std::optional<detail::StaticSceneDraw> staticScene;
     std::array<std::optional<detail::DeviceResources>, 2> cullFrames;
     std::optional<detail::SetBindingTable> setBinding;
+    std::optional<detail::DescriptorHeapTable> descriptorHeap;
     detail::DescriptorHeapDispatch heapDispatch{};
     ImageHandle retirementImage;
     VkImageView replacementView = VK_NULL_HANDLE;
@@ -1016,26 +1030,24 @@ struct RhiSession::Impl {
                 "Vulkan Descriptor Heap property or device lookup entry point is unavailable"));
         }
 
-        VkPhysicalDeviceBufferDeviceAddressFeatures address{};
-        address.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
-        VkPhysicalDeviceDescriptorIndexingFeatures heapIndexing{};
-        heapIndexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+        VkPhysicalDeviceVulkan12Features heap12{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
         VkPhysicalDeviceMaintenance5Features heapMaint5{};
         heapMaint5.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES;
         VkPhysicalDeviceFeatures2 features{};
         features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        features.pNext = &address;
-        address.pNext = &heapIndexing;
-        heapIndexing.pNext = &heapMaint5;
+        features.pNext = &heap12;
+        heap12.pNext = &heapMaint5;
         vkGetPhysicalDeviceFeatures2(physical, &features);
-        if (address.bufferDeviceAddress != VK_TRUE ||
-            heapIndexing.shaderSampledImageArrayNonUniformIndexing != VK_TRUE ||
+        if (heap12.bufferDeviceAddress != VK_TRUE ||
+            heap12.shaderSampledImageArrayNonUniformIndexing != VK_TRUE ||
+            (config.enableGBuffer && heap12.runtimeDescriptorArray != VK_TRUE) ||
             heapMaint5.maintenance5 != VK_TRUE) {
             return std::unexpected(makeError(
                 core::ErrorCategory::QueryFailed,
                 core::ErrorStage::Capability,
                 "Descriptor Heap requires bufferDeviceAddress, non-uniform sampled image "
-                "indexing, and maintenance5"));
+                "indexing, runtimeDescriptorArray (for GBuffer), and maintenance5"));
         }
 
         VkPhysicalDeviceDescriptorHeapPropertiesEXT heap{};
@@ -1063,6 +1075,12 @@ struct RhiSession::Impl {
                 core::ErrorCategory::QueryFailed,
                 core::ErrorStage::Capability,
                 "Vulkan reports unusable Descriptor Heap limits"));
+        }
+        if (config.enableStaticScene && limits.maxPushDataSize < 128u) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::QueryFailed,
+                core::ErrorStage::Capability,
+                "Descriptor Heap scene rendering requires maxPushDataSize >= 128"));
         }
         return limits;
     }
@@ -1096,8 +1114,9 @@ struct RhiSession::Impl {
 
         std::vector<const char*> extensions;
         std::optional<DescriptorHeapLimits> heapLimits;
-        VkPhysicalDeviceBufferDeviceAddressFeatures address{};
-        VkPhysicalDeviceDescriptorIndexingFeatures heapIndexing{};
+        VkPhysicalDeviceVulkan12Features core12{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+        bool enableCore12 = false;
         VkPhysicalDeviceMaintenance5Features heapMaint5{};
         VkPhysicalDeviceDescriptorHeapFeaturesEXT heap{};
         if (config.enableDescriptorHeap) {
@@ -1106,47 +1125,45 @@ struct RhiSession::Impl {
                 return std::unexpected(std::move(limits.error()));
             }
             heapLimits = *limits;
-            address.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
-            address.bufferDeviceAddress = VK_TRUE;
-            heapIndexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
-            heapIndexing.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+            core12.bufferDeviceAddress = VK_TRUE;
+            core12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+            if (config.enableGBuffer) {
+                core12.runtimeDescriptorArray = VK_TRUE;
+            }
+            enableCore12 = true;
             heapMaint5.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES;
             heapMaint5.maintenance5 = VK_TRUE;
             heap.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT;
             heap.descriptorHeap = VK_TRUE;
-            core13.pNext = &address;
-            address.pNext = &heapIndexing;
-            heapIndexing.pNext = &heapMaint5;
+            core13.pNext = &heapMaint5;
             heapMaint5.pNext = &heap;
             extensions.push_back(VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME);
         }
-        VkPhysicalDeviceVulkan12Features draw12{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
         VkPhysicalDeviceFeatures drawFeatures{};
         bool staticIndirect = false;
         if (config.staticIndirect) {
+            VkPhysicalDeviceVulkan12Features queried12{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
             VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
-            features.pNext = &draw12;
+            features.pNext = &queried12;
             vkGetPhysicalDeviceFeatures2(physical, &features);
             std::uint32_t queueCount = 0;
             vkGetPhysicalDeviceQueueFamilyProperties(physical, &queueCount, nullptr);
             std::vector<VkQueueFamilyProperties> availableQueues(queueCount);
             vkGetPhysicalDeviceQueueFamilyProperties(physical, &queueCount, availableQueues.data());
-            staticIndirect = draw12.drawIndirectCount && features.features.multiDrawIndirect &&
+            staticIndirect = queried12.drawIndirectCount && features.features.multiDrawIndirect &&
                              features.features.drawIndirectFirstInstance &&
                              (availableQueues[families.graphics].queueFlags & VK_QUEUE_COMPUTE_BIT);
             if (staticIndirect) {
                 drawFeatures.multiDrawIndirect = VK_TRUE;
                 drawFeatures.drawIndirectFirstInstance = VK_TRUE;
                 info.pEnabledFeatures = &drawFeatures;
-                draw12 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
-                draw12.drawIndirectCount = VK_TRUE;
-                draw12.pNext = core13.pNext;
-                core13.pNext = &draw12;
+                core12.drawIndirectCount = VK_TRUE;
+                enableCore12 = true;
             } else {
                 const char* reason =
                     !features.features.drawIndirectFirstInstance ? "drawIndirectFirstInstance"
-                    : !draw12.drawIndirectCount                  ? "drawIndirectCount"
+                    : !queried12.drawIndirectCount               ? "drawIndirectCount"
                     : !features.features.multiDrawIndirect       ? "multiDrawIndirect"
                                                                  : "compute on the graphics queue";
                 emitEvent(
@@ -1157,10 +1174,12 @@ struct RhiSession::Impl {
             }
         }
         if (config.gpuDriven) {
+            VkPhysicalDeviceVulkan12Features queried12{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
             VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
-            features.pNext = &draw12;
+            features.pNext = &queried12;
             vkGetPhysicalDeviceFeatures2(physical, &features);
-            if (!draw12.drawIndirectCount || !features.features.multiDrawIndirect) {
+            if (!queried12.drawIndirectCount || !features.features.multiDrawIndirect) {
                 return std::unexpected(makeError(
                     core::ErrorCategory::RequestedApiUnsupported,
                     core::ErrorStage::Capability,
@@ -1168,11 +1187,8 @@ struct RhiSession::Impl {
             }
             drawFeatures.multiDrawIndirect = VK_TRUE;
             info.pEnabledFeatures = &drawFeatures;
-            draw12 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
-            draw12.drawIndirectCount = VK_TRUE;
-            draw12.bufferDeviceAddress = config.enableDescriptorHeap ? VK_TRUE : VK_FALSE;
-            draw12.pNext = config.enableDescriptorHeap ? address.pNext : core13.pNext;
-            core13.pNext = &draw12;
+            core12.drawIndirectCount = VK_TRUE;
+            enableCore12 = true;
         }
         VkPhysicalDeviceDescriptorIndexingFeatures indexing{};
         detail::SetBindingLimits bindingLimits{};
@@ -1233,13 +1249,17 @@ struct RhiSession::Impl {
             indexing = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES};
             indexing.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
             indexing.runtimeDescriptorArray = bindlessMaterials ? VK_TRUE : VK_FALSE;
-            if (staticIndirect) {
-                draw12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
-                draw12.runtimeDescriptorArray = VK_TRUE;
+            if (enableCore12) {
+                core12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+                core12.runtimeDescriptorArray = bindlessMaterials ? VK_TRUE : VK_FALSE;
             } else {
                 indexing.pNext = core13.pNext;
                 core13.pNext = &indexing;
             }
+        }
+        if (enableCore12) {
+            core12.pNext = core13.pNext;
+            core13.pNext = &core12;
         }
         VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR maintenance{};
         if (surface != VK_NULL_HANDLE) {
@@ -1306,6 +1326,87 @@ struct RhiSession::Impl {
         }
         graphicsInfo =
             GraphicsDeviceInfo{families.graphics, debugMessenger != VK_NULL_HANDLE, heapLimits};
+        if (config.enableDescriptorHeap && config.enableStaticScene) {
+            auto owner = resourcesForCreation();
+            if (!owner) {
+                return std::unexpected(std::move(owner.error()));
+            }
+            constexpr std::array white{
+                std::byte{255}, std::byte{255}, std::byte{255}, std::byte{255}};
+            auto whiteImage = (*owner)->createSampledImage({1, 1}, white);
+            if (!whiteImage) {
+                return std::unexpected(std::move(whiteImage.error()));
+            }
+            VkSamplerCreateInfo nearestRepeat{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+            nearestRepeat.magFilter = VK_FILTER_NEAREST;
+            nearestRepeat.minFilter = VK_FILTER_NEAREST;
+            nearestRepeat.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            nearestRepeat.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            nearestRepeat.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            nearestRepeat.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+
+            VkSamplerCreateInfo nearestClamp{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+            nearestClamp.magFilter = VK_FILTER_NEAREST;
+            nearestClamp.minFilter = VK_FILTER_NEAREST;
+            nearestClamp.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            nearestClamp.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            nearestClamp.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            nearestClamp.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+
+            VkSamplerCreateInfo linearClamp{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+            linearClamp.magFilter = VK_FILTER_LINEAR;
+            linearClamp.minFilter = VK_FILTER_LINEAR;
+            linearClamp.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+            linearClamp.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            linearClamp.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            linearClamp.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            linearClamp.maxLod = 4.F;
+
+            const detail::DescriptorHeapCapacity capacity{
+                detail::kHeapTotalSceneImages,
+                detail::kHeapSceneBufferCount,
+                detail::kHeapSceneSamplerCount};
+            descriptorHeap.emplace();
+            if (auto opened = descriptorHeap->open(
+                    physical,
+                    graphicsDevice,
+                    **owner,
+                    *heapLimits,
+                    heapDispatch,
+                    capacity,
+                    *whiteImage,
+                    VK_FORMAT_R8G8B8A8_UNORM,
+                    nearestRepeat);
+                !opened) {
+                return opened;
+            }
+            auto clampSlot = descriptorHeap->registerSampler(nearestClamp);
+            if (!clampSlot) {
+                return std::unexpected(std::move(clampSlot.error()));
+            }
+            auto envSlot = descriptorHeap->registerSampler(linearClamp);
+            if (!envSlot) {
+                return std::unexpected(std::move(envSlot.error()));
+            }
+            if (auto published = descriptorHeap->publishCompleted(true); !published) {
+                return std::unexpected(std::move(published.error()));
+            }
+            if (descriptorHeap->resolveSampler(*clampSlot) != 1u ||
+                descriptorHeap->resolveSampler(*envSlot) != 2u) {
+                return std::unexpected(makeError(
+                    core::ErrorCategory::InternalError,
+                    core::ErrorStage::Capability,
+                    "Descriptor Heap fixed sampler slots did not map to slots 1 and 2"));
+            }
+            emitEvent(
+                *diagnostics,
+                core::LogLevel::Info,
+                "rhi.binding.heap.ready",
+                "path=descriptor-heap images=" + std::to_string(detail::kHeapTotalSceneImages) +
+                    " buffers=" + std::to_string(detail::kHeapSceneBufferCount) +
+                    " samplers=" + std::to_string(detail::kHeapSceneSamplerCount) +
+                    " validation=" + (graphicsInfo->validationEnabled ? "enabled" : "disabled"));
+        }
         if (config.enableSetBinding) {
             auto owner = resourcesForCreation();
             if (!owner) {
@@ -1484,7 +1585,10 @@ struct RhiSession::Impl {
                     return std::unexpected(owner.error());
                 }
                 staticScene.emplace(
-                    **owner, config.enableGBuffer, bindlessMaterials ? &*setBinding : nullptr);
+                    **owner,
+                    config.enableGBuffer,
+                    bindlessMaterials ? &*setBinding : nullptr,
+                    descriptorHeap ? &*descriptorHeap : nullptr);
                 if (auto ready =
                         staticScene->open(staticIndirect ? &*config.staticIndirect : nullptr);
                     !ready) {
@@ -1509,7 +1613,8 @@ struct RhiSession::Impl {
                     config.enableGBuffer,
                     config.deferredLighting ? &*config.deferredLighting : nullptr,
                     config.planPresentation,
-                    config.presentationSpec ? &*config.presentationSpec : nullptr);
+                    config.presentationSpec ? &*config.presentationSpec : nullptr,
+                    descriptorHeap ? &*descriptorHeap : nullptr);
                 !opened) {
                 return opened;
             }
@@ -1662,11 +1767,16 @@ struct RhiSession::Impl {
             }
             retainResources =
                 resources->hasPendingTransfer() ||
-                (retainPresentation && (setBinding.has_value() || staticScene.has_value()));
+                (retainPresentation &&
+                 (setBinding.has_value() || descriptorHeap.has_value() || staticScene.has_value()));
             if (staticScene && retainResources) {
                 staticScene->abandon();
             }
             staticScene.reset();
+            if (descriptorHeap && (retainPresentation || retainResources)) {
+                descriptorHeap->abandon();
+            }
+            descriptorHeap.reset();
             if (retainResources) {
                 resources->abandon();
             }

@@ -72,6 +72,8 @@ void DescriptorHeapTable::close() noexcept {
     }
     m_imageSlots.reset();
     m_samplerSlots.reset();
+    m_defaultImage = VK_NULL_HANDLE;
+    m_defaultImageFormat = VK_FORMAT_UNDEFINED;
     m_resourceBuffer = VK_NULL_HANDLE;
     m_resourceAllocation = nullptr;
     m_resourceMapped = nullptr;
@@ -168,7 +170,8 @@ std::expected<void, core::Error> DescriptorHeapTable::open(
                 "Descriptor Heap device entry points are unavailable",
                 std::nullopt});
     }
-    if (capacity.imageCount > kStaticSceneImageLimit || capacity.samplerCount > kSetSamplerCount) {
+    if (capacity.imageCount > kHeapTotalSceneImages ||
+        capacity.samplerCount > kHeapSceneSamplerCount) {
         return std::unexpected(invalidArg("Descriptor Heap slot capacity exceeds table limit"));
     }
 
@@ -180,12 +183,16 @@ std::expected<void, core::Error> DescriptorHeapTable::open(
     if (vkGetPhysicalDeviceDescriptorSizeEXT && physical) {
         const VkDeviceSize imageSize =
             vkGetPhysicalDeviceDescriptorSizeEXT(physical, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
-        const VkDeviceSize bufferSize =
+        const VkDeviceSize storageBufferSize =
             vkGetPhysicalDeviceDescriptorSizeEXT(physical, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        const VkDeviceSize uniformBufferSize =
+            vkGetPhysicalDeviceDescriptorSizeEXT(physical, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
         const VkDeviceSize samplerSize =
             vkGetPhysicalDeviceDescriptorSizeEXT(physical, VK_DESCRIPTOR_TYPE_SAMPLER);
         if (imageSize == 0 || imageSize > planned->imageStride ||
-            (capacity.bufferCount > 0 && (bufferSize == 0 || bufferSize > planned->bufferStride)) ||
+            (capacity.bufferCount > 0 &&
+             (storageBufferSize == 0 || storageBufferSize > planned->bufferStride ||
+              uniformBufferSize == 0 || uniformBufferSize > planned->bufferStride)) ||
             samplerSize == 0 || samplerSize > planned->samplerStride) {
             return std::unexpected(
                 core::Error{
@@ -225,9 +232,12 @@ std::expected<void, core::Error> DescriptorHeapTable::open(
     m_dispatch = dispatch;
     m_capacity = capacity;
     m_plan = *planned;
+    m_defaultImage = *retainedDefault;
+    m_defaultImageFormat = defaultImageFormat;
+    const std::uint32_t sceneImageCapacity = (std::min)(capacity.imageCount, kHeapSceneImageLimit);
     m_imageSlots.emplace(
         HeapImageDescriptor{defaultImage, *retainedDefault, defaultImageFormat},
-        capacity.imageCount);
+        sceneImageCapacity);
     m_samplerSlots.emplace(defaultSampler, capacity.samplerCount);
 
     if (auto allocated = allocateHeap(
@@ -382,21 +392,14 @@ std::expected<bool, core::Error> DescriptorHeapTable::publishCompleted(bool subm
 }
 
 std::expected<void, core::Error>
-DescriptorHeapTable::writeImageSlot(std::uint32_t slot, VkImage image, VkFormat format) {
-    if (!m_resourceMapped || slot >= m_capacity.imageCount || image == VK_NULL_HANDLE) {
-        return std::unexpected(invalidArg("invalid Descriptor Heap image slot or image"));
+DescriptorHeapTable::writeImageViewSlot(std::uint32_t slot, const VkImageViewCreateInfo& viewInfo) {
+    if (!m_resourceMapped || slot >= m_capacity.imageCount ||
+        viewInfo.sType != VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO ||
+        viewInfo.image == VK_NULL_HANDLE || viewInfo.format == VK_FORMAT_UNDEFINED ||
+        viewInfo.subresourceRange.aspectMask == 0 || viewInfo.subresourceRange.levelCount == 0 ||
+        viewInfo.subresourceRange.layerCount == 0) {
+        return std::unexpected(invalidArg("invalid Descriptor Heap image slot or image view"));
     }
-
-    VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    viewInfo.image = image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = format;
-    viewInfo.components = {
-        VK_COMPONENT_SWIZZLE_IDENTITY,
-        VK_COMPONENT_SWIZZLE_IDENTITY,
-        VK_COMPONENT_SWIZZLE_IDENTITY,
-        VK_COMPONENT_SWIZZLE_IDENTITY};
-    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
     VkImageDescriptorInfoEXT imageDesc{VK_STRUCTURE_TYPE_IMAGE_DESCRIPTOR_INFO_EXT};
     imageDesc.pView = &viewInfo;
@@ -422,15 +425,52 @@ DescriptorHeapTable::writeImageSlot(std::uint32_t slot, VkImage image, VkFormat 
     return {};
 }
 
+std::expected<void, core::Error>
+DescriptorHeapTable::writeImageSlot(std::uint32_t slot, VkImage image, VkFormat format) {
+    if (image == VK_NULL_HANDLE) {
+        return std::unexpected(invalidArg("invalid Descriptor Heap image slot or image"));
+    }
+
+    VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    viewInfo.image = image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = format;
+    viewInfo.components = {
+        VK_COMPONENT_SWIZZLE_IDENTITY,
+        VK_COMPONENT_SWIZZLE_IDENTITY,
+        VK_COMPONENT_SWIZZLE_IDENTITY,
+        VK_COMPONENT_SWIZZLE_IDENTITY};
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    return writeImageViewSlot(slot, viewInfo);
+}
+
+std::expected<void, core::Error> DescriptorHeapTable::writeExternalImageSlot(
+    std::uint32_t slot, const VkImageViewCreateInfo& viewInfo) {
+    if (!m_resourceMapped || slot < kHeapExternalImageBase || slot >= m_capacity.imageCount) {
+        return std::unexpected(invalidArg("invalid Descriptor Heap external image slot"));
+    }
+    return writeImageViewSlot(slot, viewInfo);
+}
+
+std::expected<void, core::Error>
+DescriptorHeapTable::resetExternalImageSlotToDefault(std::uint32_t slot) {
+    if (!m_resourceMapped || slot < kHeapExternalImageBase || slot >= m_capacity.imageCount ||
+        m_defaultImage == VK_NULL_HANDLE) {
+        return std::unexpected(invalidArg("invalid Descriptor Heap external image slot"));
+    }
+    return writeImageSlot(slot, m_defaultImage, m_defaultImageFormat);
+}
+
 std::expected<void, core::Error> DescriptorHeapTable::writeBufferSlot(
-    std::uint32_t slot, VkDeviceAddress address, VkDeviceSize size) {
-    if (!m_resourceMapped || slot >= m_capacity.bufferCount || address == 0 || size == 0) {
+    std::uint32_t slot, VkDeviceAddress address, VkDeviceSize size, VkDescriptorType type) {
+    if (!m_resourceMapped || slot >= m_capacity.bufferCount || address == 0 || size == 0 ||
+        (type != VK_DESCRIPTOR_TYPE_STORAGE_BUFFER && type != VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)) {
         return std::unexpected(invalidArg("invalid Descriptor Heap buffer slot or address range"));
     }
 
     const VkDeviceAddressRangeEXT range{address, size};
     VkResourceDescriptorInfoEXT resourceInfo{VK_STRUCTURE_TYPE_RESOURCE_DESCRIPTOR_INFO_EXT};
-    resourceInfo.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    resourceInfo.type = type;
     resourceInfo.data.pAddressRange = &range;
 
     const VkDeviceSize offset =
@@ -439,7 +479,10 @@ std::expected<void, core::Error> DescriptorHeapTable::writeBufferSlot(
         m_resourceMapped + offset, static_cast<std::size_t>(m_plan.bufferStride)};
     const VkResult written = m_dispatch.writeResourceDescriptors(m_device, 1, &resourceInfo, &dst);
     if (written != VK_SUCCESS) {
-        return std::unexpected(heapFailed("vkWriteResourceDescriptorsEXT(storageBuffer)", written));
+        const char* label = type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                ? "vkWriteResourceDescriptorsEXT(uniformBuffer)"
+                                : "vkWriteResourceDescriptorsEXT(storageBuffer)";
+        return std::unexpected(heapFailed(label, written));
     }
 
     const VkResult flushed = vmaFlushAllocation(

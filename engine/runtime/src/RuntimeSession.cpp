@@ -48,12 +48,15 @@ core::Error makeError(core::ErrorCategory category, core::ErrorStage stage, std:
 // loader or writes a diagnostic run.
 std::optional<core::Error> validateModeRequest(const RuntimeConfig& config) {
     const std::uint32_t requested = config.query.requestedApi;
-    if (config.query.presentation || (config.window && (!config.query.createGraphicsDevice ||
-                                                        config.mode != QueryMode::Development))) {
+    const bool presentationModeAllowed =
+        config.mode == QueryMode::Development || config.mode == QueryMode::RequireProduct;
+    if (config.query.presentation ||
+        (config.window && (!config.query.createGraphicsDevice || !presentationModeAllowed))) {
         return makeError(
             core::ErrorCategory::InvalidArguments,
             core::ErrorStage::Validation,
-            "runtime presentation requires a runtime window and a development graphics device");
+            "runtime presentation requires a runtime window and a development or require_product "
+            "graphics device");
     }
     switch (config.mode) {
     case QueryMode::Inspect:
@@ -126,9 +129,15 @@ struct RuntimeSession::Impl {
             return std::unexpected(std::move(opened.error()));
         }
         window = std::move(*opened);
-        auto extensions = window->requiredInstanceExtensions();
-        if (!extensions) {
-            return std::unexpected(std::move(extensions.error()));
+        std::vector<std::string> extensions;
+        if (std::holds_alternative<rhi::ExplicitLoaderPath>(query.loader)) {
+            extensions = {"VK_KHR_surface", "VK_KHR_win32_surface"};
+        } else {
+            auto required = window->requiredInstanceExtensions();
+            if (!required) {
+                return std::unexpected(std::move(required.error()));
+            }
+            extensions = std::move(*required);
         }
         const auto size = window->framebufferSize();
         if (size.width <= 0 || size.height <= 0) {
@@ -139,7 +148,7 @@ struct RuntimeSession::Impl {
         }
         query.presentation = rhi::Win32Presentation{
             window->nativeWin32Handle(),
-            std::move(*extensions),
+            std::move(extensions),
             static_cast<std::uint32_t>(size.width),
             static_cast<std::uint32_t>(size.height)};
         return {};
@@ -245,20 +254,24 @@ RuntimeSession::start(const RuntimeConfig& config) {
     // require_product is the only mode that turns a complete but insufficient query into a
     // failed start. inspect and development keep the product verdict inside the report.
     if (config.mode == QueryMode::RequireProduct && !session->report.productTargetSupported) {
-        const core::Error unsupported = makeError(
-            core::ErrorCategory::ApiVersionUnsupported,
+        const bool apiUnsupported = !session->report.judgments.apiVersionSupported;
+        const core::Error unmet = makeError(
+            apiUnsupported ? core::ErrorCategory::ApiVersionUnsupported
+                           : core::ErrorCategory::QueryFailed,
             core::ErrorStage::Capability,
-            "require_product needs a met 1.4 product target");
+            apiUnsupported ? "require_product needs a met 1.4 product target"
+                           : "require_product did not satisfy required Vulkan 1.4 capabilities");
 
         const rhi::CloseResult closeResult = session->rhi->close();
         session->rhi.reset();
+        session->closeWindow(closeResult.residualResources);
         session->closed = true;
 
         core::RunSummaryInput summary;
         summary.runId = config.diagnostics.runId;
         summary.identity = identityFor(build);
-        summary.primaryResult = core::ResultKind::Unsupported;
-        summary.primaryError = unsupported;
+        summary.primaryResult = resultKindFor(unmet.category);
+        summary.primaryError = unmet;
         summary.cleanupErrors = closeResult.errors;
         summary.resourcesReleased = closeResult.resourcesReleased;
         summary.residualResources = closeResult.residualResources;

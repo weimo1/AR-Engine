@@ -6,6 +6,7 @@
 
 namespace ar::rhi::detail {
 
+class DescriptorHeapTable;
 class SetBindingTable;
 
 class StaticSceneDraw {
@@ -13,7 +14,10 @@ class StaticSceneDraw {
 
 public:
     explicit StaticSceneDraw(
-        DeviceResources& resources, bool enableGBuffer, SetBindingTable* bindings);
+        DeviceResources& resources,
+        bool enableGBuffer,
+        SetBindingTable* bindings,
+        DescriptorHeapTable* heapBindings = nullptr);
     ~StaticSceneDraw();
     StaticSceneDraw(const StaticSceneDraw&) = delete;
 
@@ -51,8 +55,8 @@ public:
         bool verifyRollback);
     std::expected<std::shared_ptr<StaticSceneIndirect::Scene>, core::Error>
     prepareIndirect(std::span<const Draw> draws, const StaticIndirectGeometry* geometry);
-    void
-    publish(std::vector<Draw> draws, std::shared_ptr<StaticSceneIndirect::Scene> indirect) noexcept;
+    std::expected<void, core::Error>
+    publish(std::vector<Draw> draws, std::shared_ptr<StaticSceneIndirect::Scene> indirect);
     std::expected<void, core::Error>
     updateFrameView(std::size_t frame, const FrameView& view, float inverseAspect);
     void record(
@@ -73,6 +77,7 @@ private:
 
     DeviceResources& m_resources;
     SetBindingTable* m_bindings;
+    DescriptorHeapTable* m_heapBindings = nullptr;
     VkDescriptorSetLayout m_layout = VK_NULL_HANDLE;
     VkSampler m_sampler = VK_NULL_HANDLE;
     std::vector<Draw> m_active;

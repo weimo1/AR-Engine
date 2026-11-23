@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "PresentationUtil.h"
+#include "binding/DescriptorHeapTable.h"
 #include "rhi/RhiSession.h"
 
 namespace ar::rhi::detail {
@@ -334,9 +335,42 @@ std::expected<void, core::Error> Presentation::createGraphicsPipeline(
         depth.depthWriteEnable = VK_TRUE;
         depth.depthCompareOp = m_spec.depthReverseZ ? VK_COMPARE_OP_GREATER : VK_COMPARE_OP_LESS;
     }
+    VkPipelineCreateFlags2CreateInfo flags2{VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO};
+    std::array<VkDescriptorSetAndBindingMappingEXT, 2> heapMappings{};
+    VkShaderDescriptorSetAndBindingMappingInfoEXT heapMappingInfo{
+        VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT};
+    if (m_heapBinding) {
+        const auto& plan = m_heapBinding->plan();
+        heapMappings[0].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+        heapMappings[0].descriptorSet = 0;
+        heapMappings[0].firstBinding = 0;
+        heapMappings[0].bindingCount = 1;
+        heapMappings[0].resourceMask = VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT;
+        heapMappings[0].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+        heapMappings[0].sourceData.constantOffset.heapOffset = 0;
+        heapMappings[0].sourceData.constantOffset.heapArrayStride =
+            static_cast<std::uint32_t>(plan.imageStride);
+
+        heapMappings[1].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+        heapMappings[1].descriptorSet = 0;
+        heapMappings[1].firstBinding = 1;
+        heapMappings[1].bindingCount = 1;
+        heapMappings[1].resourceMask = VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT;
+        heapMappings[1].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+        heapMappings[1].sourceData.constantOffset.heapOffset = 0;
+        heapMappings[1].sourceData.constantOffset.heapArrayStride = 0;
+
+        heapMappingInfo.mappingCount = static_cast<std::uint32_t>(heapMappings.size());
+        heapMappingInfo.pMappings = heapMappings.data();
+        stageInfos[1].pNext = &heapMappingInfo;
+
+        flags2.flags = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
+        flags2.pNext = &rendering;
+    }
     VkGraphicsPipelineCreateInfo pipeline{};
     pipeline.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipeline.pNext = &rendering;
+    pipeline.pNext =
+        m_heapBinding ? static_cast<const void*>(&flags2) : static_cast<const void*>(&rendering);
     pipeline.stageCount = static_cast<std::uint32_t>(stageInfos.size());
     pipeline.pStages = stageInfos.data();
     pipeline.pVertexInputState = &vertex;
@@ -348,7 +382,8 @@ std::expected<void, core::Error> Presentation::createGraphicsPipeline(
     if (geometry) {
         pipeline.pDepthStencilState = &depth;
     }
-    pipeline.layout = fullscreen ? m_lightingLayout : m_pipelineLayout;
+    pipeline.layout =
+        m_heapBinding ? VK_NULL_HANDLE : (fullscreen ? m_lightingLayout : m_pipelineLayout);
     const VkResult result =
         vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &output);
     if (result != VK_SUCCESS) {
