@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <expected>
 #include <memory>
 #include <string>
@@ -7,6 +8,7 @@
 
 #include "core/Diagnostics.h"
 #include "core/Error.h"
+#include "render/StaticRenderInput.h"
 #include "rhi/Capabilities.h"
 #include "rhi/RhiSession.h"
 #include "runtime/RuntimeConfig.h"
@@ -51,6 +53,8 @@ public:
 
     [[nodiscard]] std::expected<void, core::Error>
     openStaticScene(const std::filesystem::path& source, bool verifyRollback = false);
+    [[nodiscard]] std::expected<void, core::Error> setCamera(const render::StaticCamera& camera);
+    [[nodiscard]] std::uint64_t staticSceneUploadCount() const noexcept;
     [[nodiscard]] std::expected<void, core::Error>
     saveStaticScene(const std::filesystem::path& destination) const;
 

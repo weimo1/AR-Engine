@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <unordered_map>
+#include <utility>
 
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
@@ -14,13 +16,43 @@
 #include "rhi/RhiSession.h"
 
 namespace ar::render {
+namespace {
 
-std::expected<void, core::Error> publishStaticScene(
-    rhi::RhiSession& rhi, const StaticRenderInput& input, bool verifyRollback, bool enableGBuffer) {
-    const auto& camera = input.camera;
+bool allFinite(std::span<const float> values) noexcept {
+    return std::ranges::all_of(values, [](float value) { return std::isfinite(value); });
+}
+
+core::Error invalidCamera(const char* message) {
+    return core::Error{
+        core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation, message, {}};
+}
+
+} // namespace
+
+std::expected<rhi::FrameView, core::Error>
+buildFrameView(const StaticCamera& camera, bool enableGBuffer) {
+    if (!allFinite(camera.position) || !allFinite(camera.orientation)) {
+        return std::unexpected(invalidCamera("camera position or orientation is non-finite"));
+    }
+    if (!std::isfinite(camera.nearPlane) || !std::isfinite(camera.farPlane) ||
+        !(camera.nearPlane > 0.F) || !(camera.farPlane > camera.nearPlane)) {
+        return std::unexpected(invalidCamera("camera clip planes require 0 < near < far"));
+    }
+    if (!std::isfinite(camera.verticalFovRadians) || !(camera.verticalFovRadians > 0.F) ||
+        !(camera.verticalFovRadians < std::numbers::pi_v<float>)) {
+        return std::unexpected(invalidCamera("camera vertical FOV must be in (0, pi)"));
+    }
     const auto& [px, py, pz] = camera.position;
     const auto& [x, y, z, w] = camera.orientation;
-    const auto orientation = glm::normalize(glm::quat(w, x, y, z));
+    const float lengthSquared = x * x + y * y + z * z + w * w;
+    if (!std::isfinite(lengthSquared) || !(lengthSquared > 0.F)) {
+        return std::unexpected(invalidCamera("camera orientation quaternion must be non-zero"));
+    }
+    const float invLength = 1.F / std::sqrt(lengthSquared);
+    if (!std::isfinite(invLength)) {
+        return std::unexpected(invalidCamera("camera orientation quaternion cannot be normalized"));
+    }
+    const glm::quat orientation(w * invLength, x * invLength, y * invLength, z * invLength);
     const auto view = glm::mat4_cast(glm::conjugate(orientation)) *
                       glm::translate(glm::mat4(1.F), {-px, -py, -pz});
     auto projection = glm::perspectiveRH_ZO(
@@ -29,6 +61,32 @@ std::expected<void, core::Error> publishStaticScene(
         projection[1][1] *= -1.F;
     }
     const auto clipFromWorld = projection * view;
+    const auto inverseProjection = glm::inverse(projection);
+    const auto cameraRotation = glm::mat4_cast(orientation);
+
+    rhi::FrameView result{};
+    std::copy_n(glm::value_ptr(view), result.view.size(), result.view.begin());
+    std::copy_n(
+        glm::value_ptr(clipFromWorld), result.clipFromWorld.size(), result.clipFromWorld.begin());
+    std::copy_n(
+        glm::value_ptr(inverseProjection),
+        result.inverseProjection.size(),
+        result.inverseProjection.begin());
+    std::copy_n(
+        glm::value_ptr(cameraRotation), result.viewToWorld.size(), result.viewToWorld.begin());
+    if (!allFinite(result.view) || !allFinite(result.clipFromWorld) ||
+        !allFinite(result.inverseProjection) || !allFinite(result.viewToWorld)) {
+        return std::unexpected(invalidCamera("camera parameters produce non-finite view matrices"));
+    }
+    return result;
+}
+
+std::expected<void, core::Error> publishStaticScene(
+    rhi::RhiSession& rhi, const StaticRenderInput& input, bool verifyRollback, bool enableGBuffer) {
+    auto frameView = buildFrameView(input.camera, enableGBuffer);
+    if (!frameView) {
+        return std::unexpected(std::move(frameView.error()));
+    }
     std::vector<std::vector<rhi::StaticVertex>> vertices;
     std::vector<std::vector<std::uint32_t>> faceIndices;
     std::vector<rhi::StaticMeshUpload> meshes;
@@ -86,12 +144,10 @@ std::expected<void, core::Error> publishStaticScene(
                 mesh.materialHeight = data ? data->height : 1;
             }
         }
-        const auto model = glm::make_mat4(draw.modelMatrix.data());
-        const auto clip = clipFromWorld * model;
-        auto& instance = draws.emplace_back(rhi::StaticInstanceDraw{entry->second, {}});
-        std::copy_n(glm::value_ptr(clip), instance.clipFromModel.size(), instance.clipFromModel.begin());
+        auto& instance =
+            draws.emplace_back(rhi::StaticInstanceDraw{entry->second, draw.modelMatrix});
         if (enableGBuffer) {
-            const glm::mat3 linear(view * model);
+            const glm::mat3 linear(glm::make_mat4(draw.modelMatrix.data()));
             const auto determinant = glm::determinant(linear);
             if (!std::isfinite(determinant) || determinant == 0.F) {
                 return std::unexpected(core::Error{
@@ -108,12 +164,7 @@ std::expected<void, core::Error> publishStaticScene(
             instance.baseColorFactor = asset->material.baseColorFactor;
         }
     }
-    const auto inverse = glm::inverse(projection);
-    std::array<float, 16> inverseProjection;
-    std::copy_n(glm::value_ptr(inverse), inverseProjection.size(), inverseProjection.begin());
-    const auto cameraRotation = glm::mat4_cast(orientation);
-    std::array<float, 12> viewToWorld;
-    std::copy_n(glm::value_ptr(cameraRotation), viewToWorld.size(), viewToWorld.begin());
+    std::expected<void, core::Error> replaced;
     if (rhi.staticIndirectEnabled()) {
         const auto packed = packStaticSceneDrawData(input);
         if (!packed) {
@@ -137,10 +188,14 @@ std::expected<void, core::Error> publishStaticScene(
         }
         const rhi::StaticIndirectGeometry geometry{
             sharedVertices, packed->indices, ranges, objectIds};
-        return rhi.replaceStaticScene(
-            meshes, draws, verifyRollback, inverseProjection, viewToWorld, &geometry);
+        replaced = rhi.replaceStaticScene(meshes, draws, verifyRollback, &geometry);
+    } else {
+        replaced = rhi.replaceStaticScene(meshes, draws, verifyRollback);
     }
-    return rhi.replaceStaticScene(meshes, draws, verifyRollback, inverseProjection, viewToWorld);
+    if (!replaced) {
+        return replaced;
+    }
+    return rhi.setFrameView(*frameView);
 }
 
 } // namespace ar::render

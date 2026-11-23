@@ -50,9 +50,10 @@ public:
         PlanPresentationGraph planner = nullptr);
     std::expected<void, core::Error> publishStaticScene(
         std::vector<StaticSceneDraw::Draw> draws,
-        std::shared_ptr<StaticSceneIndirect::Scene> indirect,
-        const std::array<float, 16>& inverseProjection,
-        const std::array<float, 12>& viewToWorld);
+        std::shared_ptr<StaticSceneIndirect::Scene> indirect);
+    void setFrameView(const FrameView& view) noexcept {
+        m_frameView = view;
+    }
     std::expected<void, core::Error>
     publishEnvironment(const EnvironmentUpload& upload, bool verifyRollback);
     std::expected<PresentStatus, core::Error>
@@ -178,8 +179,7 @@ private:
     VkSampler m_environmentSampler = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_lightingSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_lightingLayout = VK_NULL_HANDLE;
-    std::array<float, 16> m_inverseProjection{};
-    std::array<float, 12> m_viewToWorld{};
+    FrameView m_frameView{};
     StaticSceneDraw::Environment m_environment{};
     bool m_environmentReady = false;
     VkExtent2D m_requestedExtent{};

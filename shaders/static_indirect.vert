@@ -12,14 +12,18 @@ layout(location = 2) flat out uint materialIndex;
 layout(std430, set = 1, binding = 0) readonly buffer Instances {
     StaticInstance instances[];
 };
-layout(push_constant) uniform Frame { float inverseAspect; } frame;
+layout(std140, set = 1, binding = 4) uniform FrameView {
+    mat4 viewProj;
+    mat4 view;
+} frameView;
 
 void main() {
     StaticInstance instance = instances[gl_InstanceIndex];
-    gl_Position = instance.clipFromModel * vec4(position, 1.0);
-    gl_Position.x *= frame.inverseAspect;
+    mat4 clipFromModel = frameView.viewProj * instance.modelMatrix;
+    gl_Position = clipFromModel * vec4(position, 1.0);
     outUv = uv;
-    viewNormal = mat3(instance.normalColumn0.xyz, instance.normalColumn1.xyz,
-                      instance.normalColumn2.xyz) * normal;
+    mat3 worldNormal = mat3(instance.normalColumn0.xyz, instance.normalColumn1.xyz,
+                            instance.normalColumn2.xyz);
+    viewNormal = (mat3(frameView.view) * worldNormal) * normal;
     materialIndex = instance.materialIndex;
 }

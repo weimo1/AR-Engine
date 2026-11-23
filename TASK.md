@@ -137,6 +137,19 @@
 - [x] T40 [人工] P5 第一批独立原型验收。用户核对 T37–T39 真机 RTX 4060（API 1.4.357）数值读回、在途退役保护与 Sync Validation 零错误证据后确认通过，双配置各 89/89。
   - 用户确认真机数值读回、在途退役保护与 Validation 证据，决定进入 P5 第二批（同场景 Set/Heap 对照）。
 
+### 架构适度收口（每帧视图解耦与 render/rhi 边界归位）
+
+参见 [架构收口方案](openspec/changes/render-rhi-boundary-cleanup/design.md)。在 P5 第二批与 P4b 之前完成边界收口，保持单 Vulkan 后端与既有像素容差不变。
+
+- [x] T41 每帧相机视图与静态场景解耦。新增 `rhi::FrameView`、`render::buildFrameView`、`RhiSession::setFrameView` 与 `RuntimeSession::setCamera`，间接路径双帧槽 128B UBO 每帧更新、不重传静态网格/贴图/SSBO（`staticSceneUploadCount == 1`）；`render-frame-view` 与 `sample-camera-view-update`（含直接/间接及 Debug Sync Validation）全过，双配置 91/91 零告警，DSH 独立评审 28/28 PASS。
+  - 验收：`render-frame-view`（CPU）与 `sample-camera-view-update`（标签 `gpu`）验证移动/旋转相机不重传静态网格、贴图与 SSBO（`staticSceneUploadCount == 1`），可见集合、Reverse-Z 深度、视图位置与复位像素正确，Debug Sync Validation 零错误。
+- [ ] T42a 测试验证入口从 RhiSession 主头剥离
+  - 验收：`verifyGpuCull`、`verifyDescriptorHeap`、`verifyDescriptorHeapRetirement` 及探针结果类型迁至 `rhi/RhiVerification.h`，`public-headers` 与全量用例通过。
+- [ ] T42b 渲染管线规格与 RenderGraph Pass 编排归位 render
+  - 验收：GBuffer/延迟光照/IBL 管线配置、探针解码与 Pass 声明由 `render` 驱动，`rhi` 收窄为设备、资源、绑定与执行原语，既有全部渲染回归维持原容差、零告警零 Validation 错误。
+- [ ] T43 [人工] 架构收口里程碑验收
+  - 用户确认模块边界、动态相机更新与全量回归证据后，进入 P5 第二批（同场景 Set/Heap 对照）与 P4b（方向光阴影与相机漫游）。
+
 ## 人工待办（不阻塞队列）
 
 - 云端 “Engine CPU build and test” 使用 `--no-gpu`，已配置自动触发与 vcpkg 二进制缓存。后续通过对应提交的 GitHub Actions 日志核对 Windows runner 与缓存命中。
@@ -144,6 +157,8 @@
 - 首次使用自动循环前：修正 Codex CLI 的默认模型（见 [自动运行](docs/workflow/自动运行.md) 的注意事项），设置 `CLAUDE_CODE_GIT_BASH_PATH`，然后用 `--max-tasks 1` 试跑 T01。
 
 ## 待办池（建议级，不阻塞）
+
+- T41 评审观察：`StaticSceneDraw::publish` 先 `publishCompleted` 再替换 `m_active`（T35 遗留顺序）、`packStaticSceneDrawData` 冗余构造每实例数据（T34 遗留），以及 `publishStaticScene` 中 `replaceStaticScene` 与 `setFrameView` 的理论部分提交窗口，后续重构时按需一并整理。
 
 - T39 评审提示：真机堆写失败部分提交、`abandon()` 异常兜底与 `open(enableDescriptorHeap, 1.3)` 显式拒绝当前无独立注入用例，后续按需补充。
 

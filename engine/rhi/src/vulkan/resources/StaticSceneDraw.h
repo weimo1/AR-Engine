@@ -54,16 +54,16 @@ public:
     prepareIndirect(std::span<const Draw> draws, const StaticIndirectGeometry* geometry);
     void
     publish(std::vector<Draw> draws, std::shared_ptr<StaticSceneIndirect::Scene> indirect) noexcept;
+    std::expected<void, core::Error>
+    updateFrameView(std::size_t frame, const FrameView& view, float inverseAspect);
     void record(
         VkCommandBuffer commands,
         VkPipelineLayout layout,
+        const FrameView& view,
         float inverseAspect,
         std::size_t frame) const;
-    void cull(
-        VkCommandBuffer commands,
-        std::size_t frame,
-        float aspect,
-        const PresentationGraphPlan& graph) const;
+    void
+    cull(VkCommandBuffer commands, std::size_t frame, const PresentationGraphPlan& graph) const;
     void indirectReadback(
         VkCommandBuffer commands, std::size_t frame, const PresentationGraphPlan& graph) const;
     std::expected<void, core::Error> readVisibility(std::size_t frame, FrameScreenshot& data);

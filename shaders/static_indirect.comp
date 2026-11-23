@@ -14,12 +14,17 @@ struct IndexedCommand {
 layout(std430, set = 0, binding = 0) readonly buffer Instances { StaticInstance instances[]; };
 layout(std430, set = 0, binding = 2) writeonly buffer Commands { IndexedCommand commands[]; };
 layout(std430, set = 0, binding = 3) buffer Counters { uint visibleCount; uint drawCount; };
-layout(push_constant) uniform Frame { float inverseAspect; uint count; uint capacity; } frame;
+layout(std140, set = 0, binding = 4) uniform FrameView {
+    mat4 viewProj;
+    mat4 view;
+} frameView;
+layout(push_constant) uniform Frame { uint count; uint capacity; } frame;
 
 bool visible(StaticInstance instance) {
     // Maximize each homogeneous clip inequality over the local AABB.
-    mat4 rows = transpose(instance.clipFromModel);
-    vec4 x = rows[0] * frame.inverseAspect;
+    mat4 clipFromModel = frameView.viewProj * instance.modelMatrix;
+    mat4 rows = transpose(clipFromModel);
+    vec4 x = rows[0];
     vec4 y = rows[1];
     vec4 z = rows[2];
     vec4 w = rows[3];

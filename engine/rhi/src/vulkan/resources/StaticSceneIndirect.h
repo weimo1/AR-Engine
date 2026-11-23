@@ -9,8 +9,12 @@ class StaticSceneIndirect {
     using Buffer = DeviceResources::BufferSlot;
 
 public:
+    struct alignas(16) FrameViewGpu {
+        std::array<float, 16> viewProj;
+        std::array<float, 16> view;
+    };
     struct alignas(16) Instance {
-        std::array<float, 16> clip;
+        std::array<float, 16> model;
         std::array<float, 12> normal;
         std::array<float, 4> minimum;
         std::array<float, 4> maximum;
@@ -30,7 +34,7 @@ public:
         StaticSceneIndirect& owner;
         Buffer vertices, indices, instances, materials;
         struct Frame {
-            Buffer commands, counts;
+            Buffer commands, counts, view;
             VkDescriptorSet set = VK_NULL_HANDLE;
         };
         std::array<Frame, 2> frames;
@@ -47,6 +51,8 @@ public:
         const StaticIndirectGeometry& geometry,
         std::span<const Instance> instances,
         std::span<const Material> materials);
+    std::expected<void, core::Error> updateFrameView(
+        const Scene& scene, std::size_t slot, const FrameView& view, float inverseAspect);
     VkDescriptorSetLayout layout() const noexcept {
         return m_setLayout;
     }
@@ -54,13 +60,11 @@ public:
         const Scene& scene,
         VkCommandBuffer command,
         std::size_t slot,
-        float aspect,
         const PresentationGraphPlan& graph) const;
     void draw(
         const Scene& scene,
         VkCommandBuffer command,
         std::size_t slot,
-        float aspect,
         VkPipelineLayout layout,
         VkDescriptorSet textures) const;
     void barrier(

@@ -249,9 +249,9 @@ public:
         std::span<const StaticMeshUpload> meshes,
         std::span<const StaticInstanceDraw> draws,
         bool verifyRollback = false,
-        std::array<float, 16> inverseProjection = {},
-        std::array<float, 12> viewToWorld = {},
         const StaticIndirectGeometry* indirect = nullptr);
+    [[nodiscard]] std::expected<void, core::Error> setFrameView(const FrameView& view);
+    [[nodiscard]] std::uint64_t staticSceneUploadCount() const noexcept;
     [[nodiscard]] bool staticIndirectEnabled() const noexcept;
     [[nodiscard]] std::expected<void, core::Error>
     replaceEnvironment(const EnvironmentUpload& upload, bool verifyRollback = false);

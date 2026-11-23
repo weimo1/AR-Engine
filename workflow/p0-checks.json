@@ -241,6 +241,7 @@
         "core-normal-close",
         "render-culling-reference",
         "render-environment-lighting",
+        "render-frame-view",
         "render-graph-plan",
         "render-static-scene-draw-data",
         "assets-static-gltf",
@@ -318,6 +319,7 @@
         "runtime-summary-output-failure",
         "runtime-system-development",
         "sample-resize",
+        "sample-camera-view-update",
         "runtime-system-inspect",
         "platform-window-create",
         "platform-window-vulkan-extensions"
@@ -348,6 +350,7 @@
         "platform-window-vulkan-extensions",
         "runtime-system-development",
         "sample-resize",
+        "sample-camera-view-update",
         "runtime-system-inspect"
       ]
     },
@@ -562,6 +565,7 @@
         "core-normal-close",
         "render-culling-reference",
         "render-environment-lighting",
+        "render-frame-view",
         "render-graph-plan",
         "render-static-scene-draw-data",
         "assets-static-gltf",
@@ -639,6 +643,7 @@
         "runtime-summary-output-failure",
         "runtime-system-development",
         "sample-resize",
+        "sample-camera-view-update",
         "runtime-system-inspect",
         "platform-window-create",
         "platform-window-vulkan-extensions"
@@ -669,6 +674,7 @@
         "platform-window-vulkan-extensions",
         "runtime-system-development",
         "sample-resize",
+        "sample-camera-view-update",
         "runtime-system-inspect"
       ]
     },

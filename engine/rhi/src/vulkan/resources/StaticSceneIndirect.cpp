@@ -10,6 +10,8 @@
 namespace ar::rhi::detail {
 namespace {
 
+static_assert(sizeof(StaticSceneIndirect::FrameViewGpu) == 128);
+static_assert(offsetof(StaticSceneIndirect::FrameViewGpu, view) == 64);
 static_assert(sizeof(StaticSceneIndirect::Instance) == 160);
 static_assert(offsetof(StaticSceneIndirect::Instance, normal) == 64);
 static_assert(offsetof(StaticSceneIndirect::Instance, minimum) == 112);
@@ -85,6 +87,7 @@ StaticSceneIndirect::Scene::~Scene() {
     for (const auto& frame : frames) {
         destroy(frame.commands);
         destroy(frame.counts);
+        destroy(frame.view);
     }
     destroy(vertices);
     destroy(indices);
@@ -109,7 +112,13 @@ std::expected<void, core::Error> StaticSceneIndirect::open(const StaticIndirectS
         VkDescriptorSetLayoutBinding{
             2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         VkDescriptorSetLayoutBinding{
-            3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+            3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{
+            4,
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            1,
+            VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_VERTEX_BIT,
+            nullptr}};
     const auto device = m_resources.m_device;
     VkDescriptorSetLayoutCreateInfo set{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     set.bindingCount = static_cast<std::uint32_t>(bindings.size());
@@ -119,7 +128,6 @@ std::expected<void, core::Error> StaticSceneIndirect::open(const StaticIndirectS
         return failure("create static indirect descriptor layout", code);
     }
     struct ComputePush {
-        float aspect;
         std::uint32_t count, capacity;
     };
     const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePush)};
@@ -229,20 +237,33 @@ StaticSceneIndirect::prepare(
         }
     }
     const auto device = m_resources.m_device;
-    constexpr VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8};
+    constexpr std::array sizes{
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2}};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool.maxSets = 2;
-    pool.poolSizeCount = 1;
-    pool.pPoolSizes = &size;
+    pool.poolSizeCount = static_cast<std::uint32_t>(sizes.size());
+    pool.pPoolSizes = sizes.data();
     if (auto code = vkCreateDescriptorPool(device, &pool, nullptr, &scene->pool);
         code != VK_SUCCESS) {
         return failure("create static indirect descriptor pool", code);
     }
+    const FrameView defaultView{};
+    const FrameViewGpu initialView{defaultView.clipFromWorld, defaultView.view};
+    const auto initialViewBytes = std::as_bytes(std::span{&initialView, 1});
     for (auto& frame : scene->frames) {
         if (auto made = fill(frame.commands, indirect, commandsSize); !made) {
             return std::unexpected(made.error());
         }
         if (auto made = fill(frame.counts, indirect, sizeof(std::uint32_t) * 2); !made) {
+            return std::unexpected(made.error());
+        }
+        if (auto made = fill(
+                frame.view,
+                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                sizeof(FrameViewGpu),
+                initialViewBytes);
+            !made) {
             return std::unexpected(made.error());
         }
         VkDescriptorSetAllocateInfo allocate{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
@@ -257,11 +278,14 @@ StaticSceneIndirect::prepare(
             scene->instances.buffer,
             scene->materials.buffer,
             frame.commands.buffer,
-            frame.counts.buffer};
+            frame.counts.buffer,
+            frame.view.buffer};
         std::array<VkDescriptorBufferInfo, buffers.size()> info{};
         std::array<VkWriteDescriptorSet, buffers.size()> writes{};
         for (std::uint32_t binding = 0; binding < buffers.size(); ++binding) {
-            info[binding] = {buffers[binding], 0, VK_WHOLE_SIZE};
+            const bool uniform = binding == 4u;
+            info[binding] = {
+                buffers[binding], 0, uniform ? VkDeviceSize{sizeof(FrameViewGpu)} : VK_WHOLE_SIZE};
             writes[binding] = {
                 VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 nullptr,
@@ -269,7 +293,7 @@ StaticSceneIndirect::prepare(
                 binding,
                 0,
                 1,
-                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                uniform ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                 nullptr,
                 &info[binding],
                 nullptr};
@@ -278,6 +302,16 @@ StaticSceneIndirect::prepare(
             device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
     return scene;
+}
+
+std::expected<void, core::Error> StaticSceneIndirect::updateFrameView(
+    const Scene& scene, std::size_t slot, const FrameView& view, float inverseAspect) {
+    FrameViewGpu gpu{view.clipFromWorld, view.view};
+    for (std::size_t column = 0; column < 4; ++column) {
+        gpu.viewProj[column * 4] *= inverseAspect;
+    }
+    return m_resources.writeAllocation(
+        scene.frames[slot].view.allocation, 0, std::as_bytes(std::span{&gpu, 1}));
 }
 
 void StaticSceneIndirect::barrier(
@@ -319,16 +353,14 @@ void StaticSceneIndirect::cull(
     const Scene& scene,
     VkCommandBuffer command,
     std::size_t slot,
-    float aspect,
     const PresentationGraphPlan& graph) const {
     const auto& frame = scene.frames[slot];
     vkCmdFillBuffer(command, frame.counts.buffer, 0, VK_WHOLE_SIZE, 0);
     if (!scene.objectIds.empty()) {
         barrier(scene, command, slot, graph, IndirectPhase::Cull);
         struct {
-            float aspect;
             std::uint32_t count, capacity;
-        } push{aspect, static_cast<std::uint32_t>(scene.objectIds.size()), scene.capacity};
+        } push{static_cast<std::uint32_t>(scene.objectIds.size()), scene.capacity};
         vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
         vkCmdBindDescriptorSets(
             command, VK_PIPELINE_BIND_POINT_COMPUTE, m_computeLayout, 0, 1, &frame.set, 0, nullptr);
@@ -343,7 +375,6 @@ void StaticSceneIndirect::draw(
     const Scene& scene,
     VkCommandBuffer command,
     std::size_t slot,
-    float aspect,
     VkPipelineLayout layout,
     VkDescriptorSet textures) const {
     if (!scene.capacity) {
@@ -360,7 +391,6 @@ void StaticSceneIndirect::draw(
         sets.data(),
         0,
         nullptr);
-    vkCmdPushConstants(command, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(aspect), &aspect);
     constexpr VkDeviceSize start = 0;
     vkCmdBindVertexBuffers(command, 0, 1, &scene.vertices.buffer, &start);
     vkCmdBindIndexBuffer(command, scene.indices.buffer, 0, VK_INDEX_TYPE_UINT32);

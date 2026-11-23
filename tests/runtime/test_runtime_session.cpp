@@ -1,5 +1,8 @@
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -7,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <numbers>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -912,4 +916,264 @@ TEST_CASE("Hidden window rebuilds, pauses, restores and closes", "[sample-resize
         starts += id == "rhi.query.start";
     }
     CHECK(starts == 1);
+}
+
+TEST_CASE(
+    "Camera view updates re-render without re-uploading static scene resources",
+    "[sample-camera-view-update]") {
+    bool indirect = false;
+    std::string runSuffix;
+    SECTION("indirect") {
+        indirect = true;
+        runSuffix = "indirect";
+    }
+    SECTION("direct") {
+        indirect = false;
+        runSuffix = "direct";
+    }
+
+    const auto shader = [](const char* name) {
+        std::ifstream input(
+            std::filesystem::path(AR_TEST_SHADER_DIR) / name, std::ios::binary | std::ios::ate);
+        const auto size = static_cast<std::streamoff>(input.tellg());
+        REQUIRE(size > 0);
+        REQUIRE(size % 4 == 0);
+        std::vector<std::uint32_t> words(static_cast<std::size_t>(size / 4));
+        REQUIRE(input.seekg(0).read(reinterpret_cast<char*>(words.data()), size));
+        return words;
+    };
+
+    const std::string runId = "sample-camera-view-update-" + runSuffix;
+    const std::filesystem::path runRoot = freshRunDirectory(runId);
+    const std::filesystem::path assetRoot = runRoot / "assets";
+    const std::filesystem::path modelsDir = assetRoot / "models";
+    std::filesystem::create_directories(modelsDir);
+
+    // Deterministic [-1, 1] x [-1, 1] XY quad at z = 0 facing +Z with 2x1 red/blue PNG.
+    const std::array<float, 12> positions{
+        -1.F, -1.F, 0.F, 1.F, -1.F, 0.F, 1.F, 1.F, 0.F, -1.F, 1.F, 0.F};
+    const std::array<float, 8> uvs{0.F, 0.F, 1.F, 0.F, 1.F, 1.F, 0.F, 1.F};
+    const std::array<std::uint16_t, 6> indices{0, 1, 2, 0, 2, 3};
+    const std::array<float, 12> normals{0.F, 0.F, 1.F, 0.F, 0.F, 1.F, 0.F, 0.F, 1.F, 0.F, 0.F, 1.F};
+    constexpr std::array<unsigned char, 71> png{
+        137, 80,  78, 71,  13,  10,  26,  10, 0,   0,   0,   13,  73, 72,  68,  82, 0,   0,
+        0,   2,   0,  0,   0,   1,   8,   6,  0,   0,   0,   244, 34, 127, 138, 0,  0,   0,
+        14,  73,  68, 65,  84,  120, 156, 99, 248, 207, 192, 0,   66, 255, 1,   15, 249, 3,
+        253, 133, 17, 153, 118, 0,   0,   0,  0,   73,  69,  78,  68, 174, 66,  96, 130};
+    {
+        std::ofstream bin(modelsDir / "quad.bin", std::ios::binary);
+        bin.write(
+            reinterpret_cast<const char*>(positions.data()),
+            static_cast<std::streamsize>(sizeof(positions)));
+        bin.write(
+            reinterpret_cast<const char*>(uvs.data()), static_cast<std::streamsize>(sizeof(uvs)));
+        bin.write(
+            reinterpret_cast<const char*>(indices.data()),
+            static_cast<std::streamsize>(sizeof(indices)));
+        bin.write(
+            reinterpret_cast<const char*>(normals.data()),
+            static_cast<std::streamsize>(sizeof(normals)));
+        REQUIRE(bin.good());
+    }
+    {
+        std::ofstream image(modelsDir / "colors.png", std::ios::binary);
+        image.write(
+            reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(sizeof(png)));
+        REQUIRE(image.good());
+    }
+    {
+        std::ofstream gltf(modelsDir / "quad.gltf", std::ios::binary);
+        gltf << R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],)"
+             << R"("nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":)"
+             << R"({"POSITION":0,"TEXCOORD_0":1,"NORMAL":3},"indices":2,"material":0,"mode":4}]}],)"
+             << R"("buffers":[{"uri":"quad.bin","byteLength":140}],)"
+             << R"("bufferViews":[{"buffer":0,"byteLength":48},)"
+             << R"({"buffer":0,"byteOffset":48,"byteLength":32},)"
+             << R"({"buffer":0,"byteOffset":80,"byteLength":12},)"
+             << R"({"buffer":0,"byteOffset":92,"byteLength":48}],)"
+             << R"("accessors":[{"bufferView":0,"byteOffset":0,"componentType":5126,"count":4,)"
+             << R"("type":"VEC3","min":[-1,-1,0],"max":[1,1,0]},)"
+             << R"({"bufferView":1,"byteOffset":0,"componentType":5126,"count":4,"type":"VEC2"},)"
+             << R"({"bufferView":2,"byteOffset":0,"componentType":5123,"count":6,"type":"SCALAR"},)"
+             << R"({"bufferView":3,"byteOffset":0,"componentType":5126,"count":4,"type":"VEC3"}],)"
+             << R"("materials":[{"pbrMetallicRoughness":{"baseColorFactor":[1,1,1,1],)"
+             << R"("baseColorTexture":{"index":0},"metallicFactor":0.2,"roughnessFactor":0.6}}],)"
+             << R"("textures":[{"source":0}],"images":[{"uri":"colors.png"}]})";
+        REQUIRE(gltf.good());
+    }
+    const std::filesystem::path scenePath = runRoot / "scene.json";
+    const ar::render::StaticCamera initialCamera{
+        {0.F, 0.F, 3.F}, {0.F, 0.F, 0.F, 1.F}, std::numbers::pi_v<float> * 0.5F, 0.1F, 100.F};
+    {
+        std::ofstream scene(scenePath, std::ios::binary);
+        scene << Json{
+            {"version", 1},
+            {"camera",
+             {{"position", {0.0, 0.0, 3.0}},
+              {"orientation", {0.0, 0.0, 0.0, 1.0}},
+              {"fov_y", std::numbers::pi_v<double> * 0.5},
+              {"near", 0.1},
+              {"far", 100.0}}},
+            {"objects",
+             {{{"id", 1},
+               {"asset", "models/quad.gltf"},
+               {"position", {0.0, 0.0, 0.0}},
+               {"rotation", {0.0, 0.0, 0.0, 1.0}},
+               {"scale", {1.0, 1.0, 1.0}}}}}};
+        REQUIRE(scene.good());
+    }
+
+    runtime::RuntimeConfig config;
+    config.mode = runtime::QueryMode::Development;
+    config.query.requestedApi = rhi::makeApiVersion(1, 3);
+    config.query.createGraphicsDevice = true;
+    config.query.enableScreenshot = true;
+    config.query.enableSetBinding = true;
+    config.query.enableGBuffer = true;
+    config.staticAssetRoot = assetRoot;
+    config.query.triangleShaders =
+        rhi::TriangleShaders{shader("gbuffer.vert.spv"), shader("gbuffer_bindless.frag.spv")};
+    config.query.deferredLighting = rhi::DeferredLighting{
+        shader("fullscreen.vert.spv"),
+        shader("deferred_direct.frag.spv"),
+        shader("display_sdr.frag.spv"),
+        0.F,
+        false};
+    if (indirect) {
+        config.query.staticIndirect = rhi::StaticIndirectShaders{
+            {shader("static_indirect.vert.spv"), shader("static_indirect.frag.spv")},
+            shader("static_indirect.comp.spv"),
+            UINT32_MAX};
+    }
+    config.window.emplace();
+    config.window->width = 320;
+    config.window->height = 180;
+    config.window->visible = false;
+    config.window->title =
+        "AR camera view test " + runSuffix + " " + std::to_string(GetCurrentProcessId());
+    config.diagnostics.runId = runId;
+    config.diagnostics.outputRoot = runRoot;
+
+    auto session = runtime::RuntimeSession::start(config);
+    REQUIRE(session);
+    CHECK((*session)->staticSceneUploadCount() == 0);
+    REQUIRE((*session)->openStaticScene(scenePath));
+    CHECK((*session)->staticSceneUploadCount() == 1);
+
+    const auto presentCapture = [&](rhi::FrameScreenshot& out) {
+        auto status = (*session)->presentFrame(&out);
+        REQUIRE(status);
+        REQUIRE(*status == runtime::FrameStatus::Presented);
+        REQUIRE(out.gbuffer.size() == 3);
+    };
+
+    // Frame 1: initial camera at (0, 0, 3) looking down -Z.
+    rhi::FrameScreenshot frame1;
+    presentCapture(frame1);
+    const float expectedDepth1 = 0.1F * (100.F - 3.F) / (3.F * (100.F - 0.1F));
+    CHECK(frame1.gbuffer[0].depth == Catch::Approx(expectedDepth1).margin(1e-4F));
+    CHECK(frame1.gbuffer[0].viewPosition[2] == Catch::Approx(-3.F).margin(0.01F));
+    CHECK(frame1.gbuffer[0].normal[0] == Catch::Approx(0.F).margin(0.01F));
+    CHECK(frame1.gbuffer[0].normal[1] == Catch::Approx(0.F).margin(0.01F));
+    CHECK(frame1.gbuffer[0].normal[2] == Catch::Approx(1.F).margin(0.01F));
+    CHECK(frame1.gbuffer[2].depth == 0.F);
+    REQUIRE(frame1.gbuffer[0].hdrColor.has_value());
+    CHECK((*frame1.gbuffer[0].hdrColor)[0] + (*frame1.gbuffer[0].hdrColor)[2] > 0.F);
+    if (indirect) {
+        REQUIRE(frame1.indirect.has_value());
+        CHECK(frame1.indirect->visible == 1);
+        CHECK(frame1.indirect->drawnIds == std::vector<std::uint64_t>{1});
+    }
+
+    // Invalid camera is rejected without mutating upload count or active view.
+    ar::render::StaticCamera invalidCamera = initialCamera;
+    invalidCamera.orientation = {0.F, 0.F, 0.F, 0.F};
+    const auto rejectedQuat = (*session)->setCamera(invalidCamera);
+    REQUIRE_FALSE(rejectedQuat);
+    CHECK(rejectedQuat.error().category == core::ErrorCategory::InvalidArguments);
+    invalidCamera = initialCamera;
+    invalidCamera.nearPlane = 0.F;
+    const auto rejectedNear = (*session)->setCamera(invalidCamera);
+    REQUIRE_FALSE(rejectedNear);
+    CHECK(rejectedNear.error().category == core::ErrorCategory::InvalidArguments);
+    CHECK((*session)->staticSceneUploadCount() == 1);
+
+    // Frame 2: turn 180 deg around +Y (looking away from the quad).
+    ar::render::StaticCamera turnedAway = initialCamera;
+    turnedAway.orientation = {0.F, 1.F, 0.F, 0.F};
+    REQUIRE((*session)->setCamera(turnedAway));
+    CHECK((*session)->staticSceneUploadCount() == 1);
+    rhi::FrameScreenshot frame2;
+    presentCapture(frame2);
+    CHECK(frame2.gbuffer[0].depth == 0.F);
+    if (indirect) {
+        REQUIRE(frame2.indirect.has_value());
+        CHECK(frame2.indirect->visible == 0);
+        CHECK(frame2.indirect->drawnIds.empty());
+    }
+
+    // Frame 3 & 4: orbit +30 deg around +Y at radius 2.0 (exercises both double-buffered slots).
+    const float halfAngle = std::numbers::pi_v<float> / 12.F;
+    const ar::render::StaticCamera orbitedCloser{
+        {1.F, 0.F, std::sqrt(3.F)},
+        {0.F, std::sin(halfAngle), 0.F, std::cos(halfAngle)},
+        initialCamera.verticalFovRadians,
+        initialCamera.nearPlane,
+        initialCamera.farPlane};
+    REQUIRE((*session)->setCamera(orbitedCloser));
+    CHECK((*session)->staticSceneUploadCount() == 1);
+    rhi::FrameScreenshot frame3;
+    rhi::FrameScreenshot frame4;
+    presentCapture(frame3);
+    presentCapture(frame4);
+    CHECK(frame3.gbuffer[0].depth > frame1.gbuffer[0].depth);
+    CHECK(frame3.gbuffer[0].viewPosition[2] > frame1.gbuffer[0].viewPosition[2]);
+    CHECK(frame3.gbuffer[0].viewPosition[2] == Catch::Approx(-2.F).margin(0.05F));
+    CHECK(frame3.gbuffer[0].normal[0] == Catch::Approx(-0.5F).margin(0.015F));
+    CHECK(frame3.gbuffer[0].normal[1] == Catch::Approx(0.F).margin(0.015F));
+    CHECK(frame3.gbuffer[0].normal[2] == Catch::Approx(std::sqrt(3.F) * 0.5F).margin(0.015F));
+    CHECK(frame4.rgba == frame3.rgba);
+    if (indirect) {
+        REQUIRE(frame3.indirect.has_value());
+        CHECK(frame3.indirect->visible == 1);
+        CHECK(frame3.indirect->drawnIds == std::vector<std::uint64_t>{1});
+        REQUIRE(frame4.indirect.has_value());
+        CHECK(frame4.indirect->visible == 1);
+        CHECK(frame4.indirect->drawnIds == std::vector<std::uint64_t>{1});
+    }
+
+    // Frame 5: restore initial camera and verify exact pixel & probe parity with Frame 1.
+    REQUIRE((*session)->setCamera(initialCamera));
+    CHECK((*session)->staticSceneUploadCount() == 1);
+    rhi::FrameScreenshot frame5;
+    presentCapture(frame5);
+    CHECK(frame5.rgba == frame1.rgba);
+    CHECK(frame5.gbuffer[0].depth == Catch::Approx(frame1.gbuffer[0].depth).margin(1e-5F));
+    CHECK(
+        frame5.gbuffer[0].viewPosition[2] ==
+        Catch::Approx(frame1.gbuffer[0].viewPosition[2]).margin(1e-3F));
+    if (indirect) {
+        REQUIRE(frame5.indirect.has_value());
+        CHECK(frame5.indirect->visible == 1);
+        CHECK(frame5.indirect->drawnIds == std::vector<std::uint64_t>{1});
+    }
+
+    const auto closed = (*session)->close();
+    REQUIRE(closed.result == core::ResultKind::Success);
+    REQUIRE(closed.resourcesReleased);
+    CHECK((*session)->staticSceneUploadCount() == 1);
+
+    std::ifstream events(runRoot / runId / "events.jsonl");
+    REQUIRE(events);
+    bool sawValidationEnabled = false;
+    for (std::string line; std::getline(events, line);) {
+        const auto id = Json::parse(line).at("event_id").get<std::string>();
+        CHECK(id != "rhi.validation.error");
+        sawValidationEnabled |= (id == "rhi.validation.enabled");
+    }
+#ifdef _DEBUG
+    CHECK(sawValidationEnabled);
+#else
+    (void)sawValidationEnabled;
+#endif
 }

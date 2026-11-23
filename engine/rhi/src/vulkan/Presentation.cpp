@@ -141,14 +141,11 @@ std::expected<void, core::Error> Presentation::open(
             layout.pSetLayouts = setLayouts.data();
         }
         const VkPushConstantRange matrix{
-            m_enableGBuffer && !indirectLayout
-                ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
-                : static_cast<VkShaderStageFlags>(VK_SHADER_STAGE_VERTEX_BIT),
+            m_enableGBuffer ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
+                            : static_cast<VkShaderStageFlags>(VK_SHADER_STAGE_VERTEX_BIT),
             0,
-            indirectLayout    ? 4u
-            : m_enableGBuffer ? 128u
-                              : 64u};
-        if (m_staticScene) {
+            m_enableGBuffer ? 128u : 64u};
+        if (m_staticScene && !indirectLayout) {
             layout.pushConstantRangeCount = 1;
             layout.pPushConstantRanges = &matrix;
         }
@@ -413,7 +410,8 @@ std::expected<void, core::Error> Presentation::createLightingLayout() {
     const VkPushConstantRange push{
         VK_SHADER_STAGE_FRAGMENT_BIT,
         0,
-        static_cast<std::uint32_t>(sizeof(m_inverseProjection) + sizeof(m_viewToWorld))};
+        static_cast<std::uint32_t>(
+            sizeof(m_frameView.inverseProjection) + sizeof(m_frameView.viewToWorld))};
     VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layout.setLayoutCount = 1;
     layout.pSetLayouts = &m_lightingSetLayout;
@@ -574,13 +572,13 @@ void Presentation::recordLighting(
         vkCmdEndRendering(commands);
     };
 
-    auto inverse = m_inverseProjection;
+    auto inverse = m_frameView.inverseProjection;
     inverse[0] *= static_cast<float>(m_swapchain.extent.width) /
                   static_cast<float>(m_swapchain.extent.height);
     const struct DirectPush {
         std::array<float, 16> inverseProjection;
         std::array<float, 12> viewToWorld;
-    } direct{inverse, m_viewToWorld};
+    } direct{inverse, m_frameView.viewToWorld};
     static_assert(sizeof(DirectPush) == 112);
     draw(slot.hdr.view, m_swapchain.directPipeline, slot.directSet, sizeof(direct), &direct);
 
@@ -957,6 +955,14 @@ std::expected<void, core::Error> Presentation::record(
     const Image& image,
     VkBuffer capture,
     const PresentationGraphPlan* plan) {
+    const float inverseAspect = static_cast<float>(m_swapchain.extent.height) /
+                                static_cast<float>(m_swapchain.extent.width);
+    if (m_staticScene) {
+        if (auto updated = m_staticScene->updateFrameView(m_frameIndex, m_frameView, inverseAspect);
+            !updated) {
+            return updated;
+        }
+    }
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -1073,10 +1079,8 @@ std::expected<void, core::Error> Presentation::record(
     if (cull) {
         cull->recordCull(commands, m_cullObjects, true);
     }
-    const float inverseAspect = static_cast<float>(m_swapchain.extent.height) /
-                                static_cast<float>(m_swapchain.extent.width);
     if (m_staticScene && plan) {
-        m_staticScene->cull(commands, m_frameIndex, inverseAspect, *plan);
+        m_staticScene->cull(commands, m_frameIndex, *plan);
     }
     vkCmdBeginRendering(commands, &rendering);
     if (m_swapchain.pipeline) {
@@ -1095,7 +1099,8 @@ std::expected<void, core::Error> Presentation::record(
         if (cull) {
             cull->drawCull(commands);
         } else if (m_staticScene) {
-            m_staticScene->record(commands, m_pipelineLayout, inverseAspect, m_frameIndex);
+            m_staticScene->record(
+                commands, m_pipelineLayout, m_frameView, inverseAspect, m_frameIndex);
         } else {
             vkCmdDraw(commands, 3, 1, 0, 0);
         }
@@ -1427,15 +1432,11 @@ std::optional<core::Error> Presentation::drainFrames() {
 
 std::expected<void, core::Error> Presentation::publishStaticScene(
     std::vector<StaticSceneDraw::Draw> draws,
-    std::shared_ptr<StaticSceneIndirect::Scene> indirect,
-    const std::array<float, 16>& inverseProjection,
-    const std::array<float, 12>& viewToWorld) {
+    std::shared_ptr<StaticSceneIndirect::Scene> indirect) {
     if (auto error = drainFrames()) {
         return std::unexpected(std::move(*error));
     }
     m_staticScene->publish(std::move(draws), std::move(indirect));
-    m_inverseProjection = inverseProjection;
-    m_viewToWorld = viewToWorld;
     return {};
 }
 

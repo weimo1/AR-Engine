@@ -153,6 +153,7 @@ set(AR_REQUIRED_RUNTIME_CASES
     runtime-capability-encode-failure
     runtime-destructor
     sample-resize
+    sample-camera-view-update
 )
 
 add_executable(ar_runtime_tests
@@ -183,7 +184,7 @@ endforeach()
 # hosted CI runner) leave them out with `ctest -LE gpu`; keep it in step with gpu_cases in
 # workflow/p0-checks.json.
 set_tests_properties(runtime-system-inspect runtime-system-development PROPERTIES LABELS gpu)
-set_tests_properties(sample-resize PROPERTIES LABELS gpu TIMEOUT 45
+set_tests_properties(sample-resize sample-camera-view-update PROPERTIES LABELS gpu TIMEOUT 45
     ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>;VK_VALIDATION_VALIDATE_SYNC=1")
 
 add_executable(ar_platform_tests platform/test_window.cpp)
@@ -337,10 +338,11 @@ set_tests_properties(sample-ibl-probes PROPERTIES
     LABELS "gpu"
     ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1")
 
-add_executable(ar_render_tests render/test_cull_reference.cpp render/test_environment_lighting.cpp render/test_render_graph.cpp render/test_static_scene_draw_data.cpp)
+add_executable(ar_render_tests render/test_cull_reference.cpp render/test_environment_lighting.cpp render/test_frame_view.cpp render/test_render_graph.cpp render/test_static_scene_draw_data.cpp)
 target_link_libraries(ar_render_tests PRIVATE ar_render ar_assets Catch2::Catch2WithMain)
 add_test(NAME render-culling-reference COMMAND ar_render_tests "[render-culling-reference]")
 add_test(NAME render-environment-lighting COMMAND ar_render_tests "[render-environment-lighting]")
+add_test(NAME render-frame-view COMMAND ar_render_tests "[render-frame-view]")
 add_test(NAME render-graph-plan COMMAND ar_render_tests "[render-graph-plan]")
 add_test(NAME render-static-scene-draw-data COMMAND ar_render_tests "[render-static-scene-draw-data]")
 

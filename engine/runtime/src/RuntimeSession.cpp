@@ -108,6 +108,8 @@ struct RuntimeSession::Impl {
     std::unique_ptr<platform::Window> window;
     std::unique_ptr<rhi::RhiSession> rhi;
     std::unique_ptr<StaticSceneSession> staticScene;
+    std::optional<render::StaticCamera> activeCamera;
+    std::uint64_t staticSceneUploadCount = 0;
     // Runtime-owned snapshot: survives close and never aliases the rhi report.
     rhi::CapabilityReport report;
     std::optional<core::Error> frameError;
@@ -305,22 +307,27 @@ RuntimeSession::presentFrame(rhi::FrameScreenshot* screenshot) {
         return window.shouldClose() ? FrameStatus::Closed : FrameStatus::Paused;
     }
     if (screenshot && !screenshot->gbuffer.empty() && m_impl->staticScene) {
-        const auto input = m_impl->staticScene->input();
-        if (input) {
-            const auto& camera = input->camera;
-            const float halfFov = std::tan(camera.verticalFovRadians * 0.5F);
+        std::optional<render::StaticCamera> camera = m_impl->activeCamera;
+        if (!camera) {
+            if (const auto input = m_impl->staticScene->input()) {
+                camera = input->camera;
+            }
+        }
+        if (camera) {
+            const float halfFov = std::tan(camera->verticalFovRadians * 0.5F);
             const float width = static_cast<float>(screenshot->width);
             const float height = static_cast<float>(screenshot->height);
             for (auto& sample : screenshot->gbuffer) {
                 if (sample.depth == 0.F) {
                     continue;
                 }
-                const float distance = camera.nearPlane * camera.farPlane /
-                    (camera.nearPlane + sample.depth * (camera.farPlane - camera.nearPlane));
+                const float distance =
+                    camera->nearPlane * camera->farPlane /
+                    (camera->nearPlane + sample.depth * (camera->farPlane - camera->nearPlane));
                 const float x = 2.F * (static_cast<float>(sample.pixel[0]) + 0.5F) / width - 1.F;
                 const float y = 1.F - 2.F * (static_cast<float>(sample.pixel[1]) + 0.5F) / height;
-                sample.viewPosition = {x * distance * halfFov * width / height, y * distance * halfFov,
-                                       -distance};
+                sample.viewPosition = {
+                    x * distance * halfFov * width / height, y * distance * halfFov, -distance};
             }
         }
     }
@@ -354,7 +361,32 @@ RuntimeSession::openStaticScene(const std::filesystem::path& source, bool verify
             core::ErrorStage::Validation, std::string(path.begin(), path.end()) +
                 ": " + opened.error().message));
     }
+    if (const auto input = m_impl->staticScene->input()) {
+        m_impl->activeCamera = input->camera;
+    }
     return {};
+}
+
+std::expected<void, core::Error> RuntimeSession::setCamera(const render::StaticCamera& camera) {
+    if (m_impl->closed || !m_impl->rhi || !m_impl->staticScene) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "no active static scene session"));
+    }
+    auto frameView = render::buildFrameView(camera, m_impl->config.query.enableGBuffer);
+    if (!frameView) {
+        return std::unexpected(std::move(frameView.error()));
+    }
+    if (auto updated = m_impl->rhi->setFrameView(*frameView); !updated) {
+        return updated;
+    }
+    m_impl->activeCamera = camera;
+    return {};
+}
+
+std::uint64_t RuntimeSession::staticSceneUploadCount() const noexcept {
+    return m_impl->rhi ? m_impl->rhi->staticSceneUploadCount() : m_impl->staticSceneUploadCount;
 }
 
 std::expected<void, core::Error>
@@ -390,6 +422,7 @@ core::EndResult RuntimeSession::close() {
 
     rhi::CloseResult closeResult;
     if (m_impl->rhi) {
+        m_impl->staticSceneUploadCount = m_impl->rhi->staticSceneUploadCount();
         closeResult = m_impl->rhi->close();
         m_impl->rhi.reset();
     }

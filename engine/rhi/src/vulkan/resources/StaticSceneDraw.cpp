@@ -22,6 +22,32 @@ std::unexpected<core::Error> invalid(const char* message) {
     return std::unexpected(core::Error{
         core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation, message, {}});
 }
+
+std::array<float, 16>
+multiplyMat4(const std::array<float, 16>& left, const std::array<float, 16>& right) noexcept {
+    std::array<float, 16> out{};
+    for (std::size_t col = 0; col < 4; ++col) {
+        for (std::size_t row = 0; row < 4; ++row) {
+            out[col * 4 + row] =
+                left[0 * 4 + row] * right[col * 4 + 0] + left[1 * 4 + row] * right[col * 4 + 1] +
+                left[2 * 4 + row] * right[col * 4 + 2] + left[3 * 4 + row] * right[col * 4 + 3];
+        }
+    }
+    return out;
+}
+
+std::array<float, 12> multiplyViewNormal(
+    const std::array<float, 16>& view, const std::array<float, 12>& worldNormal) noexcept {
+    std::array<float, 12> out = worldNormal;
+    for (std::size_t col = 0; col < 3; ++col) {
+        for (std::size_t row = 0; row < 3; ++row) {
+            out[col * 4 + row] = view[0 * 4 + row] * worldNormal[col * 4 + 0] +
+                                 view[1 * 4 + row] * worldNormal[col * 4 + 1] +
+                                 view[2 * 4 + row] * worldNormal[col * 4 + 2];
+        }
+    }
+    return out;
+}
 } // namespace
 
 struct StaticSceneDraw::Mesh {
@@ -412,8 +438,11 @@ std::expected<std::vector<StaticSceneDraw::Draw>, core::Error> StaticSceneDraw::
     std::span<const StaticMeshUpload> meshes, std::span<const StaticInstanceDraw> draws,
     bool verifyRollback) {
     if (std::ranges::any_of(draws, [&](const auto& draw) {
+            const auto finite = [](float value) { return std::isfinite(value); };
             return draw.meshIndex >= meshes.size() ||
-                   !std::ranges::all_of(draw.clipFromModel, [](float value) { return std::isfinite(value); });
+                   !std::ranges::all_of(draw.modelMatrix, finite) ||
+                   (m_enableGBuffer && (!std::ranges::all_of(draw.normalFromModel, finite) ||
+                                        !std::ranges::all_of(draw.baseColorFactor, finite)));
         })) {
         return invalid("static scene draw has an invalid mesh index or matrix");
     }
@@ -471,7 +500,7 @@ StaticSceneDraw::prepareIndirect(
              static_cast<std::uint32_t>(draw.mesh->textures[0].binding->slot),
              static_cast<std::uint32_t>(draw.mesh->textures[1].binding->slot)});
         instances.push_back(
-            {instance.clipFromModel,
+            {instance.modelMatrix,
              instance.normalFromModel,
              {range.minimum[0], range.minimum[1], range.minimum[2], 0.F},
              {range.maximum[0], range.maximum[1], range.maximum[2], 0.F},
@@ -492,13 +521,18 @@ void StaticSceneDraw::publish(
     m_active = std::move(draws);
 }
 
+std::expected<void, core::Error>
+StaticSceneDraw::updateFrameView(std::size_t frame, const FrameView& view, float inverseAspect) {
+    if (m_indirect && m_indirectScene) {
+        return m_indirect->updateFrameView(*m_indirectScene, frame, view, inverseAspect);
+    }
+    return {};
+}
+
 void StaticSceneDraw::cull(
-    VkCommandBuffer commands,
-    std::size_t frame,
-    float aspect,
-    const PresentationGraphPlan& graph) const {
+    VkCommandBuffer commands, std::size_t frame, const PresentationGraphPlan& graph) const {
     if (m_indirectScene) {
-        m_indirect->cull(*m_indirectScene, commands, frame, aspect, graph);
+        m_indirect->cull(*m_indirectScene, commands, frame, graph);
     }
 }
 
@@ -531,12 +565,12 @@ void StaticSceneDraw::abandon() noexcept {
 void StaticSceneDraw::record(
     VkCommandBuffer commands,
     VkPipelineLayout layout,
+    const FrameView& view,
     float inverseAspect,
     std::size_t frame) const {
     if (m_indirect) {
         if (m_indirectScene) {
-            m_indirect->draw(
-                *m_indirectScene, commands, frame, inverseAspect, layout, m_bindings->set());
+            m_indirect->draw(*m_indirectScene, commands, frame, layout, m_bindings->set());
         }
         return;
     }
@@ -546,14 +580,15 @@ void StaticSceneDraw::record(
         vkCmdBindDescriptorSets(
             commands, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, nullptr);
     }
+    auto viewProj = view.clipFromWorld;
+    for (std::size_t column = 0; column < 4; ++column) {
+        viewProj[column * 4] *= inverseAspect;
+    }
     for (const auto& draw : m_active) {
-        auto matrix = draw.instance.clipFromModel;
-        for (std::size_t column = 0; column < 4; ++column) {
-            matrix[column * 4] *= inverseAspect;
-        }
+        const auto matrix = multiplyMat4(viewProj, draw.instance.modelMatrix);
         if (m_enableGBuffer) {
             const auto stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-            auto normal = draw.instance.normalFromModel;
+            auto normal = multiplyViewNormal(view.view, draw.instance.normalFromModel);
             if (m_bindings) {
                 // Two 8-bit slots fit exactly in a float and leave the normal columns unchanged.
                 static_assert(kStaticSceneImageLimit <= 256);

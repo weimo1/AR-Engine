@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "objective": "完成架构适度收口：将每帧相机视图与静态场景上传解耦，剥离测试专用验证入口，并将 GBuffer/延迟光照/IBL 管线规格与 RenderGraph Pass 编排归位 render，使 rhi 收窄为设备、资源、绑定与执行原语。",
+  "non_goals": [
+    "通用多后端虚接口抽象（保持单 Vulkan 后端）",
+    "P5 第二批同场景 Set/Heap 切换对照",
+    "P4b 方向光阴影与交互输入系统",
+    "ImGui 调试面板与基准导出",
+    "修改既有资产格式或放宽像素/探针容差"
+  ],
+  "tags": ["native"],
+  "documents": [],
+  "skills": ["ar-fresh-arch", "ar-cpp-oop-style", "ar-cpp-hpc-optimization", "ar-e2e-side-effect-safety"],
+  "write_paths": [
+    "TASK.md",
+    "openspec/changes/render-rhi-boundary-cleanup/**",
+    "engine/rhi/**",
+    "engine/render/**",
+    "engine/runtime/**",
+    "examples/triangle/**",
+    "shaders/**",
+    "tests/**",
+    "workflow/p0-checks.json"
+  ]
+}

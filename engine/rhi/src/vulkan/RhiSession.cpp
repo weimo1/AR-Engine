@@ -375,6 +375,7 @@ struct RhiSession::Impl {
     std::size_t bindingRetirements = 0;
     std::size_t bindingReuses = 0;
     std::size_t bindingWaits = 0;
+    std::uint64_t staticSceneUploadCount = 0;
 
     void traceBinding(
         std::string_view event,
@@ -2112,8 +2113,6 @@ std::expected<void, core::Error> RhiSession::replaceStaticScene(
     std::span<const StaticMeshUpload> meshes,
     std::span<const StaticInstanceDraw> draws,
     bool verifyRollback,
-    std::array<float, 16> inverseProjection,
-    std::array<float, 12> viewToWorld,
     const StaticIndirectGeometry* indirect) {
     if (m_impl->closed || !m_impl->staticScene || !m_impl->presenter) {
         return std::unexpected(makeError(
@@ -2148,16 +2147,42 @@ std::expected<void, core::Error> RhiSession::replaceStaticScene(
         return std::unexpected(indirectCandidate.error());
     }
     if (auto published = m_impl->presenter->publishStaticScene(
-            std::move(*candidate), std::move(*indirectCandidate), inverseProjection, viewToWorld);
+            std::move(*candidate), std::move(*indirectCandidate));
         !published) {
         return published;
     }
+    ++m_impl->staticSceneUploadCount;
     emitEvent(
         *m_impl->diagnostics,
         core::LogLevel::Info,
         "rhi.static-scene.ready",
         "draws=" + std::to_string(draws.size()));
     return {};
+}
+
+std::expected<void, core::Error> RhiSession::setFrameView(const FrameView& view) {
+    if (m_impl->closed || !m_impl->staticScene || !m_impl->presenter) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "no active static scene presenter"));
+    }
+    const auto allFinite = [](std::span<const float> values) {
+        return std::ranges::all_of(values, [](float value) { return std::isfinite(value); });
+    };
+    if (!allFinite(view.view) || !allFinite(view.clipFromWorld) ||
+        !allFinite(view.inverseProjection) || !allFinite(view.viewToWorld)) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "frame view contains non-finite values"));
+    }
+    m_impl->presenter->setFrameView(view);
+    return {};
+}
+
+std::uint64_t RhiSession::staticSceneUploadCount() const noexcept {
+    return m_impl->staticSceneUploadCount;
 }
 
 bool RhiSession::staticIndirectEnabled() const noexcept {

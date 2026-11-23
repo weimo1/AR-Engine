@@ -26,10 +26,22 @@ struct StaticMeshUpload {
     std::uint32_t materialHeight = 0;
 };
 
+struct FrameView {
+    // Column-major world -> view matrix (upper-left 3x3 is orthonormal camera rotation).
+    std::array<float, 16> view{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    // Column-major projection(aspect=1) * view; Present supplies current aspect.
+    std::array<float, 16> clipFromWorld{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    // Column-major inverse(projection(aspect=1)); Present scales row 0 by aspect.
+    std::array<float, 16> inverseProjection{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    // Three column-major vec4 columns (world-space camera rotation, padded to 4 floats each).
+    std::array<float, 12> viewToWorld{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+};
+
 struct StaticInstanceDraw {
     std::uint32_t meshIndex;
-    // Column-major with projection aspect 1. Present supplies current aspect.
-    std::array<float, 16> clipFromModel;
+    // Column-major world-space model transform.
+    std::array<float, 16> modelMatrix;
+    // World-space normal matrix (3 column-major vec4s; w components carry material factors).
     std::array<float, 12> normalFromModel{};
     std::array<float, 4> baseColorFactor{1, 1, 1, 1};
 };

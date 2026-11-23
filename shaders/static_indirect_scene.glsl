@@ -1,5 +1,5 @@
 struct StaticInstance {
-    mat4 clipFromModel;
+    mat4 modelMatrix;
     vec4 normalColumn0;
     vec4 normalColumn1;
     vec4 normalColumn2;
