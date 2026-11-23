@@ -2,8 +2,8 @@
 
 #include <vk_mem_alloc.h>
 
-#include <algorithm>
 #include <string>
+#include <utility>
 
 #include "VulkanResult.h"
 #include "resources/DeviceResources.h"
@@ -14,6 +14,10 @@ namespace {
 core::Error invalidArg(const char* message) {
     return {
         core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation, message, std::nullopt};
+}
+
+core::Error invalidState(const char* message) {
+    return {core::ErrorCategory::InvalidState, core::ErrorStage::Capability, message, std::nullopt};
 }
 
 core::Error heapFailed(const char* operation, VkResult result) {
@@ -61,6 +65,13 @@ void DescriptorHeapTable::close() noexcept {
             vmaDestroyBuffer(m_resources->m_allocator, m_resourceBuffer, m_resourceAllocation);
         }
     }
+    if (m_imageSlots && m_resources) {
+        m_imageSlots->clear([this](const HeapImageDescriptor& descriptor) noexcept {
+            m_resources->releaseSampledImage(descriptor.handle);
+        });
+    }
+    m_imageSlots.reset();
+    m_samplerSlots.reset();
     m_resourceBuffer = VK_NULL_HANDLE;
     m_resourceAllocation = nullptr;
     m_resourceMapped = nullptr;
@@ -143,7 +154,10 @@ std::expected<void, core::Error> DescriptorHeapTable::open(
     DeviceResources& resources,
     const DescriptorHeapLimits& limits,
     const DescriptorHeapDispatch& dispatch,
-    DescriptorHeapCapacity capacity) {
+    DescriptorHeapCapacity capacity,
+    ImageHandle defaultImage,
+    VkFormat defaultImageFormat,
+    const VkSamplerCreateInfo& defaultSampler) {
     close();
     if (!device || !dispatch.writeResourceDescriptors || !dispatch.writeSamplerDescriptors ||
         !dispatch.cmdBindResourceHeap || !dispatch.cmdBindSamplerHeap || !dispatch.cmdPushData) {
@@ -153,6 +167,9 @@ std::expected<void, core::Error> DescriptorHeapTable::open(
                 core::ErrorStage::Capability,
                 "Descriptor Heap device entry points are unavailable",
                 std::nullopt});
+    }
+    if (capacity.imageCount > kStaticSceneImageLimit || capacity.samplerCount > kSetSamplerCount) {
+        return std::unexpected(invalidArg("Descriptor Heap slot capacity exceeds table limit"));
     }
 
     const auto planned = planDescriptorHeaps(limits, capacity);
@@ -197,12 +214,21 @@ std::expected<void, core::Error> DescriptorHeapTable::open(
         return std::unexpected(std::move(ready.error()));
     }
 
+    auto retainedDefault = resources.retainSampledImage(defaultImage);
+    if (!retainedDefault) {
+        return std::unexpected(std::move(retainedDefault.error()));
+    }
+
     m_device = device;
     m_resources = &resources;
     m_limits = limits;
     m_dispatch = dispatch;
     m_capacity = capacity;
     m_plan = *planned;
+    m_imageSlots.emplace(
+        HeapImageDescriptor{defaultImage, *retainedDefault, defaultImageFormat},
+        capacity.imageCount);
+    m_samplerSlots.emplace(defaultSampler, capacity.samplerCount);
 
     if (auto allocated = allocateHeap(
             m_plan.resourceHeapSize,
@@ -231,7 +257,128 @@ std::expected<void, core::Error> DescriptorHeapTable::open(
         close();
         return allocated;
     }
+
+    for (std::uint32_t slot = 0; slot < m_capacity.imageCount; ++slot) {
+        if (auto written = writeImageSlot(slot, *retainedDefault, defaultImageFormat); !written) {
+            close();
+            return written;
+        }
+    }
+    for (std::uint32_t slot = 0; slot < m_capacity.samplerCount; ++slot) {
+        if (auto written = writeSamplerSlot(slot, defaultSampler); !written) {
+            close();
+            return written;
+        }
+    }
     return {};
+}
+
+std::expected<DescriptorHeapTable::ImageBinding, core::Error>
+DescriptorHeapTable::registerImage(ImageHandle image, VkFormat format) {
+    if (!m_imageSlots || !m_resources) {
+        return std::unexpected(invalidState("Descriptor Heap table is not open"));
+    }
+    auto retained = m_resources->retainSampledImage(image);
+    if (!retained) {
+        return std::unexpected(std::move(retained.error()));
+    }
+    auto handle = m_imageSlots->registerPending(HeapImageDescriptor{image, *retained, format});
+    if (!handle) {
+        m_resources->releaseSampledImage(image);
+        return std::unexpected(invalidState("Descriptor Heap image slot capacity exhausted"));
+    }
+    return *handle;
+}
+
+std::optional<std::uint32_t> DescriptorHeapTable::resolveImage(ImageBinding handle) const noexcept {
+    if (!m_imageSlots) {
+        return std::nullopt;
+    }
+    const auto slot = m_imageSlots->resolve(handle);
+    return slot ? std::optional{static_cast<std::uint32_t>(*slot)} : std::nullopt;
+}
+
+bool DescriptorHeapTable::retireImage(ImageBinding handle) noexcept {
+    if (!m_imageSlots || !m_resources) {
+        return false;
+    }
+    return m_imageSlots->retire(handle, [this](const HeapImageDescriptor& descriptor) noexcept {
+        m_resources->releaseSampledImage(descriptor.handle);
+    });
+}
+
+std::expected<DescriptorHeapTable::SamplerBinding, core::Error>
+DescriptorHeapTable::registerSampler(const VkSamplerCreateInfo& sampler) {
+    if (!m_samplerSlots) {
+        return std::unexpected(invalidState("Descriptor Heap table is not open"));
+    }
+    auto handle = m_samplerSlots->registerPending(sampler);
+    if (!handle) {
+        return std::unexpected(invalidState("Descriptor Heap sampler slot capacity exhausted"));
+    }
+    return *handle;
+}
+
+std::optional<std::uint32_t>
+DescriptorHeapTable::resolveSampler(SamplerBinding handle) const noexcept {
+    if (!m_samplerSlots) {
+        return std::nullopt;
+    }
+    const auto slot = m_samplerSlots->resolve(handle);
+    return slot ? std::optional{static_cast<std::uint32_t>(*slot)} : std::nullopt;
+}
+
+bool DescriptorHeapTable::retireSampler(SamplerBinding handle) noexcept {
+    if (!m_samplerSlots) {
+        return false;
+    }
+    return m_samplerSlots->retire(handle);
+}
+
+std::expected<bool, core::Error> DescriptorHeapTable::publishCompleted(bool submissionsComplete) {
+    if (!m_imageSlots || !m_samplerSlots || !m_resources) {
+        return std::unexpected(invalidState("Descriptor Heap table is not open"));
+    }
+    if (!submissionsComplete) {
+        return false;
+    }
+
+    std::optional<core::Error> writeError;
+    const bool imagesChanged = m_imageSlots->tryApplyCompleted(
+        true,
+        true,
+        [&](std::size_t slot, const HeapImageDescriptor& descriptor) {
+            auto written = writeImageSlot(
+                static_cast<std::uint32_t>(slot), descriptor.image, descriptor.format);
+            if (!written) {
+                writeError = std::move(written.error());
+                return false;
+            }
+            return true;
+        },
+        [this](const HeapImageDescriptor& descriptor) noexcept {
+            m_resources->releaseSampledImage(descriptor.handle);
+        });
+    if (writeError) {
+        return std::unexpected(std::move(*writeError));
+    }
+
+    const bool samplersChanged = m_samplerSlots->tryApplyCompleted(
+        true,
+        true,
+        [&](std::size_t slot, const VkSamplerCreateInfo& descriptor) {
+            auto written = writeSamplerSlot(static_cast<std::uint32_t>(slot), descriptor);
+            if (!written) {
+                writeError = std::move(written.error());
+                return false;
+            }
+            return true;
+        },
+        [](const VkSamplerCreateInfo&) noexcept {});
+    if (writeError) {
+        return std::unexpected(std::move(*writeError));
+    }
+    return imagesChanged || samplersChanged;
 }
 
 std::expected<void, core::Error>

@@ -132,7 +132,7 @@
   - 验收：`rhi-descriptor-heap-layout` 核对步长/对齐/保留区、溢出与超限拒绝、fixture 缺能力/缺 `vkCmdPushDataEXT` 拒绝及槽位退役复用。
 - [x] T38 Descriptor Heap 分配、写入、绑定与 Shader 数值读回。真机 RTX 4060（API 1.4.357）完成 VMA 对齐 Heap 分配、写入、绑定与 5 组采样数值读回（区分非零 linear 与默认 nearest），双配置 88/88 零告警、Sync Validation 零错误，DSH 独立评审 16/16 PASS。
   - 验收：`rhi-descriptor-heap-readback`（标签 `gpu`）在真机验证对齐地址、默认槽、多纹理槽与 nearest/linear sampler 读回及 Debug Validation 零错误。
-- [ ] T39 Descriptor Heap 在途槽位退役与底层图像保护
+- [x] T39 Descriptor Heap 在途槽位退役与底层图像保护。CPU 受控状态机与真机 RTX 4060（API 1.4.357）三阶段在途退役/底层图像保护/默认槽覆写/递增代数复用及有序关闭全过（106 assertions），双配置 89/89 零告警、Sync Validation 零错误，DSH 独立评审 11/11 PASS。
   - 验收：`rhi-descriptor-heap-retirement` 验证旧句柄立即失效、在途完成前保护槽位与底层 Image、完成后覆写默认描述符并安全复用及有序关闭。
 - [ ] T40 [人工] P5 第一批独立原型验收
   - 用户确认真机数值读回、在途退役保护与 Validation 证据，决定进入 P5 第二批（同场景 Set/Heap 对照）。
@@ -144,6 +144,8 @@
 - 首次使用自动循环前：修正 Codex CLI 的默认模型（见 [自动运行](docs/workflow/自动运行.md) 的注意事项），设置 `CLAUDE_CODE_GIT_BASH_PATH`，然后用 `--max-tasks 1` 试跑 T01。
 
 ## 待办池（建议级，不阻塞）
+
+- T39 评审提示：真机堆写失败部分提交、`abandon()` 异常兜底与 `open(enableDescriptorHeap, 1.3)` 显式拒绝当前无独立注入用例，后续按需补充。
 
 - T38 评审提示：超时/设备丢失分支（`markExternalPending`/`markExternalLost`）与 query 上限 64 属异常边界，当前无注入用例；可按需补 `open(enableDescriptorHeap, API 1.3)` 显式拒绝用例。
 

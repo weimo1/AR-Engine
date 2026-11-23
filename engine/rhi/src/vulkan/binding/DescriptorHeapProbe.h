@@ -25,4 +25,15 @@ class DeviceResources;
     std::span<const std::uint32_t> computeShader,
     std::span<const DescriptorHeapSampleQuery> queries);
 
+[[nodiscard]] std::expected<DescriptorHeapRetirementResult, core::Error>
+runDescriptorHeapRetirementProbe(
+    VkPhysicalDevice physical,
+    VkDevice device,
+    VkQueue queue,
+    std::uint32_t queueFamily,
+    DeviceResources& resources,
+    const DescriptorHeapLimits& limits,
+    const DescriptorHeapDispatch& dispatch,
+    std::span<const std::uint32_t> computeShader);
+
 } // namespace ar::rhi::detail

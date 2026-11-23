@@ -100,6 +100,43 @@ public:
         return changed;
     }
 
+    template <typename Write, typename Release>
+    bool tryApplyCompleted(
+        bool firstFrameComplete, bool secondFrameComplete, Write write, Release release) {
+        if (!firstFrameComplete || !secondFrameComplete) {
+            return false;
+        }
+        bool changed = false;
+        for (std::size_t index = 1; index < m_size; ++index) {
+            auto& slot = m_slots[index];
+            if (slot.state == State::Pending) {
+                if (!write(index, *slot.value)) {
+                    return changed;
+                }
+                slot.state = State::Published;
+                changed = true;
+            } else if (slot.state == State::Retiring) {
+                if (!write(index, *m_slots[0].value)) {
+                    return changed;
+                }
+                release(*slot.value);
+                slot = {};
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    template <typename Release> void clear(Release release) noexcept {
+        for (std::size_t index = m_size; index > 0; --index) {
+            auto& slot = m_slots[index - 1];
+            if (slot.value.has_value()) {
+                release(*slot.value);
+                slot = {};
+            }
+        }
+    }
+
     bool applyCompleted(bool firstFrameComplete, bool secondFrameComplete) {
         return applyCompleted(
             firstFrameComplete,

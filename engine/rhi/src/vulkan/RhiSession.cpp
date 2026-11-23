@@ -2085,6 +2085,29 @@ std::expected<DescriptorHeapProbeResult, core::Error> RhiSession::verifyDescript
         queries);
 }
 
+std::expected<DescriptorHeapRetirementResult, core::Error>
+RhiSession::verifyDescriptorHeapRetirement(std::span<const std::uint32_t> computeShader) {
+    if (!m_impl->graphicsInfo || !m_impl->graphicsInfo->descriptorHeap) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "Descriptor Heap verification requires a session with Descriptor Heap enabled"));
+    }
+    auto resources = m_impl->resourcesForCreation();
+    if (!resources) {
+        return std::unexpected(std::move(resources.error()));
+    }
+    return detail::runDescriptorHeapRetirementProbe(
+        m_impl->graphicsPhysical,
+        m_impl->graphicsDevice,
+        m_impl->graphicsQueue,
+        m_impl->graphicsInfo->graphicsQueueFamily,
+        **resources,
+        *m_impl->graphicsInfo->descriptorHeap,
+        m_impl->heapDispatch,
+        computeShader);
+}
+
 std::expected<void, core::Error> RhiSession::replaceStaticScene(
     std::span<const StaticMeshUpload> meshes,
     std::span<const StaticInstanceDraw> draws,

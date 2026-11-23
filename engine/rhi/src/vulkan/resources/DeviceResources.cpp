@@ -542,7 +542,7 @@ DeviceResources::uploadImage(ImageHandle handle, std::span<const std::byte> byte
             core::Error{
                 core::ErrorCategory::InvalidState,
                 core::ErrorStage::Capability,
-                "resource is referenced by the descriptor set",
+                "image is referenced by a descriptor binding",
                 std::nullopt});
     }
     if (!slot || !matchesImageSize(slot->desc, bytes.size())) {
@@ -560,7 +560,7 @@ DeviceResources::readbackImage(ImageHandle handle, std::span<std::byte> bytes) {
             core::Error{
                 core::ErrorCategory::InvalidState,
                 core::ErrorStage::Capability,
-                "resource is referenced by the descriptor set",
+                "image is referenced by a descriptor binding",
                 std::nullopt});
     }
     if (!slot || slot->layout == VK_IMAGE_LAYOUT_UNDEFINED ||

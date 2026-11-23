@@ -1542,3 +1542,237 @@ TEST_CASE(
     finishSession(*diagnostics, runId);
     CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
 }
+
+TEST_CASE(
+    "descriptor heap retires in-flight slots safely and protects underlying images",
+    "[rhi-descriptor-heap-retirement]") {
+    // Part A: CPU controlled completion state machine verifies deferred writes,
+    // fail-safe write rollback, pending-before-publish release, and full clear.
+    {
+        rhi::detail::SetBindingSlots<std::uint32_t, 4> slots{100u, 2};
+        std::vector<std::pair<std::size_t, std::uint32_t>> writes;
+        std::vector<std::uint32_t> releases;
+
+        const auto first = slots.registerPending(201u);
+        REQUIRE(first.has_value());
+        CHECK_FALSE(slots.resolve(*first).has_value());
+        CHECK(slots.descriptor(1) == 100u);
+
+        // Incomplete GPU completion must not publish or write.
+        CHECK_FALSE(slots.tryApplyCompleted(
+            false,
+            true,
+            [&](std::size_t slot, std::uint32_t value) {
+                writes.emplace_back(slot, value);
+                return true;
+            },
+            [&](std::uint32_t value) { releases.push_back(value); }));
+        CHECK(writes.empty());
+        CHECK_FALSE(slots.resolve(*first).has_value());
+
+        // Write failure must leave Pending slot unpublished.
+        CHECK_FALSE(slots.tryApplyCompleted(
+            true,
+            true,
+            [](std::size_t, std::uint32_t) { return false; },
+            [&](std::uint32_t value) { releases.push_back(value); }));
+        CHECK_FALSE(slots.resolve(*first).has_value());
+
+        // Successful completion publishes the slot.
+        REQUIRE(slots.tryApplyCompleted(
+            true,
+            true,
+            [&](std::size_t slot, std::uint32_t value) {
+                writes.emplace_back(slot, value);
+                return true;
+            },
+            [&](std::uint32_t value) { releases.push_back(value); }));
+        CHECK(slots.resolve(*first) == 1u);
+        CHECK(slots.descriptor(1) == 201u);
+
+        // Retiring invalidates CPU handle immediately while retaining descriptor and slot.
+        REQUIRE(slots.retire(*first));
+        CHECK_FALSE(slots.resolve(*first).has_value());
+        CHECK_FALSE(slots.retire(*first));
+        CHECK(slots.descriptor(1) == 201u);
+        CHECK_FALSE(slots.registerPending(202u).has_value());
+
+        // Incomplete fence or write failure must not release retired value.
+        CHECK_FALSE(slots.tryApplyCompleted(
+            true,
+            false,
+            [&](std::size_t slot, std::uint32_t value) {
+                writes.emplace_back(slot, value);
+                return true;
+            },
+            [&](std::uint32_t value) { releases.push_back(value); }));
+        CHECK_FALSE(slots.tryApplyCompleted(
+            true,
+            true,
+            [](std::size_t, std::uint32_t) { return false; },
+            [&](std::uint32_t value) { releases.push_back(value); }));
+        CHECK(releases.empty());
+        CHECK(slots.descriptor(1) == 201u);
+
+        // Completion overwrites slot with default and releases underlying value.
+        REQUIRE(slots.tryApplyCompleted(
+            true,
+            true,
+            [&](std::size_t slot, std::uint32_t value) {
+                writes.emplace_back(slot, value);
+                return true;
+            },
+            [&](std::uint32_t value) { releases.push_back(value); }));
+        CHECK(writes == std::vector<std::pair<std::size_t, std::uint32_t>>{{1, 201u}, {1, 100u}});
+        CHECK(releases == std::vector<std::uint32_t>{201u});
+        CHECK(slots.descriptor(1) == 100u);
+
+        // Slot can now be reused with a strictly greater generation; retiring Pending releases
+        // immediately without waiting for GPU completion.
+        const auto reused = slots.registerPending(202u);
+        REQUIRE(reused.has_value());
+        CHECK(reused->slot == 1u);
+        CHECK(reused->generation > first->generation);
+        CHECK_FALSE(slots.resolve(*first).has_value());
+        CHECK_FALSE(slots.retire(*first));
+        REQUIRE(slots.retire(*reused, [&](std::uint32_t value) { releases.push_back(value); }));
+        CHECK(releases == std::vector<std::uint32_t>{201u, 202u});
+
+        // clear() releases both active user slots and slot 0 default in reverse order.
+        const auto active = slots.registerPending(203u);
+        REQUIRE(active.has_value());
+        std::vector<std::uint32_t> cleared;
+        slots.clear([&](std::uint32_t value) { cleared.push_back(value); });
+        CHECK(cleared == std::vector<std::uint32_t>{203u, 100u});
+    }
+
+    // Part B: Real GPU in-flight submission, immediate retire, image protection, post-fence
+    // default overwrite, incremented-generation slot reuse, and ordered shutdown.
+    const std::string runId = "rhi-descriptor-heap-retirement";
+    const auto directory = freshRunDirectory(runId);
+    auto diagnostics = makeSession(directory, runId);
+
+    const auto shaderPath = std::filesystem::path(AR_HEAP_PROBE_SHADER);
+    REQUIRE(std::filesystem::is_regular_file(shaderPath));
+    const auto bytes = std::filesystem::file_size(shaderPath);
+    REQUIRE(bytes > 0);
+    REQUIRE(bytes % 4 == 0);
+    std::vector<std::uint32_t> shader(bytes / 4);
+    {
+        std::ifstream file(shaderPath, std::ios::binary);
+        REQUIRE(
+            file.read(reinterpret_cast<char*>(shader.data()), static_cast<std::streamsize>(bytes)));
+    }
+
+    // Vulkan 1.3 session without Descriptor Heap must reject retirement probe explicitly.
+    {
+        rhi::QueryConfig config;
+        config.requestedApi = rhi::makeApiVersion(1, 3);
+        config.createGraphicsDevice = true;
+        auto base = rhi::RhiSession::open(config, *diagnostics);
+        REQUIRE(base.has_value());
+        const auto rejected = (*base)->verifyDescriptorHeapRetirement(shader);
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error().category == core::ErrorCategory::InvalidState);
+        CHECK((*base)->close().resourcesReleased);
+    }
+
+    rhi::QueryConfig probeConfig;
+    probeConfig.requestedApi = rhi::makeApiVersion(1, 3);
+    probeConfig.device = rhi::ExplicitDeviceIndex{0};
+    auto probed = rhi::RhiSession::open(probeConfig, *diagnostics);
+    REQUIRE(probed.has_value());
+    const auto& report = (*probed)->report();
+    const bool supportsHeap = report.loaderApi >= rhi::kApiVersion1_4 &&
+                              report.deviceApi >= rhi::kApiVersion1_4 &&
+                              report.descriptorHeap == rhi::DescriptorHeapStatus::Supported;
+    REQUIRE((*probed)->close().resourcesReleased);
+
+    rhi::QueryConfig heapConfig;
+    heapConfig.requestedApi = rhi::kApiVersion1_4;
+    heapConfig.device = rhi::ExplicitDeviceIndex{0};
+    heapConfig.createGraphicsDevice = true;
+    heapConfig.enableDescriptorHeap = true;
+    auto opened = rhi::RhiSession::open(heapConfig, *diagnostics);
+    if (!supportsHeap) {
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().residualResources.empty());
+        finishSession(*diagnostics, runId);
+        CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
+        return;
+    }
+
+    INFO((opened ? "" : opened.error().error.message));
+    REQUIRE(opened.has_value());
+    auto& session = **opened;
+
+    // Reject malformed SPIR-V.
+    {
+        const std::array badShader{std::uint32_t{0x12345678u}};
+        const auto invalidSpirv = session.verifyDescriptorHeapRetirement(badShader);
+        REQUIRE_FALSE(invalidSpirv.has_value());
+        CHECK(invalidSpirv.error().category == core::ErrorCategory::InvalidArguments);
+    }
+
+    const auto result = session.verifyDescriptorHeapRetirement(shader);
+    INFO((result ? "" : result.error().message));
+    REQUIRE(result.has_value());
+
+    CHECK(result->pendingRetireFreedImmediately);
+    CHECK(result->pendingImageDestroySucceeded);
+    CHECK(result->staleImageHandleRejectedOnRetire);
+    CHECK(result->duplicateImageRetireRejected);
+    CHECK(result->incompletePublishDeferred);
+    CHECK(result->inFlightDestroyRejected);
+    CHECK(result->inFlightUploadRejected);
+    CHECK(result->inFlightReadbackRejected);
+    CHECK(result->inFlightReuseBlocked);
+    CHECK(result->staleSamplerHandleRejectedOnRetire);
+    CHECK(result->duplicateSamplerRetireRejected);
+    CHECK(result->inFlightSamplerReuseBlocked);
+    CHECK(result->completedPublishApplied);
+    CHECK(result->postCompletionReadbackSucceeded);
+    CHECK(result->postCompletionUploadSucceeded);
+    CHECK(result->postCompletionDestroySucceeded);
+    CHECK(result->staleHandleRejectedAfterReuse);
+    CHECK(result->orderedCloseReleasedActiveSlotImage);
+
+    CHECK(result->retiredImageSlot == 2u);
+    CHECK(result->reusedImageSlot == result->retiredImageSlot);
+    CHECK(result->reusedImageGeneration > result->retiredImageGeneration);
+    CHECK(result->retiredSamplerSlot == 1u);
+    CHECK(result->reusedSamplerSlot == result->retiredSamplerSlot);
+    CHECK(result->reusedSamplerGeneration > result->retiredSamplerGeneration);
+
+    const auto nearValue = [](float actual, float expected, float tolerance = 0.03F) {
+        return std::abs(actual - expected) <= tolerance;
+    };
+    const auto checkColor = [&](std::array<float, 4> actual, std::array<float, 4> expected) {
+        CAPTURE(actual, expected);
+        CHECK(nearValue(actual[0], expected[0]));
+        CHECK(nearValue(actual[1], expected[1]));
+        CHECK(nearValue(actual[2], expected[2]));
+        CHECK(nearValue(actual[3], expected[3]));
+    };
+
+    // In-flight submission before fence wait still reads old green image and old linear sampler.
+    checkColor(result->inFlightRetiredImageSample, {0.0F, 1.0F, 0.0F, 1.0F});
+    checkColor(result->inFlightRetiredSamplerSample, {0.6F, 0.0F, 0.4F, 1.0F});
+    // After completion + publish, retired slots read default white and default nearest red.
+    checkColor(result->postRetirementDefaultImageSample, {1.0F, 1.0F, 1.0F, 1.0F});
+    checkColor(result->postRetirementDefaultSamplerSample, {1.0F, 0.0F, 0.0F, 1.0F});
+    CHECK(
+        std::abs(
+            result->inFlightRetiredSamplerSample[2] -
+            result->postRetirementDefaultSamplerSample[2]) > 0.3F);
+    // After slot reuse, reused slots read new magenta image and restored linear sampler.
+    checkColor(result->reusedImageSample, {1.0F, 0.0F, 1.0F, 1.0F});
+    checkColor(result->reusedSamplerSample, {0.6F, 0.0F, 0.4F, 1.0F});
+
+    const auto closed = session.close();
+    CHECK(closed.resourcesReleased);
+    CHECK(closed.residualResources.empty());
+    CHECK(closed.errors.empty());
+    finishSession(*diagnostics, runId);
+    CHECK_FALSE(containsEvent(directory, runId, "rhi.validation.error"));
+}
