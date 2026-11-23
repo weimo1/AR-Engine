@@ -16,9 +16,9 @@
     "generator": "Visual Studio 18 2026",
     "triplet": "x64-windows-static-md"
   },
-  "policy": "缺项或版本不符即失败；实际差异写入 build/logs/ci-preflight.log 供另行审阅，CI 不自动接受新工具链，也不在版本不符时声明云端构建已通过。",
+  "policy": "缺项、主版本漂移或低于最低要求即失败；msvc_toolset 与 cl_version 要求同主版本且不低于本文件记录的最低版本（允许 runner 常规小版本安全更新），其余项精确匹配；实际版本仍完整写入 build/logs/ci-preflight.log 与 ci-preflight.json 留证。",
   "notes": [
     "vcpkg 工具提交只记录不设门槛：仓库在 vcpkg-configuration.json 固定 registry baseline，runner 自带 vcpkg 的提交可能不同，差异随依赖记录一并留证。",
-    "本站记录取自本机 VS2026；云端 runner 若给出不同 MSVC/CMake/SDK，需要单独审阅工具链变更后再更新本文件。"
+    "本机记录取自 VS2026 初始基线（14.51 / 19.51）；云端 windows-2025-vs2026 runner 随月度更新推进 MSVC 14.x / cl 19.x 小版本时按同主版本 >= 最低版本校验并记录实际版本，主版本或 CMake/SDK/Triplet 变更仍需审阅后更新本文件。"
   ]
 }

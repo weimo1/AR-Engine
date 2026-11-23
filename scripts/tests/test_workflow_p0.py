@@ -12,6 +12,7 @@ import unittest
 import xml.etree.ElementTree as ElementTree
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
+import p0_ci_preflight as preflight
 import workflow_p0 as p0
 
 CHANGE = "bootstrap-engine-p0"
@@ -461,6 +462,32 @@ class RunnerTests(unittest.TestCase):
         results = p0.run_table(make_table([first, second]), self.root, self.output,
                                self.environment, only=["b"])
         self.assertEqual([entry["id"] for entry in results["commands"]], ["b"])
+
+
+class PreflightTests(unittest.TestCase):
+    def _check(self, minimum, actual):
+        checks = []
+        preflight.check_min_version(checks, "msvc_toolset", minimum, actual)
+        self.assertEqual(len(checks), 1)
+        return checks[0]
+
+    def test_accepts_exact_and_newer_same_major_versions(self):
+        self.assertEqual(self._check("14.51.36231", "14.51.36231")["status"], "ok")
+        self.assertEqual(self._check("14.51.36231", "14.52.37025")["status"], "ok")
+        self.assertEqual(self._check("19.51.36260", "19.52.37029")["status"], "ok")
+        # Numeric comparison rather than lexicographic ordering.
+        self.assertEqual(self._check("14.51.36231", "14.100.0")["status"], "ok")
+        self.assertEqual(self._check("19.51.36260", "19.51.36260.0")["status"], "ok")
+        self.assertEqual(self._check("14.51.36231", "14.52.37025")["expected"], ">=14.51.36231")
+
+    def test_rejects_older_major_drift_missing_and_malformed_versions(self):
+        self.assertEqual(self._check("14.51.36231", "14.50.35000")["status"], "mismatch")
+        self.assertEqual(self._check("14.51.36231", "14.51")["status"], "mismatch")
+        self.assertEqual(self._check("19.51.36260", "19.51.36259")["status"], "mismatch")
+        self.assertEqual(self._check("14.51.36231", "15.0.0")["status"], "mismatch")
+        self.assertEqual(self._check("19.51.36260", "20.0.0")["status"], "mismatch")
+        self.assertEqual(self._check("14.51.36231", "")["status"], "missing")
+        self.assertEqual(self._check("14.51.36231", "14.x.1")["status"], "mismatch")
 
 
 if __name__ == "__main__":

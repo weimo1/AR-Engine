@@ -101,6 +101,12 @@ def newest_sdk_versions() -> list[str]:
     return sorted(entry.name for entry in root.iterdir() if entry.is_dir())
 
 
+def parse_version(value: str) -> tuple[int, ...] | None:
+    if not value or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", value):
+        return None
+    return tuple(int(part) for part in value.split("."))
+
+
 def check_item(checks: list[dict], name: str, expected: str, actual: str) -> None:
     if not actual:
         status = "missing"
@@ -109,6 +115,21 @@ def check_item(checks: list[dict], name: str, expected: str, actual: str) -> Non
     else:
         status = "mismatch"
     checks.append({"name": name, "expected": expected, "actual": actual, "status": status})
+
+
+def check_min_version(checks: list[dict], name: str, minimum: str, actual: str) -> None:
+    min_parts = parse_version(minimum)
+    actual_parts = parse_version(actual)
+    if not actual:
+        status = "missing"
+    elif min_parts is None or actual_parts is None:
+        status = "mismatch"
+    else:
+        width = max(len(min_parts), len(actual_parts))
+        min_padded = min_parts + (0,) * (width - len(min_parts))
+        actual_padded = actual_parts + (0,) * (width - len(actual_parts))
+        status = "ok" if actual_parts[0] == min_parts[0] and actual_padded >= min_padded else "mismatch"
+    checks.append({"name": name, "expected": f">={minimum}", "actual": actual, "status": status})
 
 
 def preflight(args: argparse.Namespace) -> int:
@@ -149,8 +170,8 @@ def preflight(args: argparse.Namespace) -> int:
             match = re.search(r"Version\s+([0-9.]+)", run([str(cl_path)]))
             if match:
                 cl_version = match.group(1)
-    check_item(checks, "msvc_toolset", expected["msvc_toolset"], toolset)
-    check_item(checks, "cl_version", expected["cl_version"], cl_version)
+    check_min_version(checks, "msvc_toolset", expected["msvc_toolset"], toolset)
+    check_min_version(checks, "cl_version", expected["cl_version"], cl_version)
 
     cmake_path = shutil.which("cmake") or ""
     cmake_version = ""
