@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "Presentation.h"
+#include "PresentationUtil.h"
 #include "TestingHooks.h"
 #include "VulkanResult.h"
 #include "binding/DescriptorHeapLayout.h"
@@ -220,12 +221,100 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
                 core::ErrorStage::Validation,
                 "deferred lighting requires GBuffer, valid SPIR-V and EV in [-16, 16]");
         }
+        if (!config.presentationSpec || !config.presentationSpec->buildDisplayPush) {
+            return makeError(
+                core::ErrorCategory::InvalidArguments,
+                core::ErrorStage::Validation,
+                "deferred lighting requires a render-supplied display push builder");
+        }
+        const auto unormPush = config.presentationSpec->buildDisplayPush(
+            config.presentationSpec->displayExposureEV, false);
+        const auto srgbPush = config.presentationSpec->buildDisplayPush(
+            config.presentationSpec->displayExposureEV, true);
+        if (unormPush.size == 0 || unormPush.size > unormPush.bytes.size() || srgbPush.size == 0 ||
+            srgbPush.size > srgbPush.bytes.size()) {
+            return makeError(
+                core::ErrorCategory::InvalidArguments,
+                core::ErrorStage::Validation,
+                "display push builder returned an invalid byte size");
+        }
     }
     if (config.enableGBuffer && !config.enableStaticScene) {
         return makeError(
             core::ErrorCategory::InvalidArguments,
             core::ErrorStage::Validation,
             "GBuffer requires static scene presentation");
+    }
+    if (config.enableGBuffer && (!config.presentationSpec || !config.planPresentation)) {
+        return makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "GBuffer presentation requires a presentation spec and graph planner");
+    }
+    if (config.presentationSpec) {
+        const auto& spec = *config.presentationSpec;
+        const auto finite = [](float value) { return std::isfinite(value); };
+        if (!std::ranges::all_of(spec.clearColor, finite) || !std::isfinite(spec.depthClear) ||
+            !std::isfinite(spec.displayExposureEV) || std::abs(spec.displayExposureEV) > 16.F ||
+            spec.depthFormat != AttachmentFormat::D32Sfloat ||
+            spec.hdrFormat == AttachmentFormat::D32Sfloat ||
+            std::ranges::any_of(spec.gbufferFormats, [](AttachmentFormat format) {
+                return format == AttachmentFormat::D32Sfloat;
+            })) {
+            return makeError(
+                core::ErrorCategory::InvalidArguments,
+                core::ErrorStage::Validation,
+                "presentation spec has invalid attachment formats or clear values");
+        }
+        const auto& probes = spec.probes;
+        if (!probes.normalizedCoords.empty()) {
+            if (probes.normalizedCoords.size() > 1024u || probes.sampleStrideBytes < 8u ||
+                (probes.sampleStrideBytes % 8u) != 0u) {
+                return makeError(
+                    core::ErrorCategory::InvalidArguments,
+                    core::ErrorStage::Validation,
+                    "presentation probe layout has invalid count or stride alignment");
+            }
+            for (const auto& coord : probes.normalizedCoords) {
+                if (!std::isfinite(coord[0]) || !std::isfinite(coord[1]) || coord[0] < 0.F ||
+                    coord[0] > 1.F || coord[1] < 0.F || coord[1] > 1.F) {
+                    return makeError(
+                        core::ErrorCategory::InvalidArguments,
+                        core::ErrorStage::Validation,
+                        "presentation probe coordinates must be finite and within [0, 1]");
+                }
+            }
+            const std::array<AttachmentFormat, 5> formats{
+                spec.gbufferFormats[0],
+                spec.gbufferFormats[1],
+                spec.gbufferFormats[2],
+                spec.depthFormat,
+                spec.hdrFormat};
+            const std::size_t activeCount = config.deferredLighting ? 5u : 4u;
+            for (std::size_t i = 0; i < activeCount; ++i) {
+                const std::uint32_t texelBytes = detail::presentation::formatTexelBytes(formats[i]);
+                const std::uint32_t offset = probes.attachmentByteOffsets[i];
+                if (texelBytes == 0u || (offset % texelBytes) != 0u ||
+                    offset > probes.sampleStrideBytes ||
+                    texelBytes > probes.sampleStrideBytes - offset) {
+                    return makeError(
+                        core::ErrorCategory::InvalidArguments,
+                        core::ErrorStage::Validation,
+                        "presentation probe attachment offset is misaligned or out of bounds");
+                }
+                for (std::size_t j = 0; j < i; ++j) {
+                    const std::uint32_t prevOffset = probes.attachmentByteOffsets[j];
+                    const std::uint32_t prevBytes =
+                        detail::presentation::formatTexelBytes(formats[j]);
+                    if (offset < prevOffset + prevBytes && prevOffset < offset + texelBytes) {
+                        return makeError(
+                            core::ErrorCategory::InvalidArguments,
+                            core::ErrorStage::Validation,
+                            "presentation probe attachment ranges overlap");
+                    }
+                }
+            }
+        }
     }
     if (config.staticIndirect) {
         const auto validShader = [](const auto& words) {
@@ -1419,7 +1508,8 @@ struct RhiSession::Impl {
                     staticScene ? &*staticScene : nullptr,
                     config.enableGBuffer,
                     config.deferredLighting ? &*config.deferredLighting : nullptr,
-                    config.planPresentation);
+                    config.planPresentation,
+                    config.presentationSpec ? &*config.presentationSpec : nullptr);
                 !opened) {
                 return opened;
             }

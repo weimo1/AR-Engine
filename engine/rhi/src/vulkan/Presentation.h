@@ -10,6 +10,7 @@
 
 #include "core/Error.h"
 #include "rhi/PresentationGraph.h"
+#include "rhi/PresentationSpec.h"
 #include "resources/StaticSceneDraw.h"
 
 namespace ar::core {
@@ -47,7 +48,8 @@ public:
         StaticSceneDraw* staticScene = nullptr,
         bool enableGBuffer = false,
         const DeferredLighting* lighting = nullptr,
-        PlanPresentationGraph planner = nullptr);
+        PlanPresentationGraph planner = nullptr,
+        const PresentationSpec* spec = nullptr);
     std::expected<void, core::Error> publishStaticScene(
         std::vector<StaticSceneDraw::Draw> draws,
         std::shared_ptr<StaticSceneIndirect::Scene> indirect);
@@ -141,11 +143,10 @@ private:
     std::expected<void, core::Error> createLightingResources(VkImageUsageFlags usage);
     void writeEnvironmentDescriptors() const;
     void recordLighting(
-        VkCommandBuffer commands, const Image& output, const PresentationGraphPlan* plan) const;
+        VkCommandBuffer commands, const Image& output, const PresentationGraphPlan& plan) const;
     std::expected<void, core::Error> createReadback(VkPhysicalDevice physical, Readback& readback);
     std::expected<void, core::Error> readScreenshot(Frame& frame, FrameScreenshot& screenshot);
-    void copyGBufferProbes(VkCommandBuffer commands, VkBuffer destination, bool graph) const;
-    void decodeGBufferProbes(const void* mapped, FrameScreenshot& screenshot) const;
+    void copyRawProbes(VkCommandBuffer commands, VkBuffer destination) const;
     std::expected<DrawStatus, core::Error> draw(Frame& frame, bool capture);
     std::expected<void, core::Error> record(
         VkCommandBuffer commands,
@@ -173,6 +174,7 @@ private:
     bool m_enableScreenshot = false;
     bool m_deferCapture = false;
     bool m_enableGBuffer = false;
+    PresentationSpec m_spec{};
     PlanPresentationGraph m_planPresentation = nullptr;
     const DeferredLighting* m_lighting = nullptr;
     VkSampler m_lightingSampler = VK_NULL_HANDLE;

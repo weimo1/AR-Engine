@@ -17,7 +17,6 @@ public:
     ~StaticSceneDraw();
     StaticSceneDraw(const StaticSceneDraw&) = delete;
 
-    static constexpr VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
     struct Attachment {
         VkImage image = VK_NULL_HANDLE;
         VmaAllocation_T* allocation = nullptr;

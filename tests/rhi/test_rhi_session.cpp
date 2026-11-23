@@ -137,6 +137,81 @@ TEST_CASE("an empty explicit loader path is rejected", "[rhi-request-validation]
     finishSession(*session, runId);
 }
 
+TEST_CASE(
+    "GBuffer presentation requires render-supplied spec and graph planner",
+    "[rhi-request-validation]") {
+    const std::string runId = "rhi-gbuffer-requires-spec";
+    const std::filesystem::path directory = freshRunDirectory(runId);
+    auto session = makeSession(directory, runId);
+
+    const std::vector<std::uint32_t> validSpirv{0x07230203u, 0u, 0u, 0u, 0u};
+    auto baseConfig = [&]() {
+        rhi::QueryConfig config;
+        config.loader = rhi::ExplicitLoaderPath{directory / "absent-loader.dll"};
+        config.requestedApi = rhi::makeApiVersion(1, 3);
+        config.createGraphicsDevice = true;
+        config.presentation =
+            rhi::Win32Presentation{reinterpret_cast<void*>(std::uintptr_t{1}), {}, 320u, 180u};
+        config.triangleShaders = rhi::TriangleShaders{validSpirv, validSpirv};
+        config.enableStaticScene = true;
+        config.enableGBuffer = true;
+        return config;
+    };
+
+    // Missing both presentationSpec and planPresentation.
+    {
+        auto config = baseConfig();
+        auto opened = rhi::RhiSession::open(config, *session);
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
+        CHECK(opened.error().error.stage == core::ErrorStage::Validation);
+    }
+
+    // Present spec but missing planPresentation.
+    {
+        auto config = baseConfig();
+        config.presentationSpec.emplace();
+        auto opened = rhi::RhiSession::open(config, *session);
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
+        CHECK(opened.error().error.stage == core::ErrorStage::Validation);
+    }
+
+    // Misaligned probe layout is rejected before touching the loader.
+    {
+        auto config = baseConfig();
+        config.planPresentation = [](const rhi::PresentationGraphInput&)
+            -> std::expected<rhi::PresentationGraphPlan, core::Error> {
+            return rhi::PresentationGraphPlan{};
+        };
+        config.presentationSpec.emplace();
+        config.presentationSpec->probes.normalizedCoords = {{0.5F, 0.5F}};
+        config.presentationSpec->probes.sampleStrideBytes = 12u; // Not 8-byte aligned / too small.
+        auto opened = rhi::RhiSession::open(config, *session);
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
+        CHECK(opened.error().error.stage == core::ErrorStage::Validation);
+    }
+
+    // Deferred lighting requires render-supplied display push-constant builder.
+    {
+        auto config = baseConfig();
+        config.planPresentation = [](const rhi::PresentationGraphInput&)
+            -> std::expected<rhi::PresentationGraphPlan, core::Error> {
+            return rhi::PresentationGraphPlan{};
+        };
+        config.presentationSpec.emplace();
+        config.deferredLighting =
+            rhi::DeferredLighting{validSpirv, validSpirv, validSpirv, 0.F, false};
+        auto opened = rhi::RhiSession::open(config, *session);
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
+        CHECK(opened.error().error.stage == core::ErrorStage::Validation);
+    }
+
+    finishSession(*session, runId);
+}
+
 TEST_CASE("a missing loader file reports loader_unavailable", "[rhi-loader-unavailable]") {
     const std::string runId = "rhi-loader-unavailable";
     const std::filesystem::path directory = freshRunDirectory(runId);

@@ -12,8 +12,9 @@
 #include "core/Error.h"
 #include "rhi/Capabilities.h"
 #include "rhi/RhiSession.h"
-#include "render/StaticSceneRenderer.h"
 #include "render/PresentationGraph.h"
+#include "render/PresentationSpec.h"
+#include "render/StaticSceneRenderer.h"
 #include "runtime/RuntimeConfig.h"
 #include "runtime/StaticSceneSession.h"
 
@@ -192,7 +193,14 @@ RuntimeSession::start(const RuntimeConfig& config) {
 
     auto query = config.query;
     if (query.enableGBuffer) {
-        query.planPresentation = render::planPresentationGraph;
+        if (!query.planPresentation) {
+            query.planPresentation = render::planPresentationGraph;
+        }
+        if (!query.presentationSpec) {
+            const float exposureEV =
+                query.deferredLighting ? query.deferredLighting->exposureEV : 0.F;
+            query.presentationSpec = render::buildDeferredPresentationSpec(exposureEV);
+        }
     }
     if (config.staticAssetRoot) {
         query.enableStaticScene = true;
@@ -306,30 +314,18 @@ RuntimeSession::presentFrame(rhi::FrameScreenshot* screenshot) {
         window.waitEvents(kWindowEventWaitSeconds);
         return window.shouldClose() ? FrameStatus::Closed : FrameStatus::Paused;
     }
-    if (screenshot && !screenshot->gbuffer.empty() && m_impl->staticScene) {
+    if (screenshot && screenshot->rawProbes) {
         std::optional<render::StaticCamera> camera = m_impl->activeCamera;
-        if (!camera) {
+        if (!camera && m_impl->staticScene) {
             if (const auto input = m_impl->staticScene->input()) {
                 camera = input->camera;
             }
         }
-        if (camera) {
-            const float halfFov = std::tan(camera->verticalFovRadians * 0.5F);
-            const float width = static_cast<float>(screenshot->width);
-            const float height = static_cast<float>(screenshot->height);
-            for (auto& sample : screenshot->gbuffer) {
-                if (sample.depth == 0.F) {
-                    continue;
-                }
-                const float distance =
-                    camera->nearPlane * camera->farPlane /
-                    (camera->nearPlane + sample.depth * (camera->farPlane - camera->nearPlane));
-                const float x = 2.F * (static_cast<float>(sample.pixel[0]) + 0.5F) / width - 1.F;
-                const float y = 1.F - 2.F * (static_cast<float>(sample.pixel[1]) + 0.5F) / height;
-                sample.viewPosition = {
-                    x * distance * halfFov * width / height, y * distance * halfFov, -distance};
-            }
-        }
+        screenshot->gbuffer = render::decodeGBufferProbes(
+            *screenshot->rawProbes,
+            screenshot->width,
+            screenshot->height,
+            camera ? &*camera : nullptr);
     }
     return FrameStatus::Presented;
 }

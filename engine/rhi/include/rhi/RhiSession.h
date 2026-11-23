@@ -17,6 +17,7 @@
 #include "rhi/Capabilities.h"
 #include "rhi/EnvironmentUpload.h"
 #include "rhi/PresentationGraph.h"
+#include "rhi/PresentationSpec.h"
 #include "rhi/Image.h"
 #include "rhi/Buffer.h"
 #include "rhi/LoaderSource.h"
@@ -82,8 +83,9 @@ struct FrameScreenshot {
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     std::vector<std::uint8_t> rgba;
-    // Diagnostic GBuffer samples, ordered overlap, far-only, and background for the sample.
+    // Diagnostic GBuffer samples decoded by render from rawProbes.
     std::vector<GBufferProbe> gbuffer{};
+    std::optional<RawProbeCapture> rawProbes;
     struct IndirectVisibility {
         std::uint32_t visible;
         std::vector<std::uint64_t> drawnIds;
@@ -131,6 +133,7 @@ struct QueryConfig {
     bool enableStaticScene = false;
     bool enableGBuffer = false;
     std::optional<DeferredLighting> deferredLighting;
+    std::optional<PresentationSpec> presentationSpec;
     PlanPresentationGraph planPresentation = nullptr;
     std::optional<StaticIndirectShaders> staticIndirect;
 };

@@ -251,6 +251,7 @@ add_library(ar_public_header_probe OBJECT
     public_headers/header_rhi_capabilities.cpp
     public_headers/header_rhi_buffer.cpp
     public_headers/header_rhi_image.cpp
+    public_headers/header_rhi_presentation_spec.cpp
     public_headers/header_rhi_session.cpp
     public_headers/header_rhi_verification.cpp
     public_headers/header_runtime_config.cpp
@@ -339,11 +340,12 @@ set_tests_properties(sample-ibl-probes PROPERTIES
     LABELS "gpu"
     ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1")
 
-add_executable(ar_render_tests render/test_cull_reference.cpp render/test_environment_lighting.cpp render/test_frame_view.cpp render/test_render_graph.cpp render/test_static_scene_draw_data.cpp)
+add_executable(ar_render_tests render/test_cull_reference.cpp render/test_environment_lighting.cpp render/test_frame_view.cpp render/test_presentation_spec.cpp render/test_render_graph.cpp render/test_static_scene_draw_data.cpp)
 target_link_libraries(ar_render_tests PRIVATE ar_render ar_assets Catch2::Catch2WithMain)
 add_test(NAME render-culling-reference COMMAND ar_render_tests "[render-culling-reference]")
 add_test(NAME render-environment-lighting COMMAND ar_render_tests "[render-environment-lighting]")
 add_test(NAME render-frame-view COMMAND ar_render_tests "[render-frame-view]")
+add_test(NAME render-presentation-spec COMMAND ar_render_tests "[render-presentation-spec]")
 add_test(NAME render-graph-plan COMMAND ar_render_tests "[render-graph-plan]")
 add_test(NAME render-static-scene-draw-data COMMAND ar_render_tests "[render-static-scene-draw-data]")
 

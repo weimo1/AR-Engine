@@ -145,7 +145,7 @@
   - 验收：`render-frame-view`（CPU）与 `sample-camera-view-update`（标签 `gpu`）验证移动/旋转相机不重传静态网格、贴图与 SSBO（`staticSceneUploadCount == 1`），可见集合、Reverse-Z 深度、视图位置与复位像素正确，Debug Sync Validation 零错误。
 - [x] T42a 测试验证入口从 RhiSession 主头剥离。新增公开验证头 `rhi/RhiVerification.h` 承接 `verifyGpuCull`、`verifyDescriptorHeap`、`verifyDescriptorHeapRetirement` 及探针结果类型，主头仅保留私有友元转发；`header_rhi_verification` 独立编译探针与负向 concept 断言生效，双配置 91/91 零告警，DSH 独立评审 9/9 PASS。
   - 验收：`verifyGpuCull`、`verifyDescriptorHeap`、`verifyDescriptorHeapRetirement` 及探针结果类型迁至 `rhi/RhiVerification.h`，`public-headers` 与全量用例通过。
-- [ ] T42b 渲染管线规格与 RenderGraph Pass 编排归位 render
+- [x] T42b 渲染管线规格与 RenderGraph Pass 编排归位 render。新增 `rhi/PresentationSpec.h` 与 `render/PresentationSpec.h/.cpp` 承接 GBuffer/HDR/Reverse-Z 格式与清屏值、Display push 打包、探针布局及半精度/深度解码，`Presentation.cpp`（1544→932 行）拆为 `Presentation.cpp`/`PresentationPasses.cpp`/`PresentationCapture.cpp`/`PresentationUtil.h` 并移除 RHI 硬编码与手工回退屏障；`render-presentation-spec`、`public-headers`（13/13）与全量真机渲染回归全过，双配置 92/92 零告警，DSH 独立评审 20/20 PASS。
   - 验收：GBuffer/延迟光照/IBL 管线配置、探针解码与 Pass 声明由 `render` 驱动，`rhi` 收窄为设备、资源、绑定与执行原语，既有全部渲染回归维持原容差、零告警零 Validation 错误。
 - [ ] T43 [人工] 架构收口里程碑验收
   - 用户确认模块边界、动态相机更新与全量回归证据后，进入 P5 第二批（同场景 Set/Heap 对照）与 P4b（方向光阴影与相机漫游）。
@@ -157,6 +157,8 @@
 - 首次使用自动循环前：修正 Codex CLI 的默认模型（见 [自动运行](docs/workflow/自动运行.md) 的注意事项），设置 `CLAUDE_CODE_GIT_BASH_PATH`，然后用 `--max-tasks 1` 试跑 T01。
 
 ## 待办池（建议级，不阻塞）
+
+- T42b 评审观察：RHI 未交叉校验 `depthReverseZ`/`depthClear` 与 `spec.displayExposureEV`/`DeferredLighting.exposureEV`，探针 `sampleStrideBytes` 无独立上界（回读缓冲限 128 MiB 兜底），后续扩展多视图/阴影 Pass 时按需收紧。
 
 - T41 评审观察：`StaticSceneDraw::publish` 先 `publishCompleted` 再替换 `m_active`（T35 遗留顺序）、`packStaticSceneDrawData` 冗余构造每实例数据（T34 遗留），以及 `publishStaticScene` 中 `replaceStaticScene` 与 `setFrameView` 的理论部分提交窗口，后续重构时按需一并整理。
 

@@ -3,7 +3,9 @@ find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 
 add_library(ar_rhi STATIC
     src/vulkan/Presentation.cpp
+    src/vulkan/PresentationCapture.cpp
     src/vulkan/PresentationGraph.cpp
+    src/vulkan/PresentationPasses.cpp
     src/vulkan/RhiSession.cpp
     src/vulkan/binding/DescriptorHeapProbe.cpp
     src/vulkan/binding/DescriptorHeapTable.cpp
