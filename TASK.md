@@ -147,7 +147,7 @@
   - 验收：`verifyGpuCull`、`verifyDescriptorHeap`、`verifyDescriptorHeapRetirement` 及探针结果类型迁至 `rhi/RhiVerification.h`，`public-headers` 与全量用例通过。
 - [x] T42b 渲染管线规格与 RenderGraph Pass 编排归位 render。新增 `rhi/PresentationSpec.h` 与 `render/PresentationSpec.h/.cpp` 承接 GBuffer/HDR/Reverse-Z 格式与清屏值、Display push 打包、探针布局及半精度/深度解码，`Presentation.cpp`（1544→932 行）拆为 `Presentation.cpp`/`PresentationPasses.cpp`/`PresentationCapture.cpp`/`PresentationUtil.h` 并移除 RHI 硬编码与手工回退屏障；`render-presentation-spec`、`public-headers`（13/13）与全量真机渲染回归全过，双配置 92/92 零告警，DSH 独立评审 20/20 PASS。
   - 验收：GBuffer/延迟光照/IBL 管线配置、探针解码与 Pass 声明由 `render` 驱动，`rhi` 收窄为设备、资源、绑定与执行原语，既有全部渲染回归维持原容差、零告警零 Validation 错误。
-- [ ] T43 [人工] 架构收口里程碑验收
+- [x] T43 [人工] 架构收口里程碑验收。用户核对 T41–T42b 边界改动、双配置 92/92 零告警门禁与三轮 DSH 独立评审（28/28、9/9、20/20 PASS）证据后确认通过，决定进入 P5 第二批（同场景 Set/Heap 对照）。
   - 用户确认模块边界、动态相机更新与全量回归证据后，进入 P5 第二批（同场景 Set/Heap 对照）与 P4b（方向光阴影与相机漫游）。
 
 ## 人工待办（不阻塞队列）
