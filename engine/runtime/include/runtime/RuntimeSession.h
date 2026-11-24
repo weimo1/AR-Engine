@@ -3,11 +3,13 @@
 #include <cstdint>
 #include <expected>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "core/Diagnostics.h"
 #include "core/Error.h"
+#include "platform/WindowInput.h"
 #include "render/StaticRenderInput.h"
 #include "rhi/Capabilities.h"
 #include "rhi/RhiSession.h"
@@ -54,8 +56,12 @@ public:
     [[nodiscard]] std::expected<void, core::Error>
     openStaticScene(const std::filesystem::path& source, bool verifyRollback = false);
     [[nodiscard]] std::expected<void, core::Error> setCamera(const render::StaticCamera& camera);
+    [[nodiscard]] std::optional<render::StaticCamera> activeCamera() const noexcept;
     [[nodiscard]] std::expected<void, core::Error>
     setDirectionalLight(const render::DirectionalLight& light);
+    [[nodiscard]] std::expected<platform::InputState, core::Error> sampleWindowInput();
+    [[nodiscard]] std::expected<void, core::Error> setCursorMode(platform::CursorMode mode);
+    [[nodiscard]] std::optional<platform::CursorMode> cursorMode() const noexcept;
     [[nodiscard]] std::uint64_t staticSceneUploadCount() const noexcept;
     [[nodiscard]] std::expected<void, core::Error>
     saveStaticScene(const std::filesystem::path& destination) const;

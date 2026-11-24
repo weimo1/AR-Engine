@@ -35,6 +35,9 @@ struct LaunchOptions {
     bool staticGpuDriven = false;
     std::optional<std::uint32_t> indirectCapacity;
     bool hdrLighting = false;
+    bool shadows = false;
+    std::optional<std::uint32_t> shadowResolution;
+    bool freeCamera = false;
     bool verifyIblRollback = false;
     std::optional<ar::render::EnvironmentPreset> ibl;
     std::optional<float> exposureEV;

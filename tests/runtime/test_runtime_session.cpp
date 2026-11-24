@@ -9,6 +9,7 @@
 #include <expected>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <numbers>
 #include <sstream>
@@ -26,8 +27,10 @@
 #include "platform/Window.h"
 #include "render/DirectionalShadow.h"
 #include "render/EnvironmentLighting.h"
+#include "render/FreeCameraController.h"
 #include "render/PresentationGraph.h"
 #include "render/PresentationSpec.h"
+#include "render/StaticSceneRenderer.h"
 #include "rhi/Capabilities.h"
 #include "rhi/RhiSession.h"
 #include "runtime/RuntimeConfig.h"
@@ -2793,4 +2796,429 @@ TEST_CASE(
         checkExactParity(indirectSet.resized1, indirectHeap.resized1);
         checkExactParity(indirectSet.resized2, indirectHeap.resized2);
     }
+}
+
+TEST_CASE(
+    "Free camera showroom roaming preserves off-frustum shadows, Set/Heap parity and CLI rules",
+    "[sample-free-camera-shadows]") {
+    const auto shader = [](const char* name) {
+        std::ifstream input(
+            std::filesystem::path(AR_TEST_SHADER_DIR) / name, std::ios::binary | std::ios::ate);
+        const auto size = static_cast<std::streamoff>(input.tellg());
+        REQUIRE(size > 0);
+        REQUIRE(size % 4 == 0);
+        std::vector<std::uint32_t> words(static_cast<std::size_t>(size / 4));
+        REQUIRE(input.seekg(0).read(reinterpret_cast<char*>(words.data()), size));
+        return words;
+    };
+
+    const std::string baseRunId = "sample-free-camera-shadows";
+    const std::filesystem::path runRoot = freshRunDirectory(baseRunId);
+    const std::filesystem::path showroomDir(AR_SHOWROOM_DEPLOYED_DIR);
+    const std::filesystem::path scenePath = showroomDir / "scene.json";
+    const std::filesystem::path assetRoot = showroomDir / "assets";
+    const std::filesystem::path triangleExe(AR_TRIANGLE_EXECUTABLE);
+    REQUIRE(std::filesystem::is_regular_file(scenePath));
+    REQUIRE(std::filesystem::is_directory(assetRoot));
+    REQUIRE(std::filesystem::is_regular_file(triangleExe));
+
+    bool supportsHeap = false;
+    {
+        runtime::RuntimeConfig probe;
+        probe.mode = runtime::QueryMode::Inspect;
+        probe.query.loader = rhi::SystemLoader{};
+        probe.query.requestedApi = rhi::makeApiVersion(1, 3);
+        probe.query.device = rhi::ExplicitDeviceIndex{0};
+        probe.diagnostics.outputRoot = runRoot;
+        probe.diagnostics.runId = "probe";
+        auto probed = runtime::RuntimeSession::start(probe);
+        INFO(describeStart(probed));
+        REQUIRE(probed.has_value());
+        const auto& report = (*probed)->report();
+        supportsHeap = report.loaderApi >= rhi::kApiVersion1_4 &&
+                       report.deviceApi >= rhi::kApiVersion1_4 &&
+                       report.descriptorHeap == rhi::DescriptorHeapStatus::Supported;
+        REQUIRE((*probed)->close().resourcesReleased);
+    }
+
+    const auto directionalPacked = ar::render::packEnvironmentLighting(
+        ar::render::bakeEnvironmentLighting(ar::render::EnvironmentPreset::Directional));
+    const rhi::EnvironmentUpload directionalEnv{
+        directionalPacked.diffuse, directionalPacked.specular, directionalPacked.brdf};
+
+    const rhi::TriangleShaders directShaders{
+        shader("gbuffer.vert.spv"), shader("gbuffer_bindless.frag.spv")};
+    const rhi::StaticIndirectShaders indirectShaders{
+        {shader("static_indirect.vert.spv"), shader("static_indirect.frag.spv")},
+        shader("static_indirect.comp.spv"),
+        UINT32_MAX};
+    const rhi::ShadowMapConfig shadowCfg{
+        shader("shadow_direct.vert.spv"), shader("shadow_indirect.vert.spv"), 1024u};
+    const rhi::DeferredLighting lighting{
+        shader("fullscreen.vert.spv"),
+        shader("deferred_ibl_shadow.frag.spv"),
+        shader("display_sdr.frag.spv"),
+        0.F,
+        true,
+        shadowCfg};
+
+    const auto projectWorldToScreenUv =
+        [](const ar::render::StaticCamera& camera,
+           const std::array<float, 3>& worldPoint,
+           std::uint32_t width,
+           std::uint32_t height) -> std::array<float, 2> {
+        const auto view = ar::render::buildFrameView(camera, true);
+        REQUIRE(view.has_value());
+        const float inverseAspect =
+            static_cast<float>(height) / static_cast<float>(width);
+        auto clipFromWorld = view->clipFromWorld;
+        for (std::size_t col = 0; col < 4; ++col) {
+            clipFromWorld[col * 4] *= inverseAspect;
+        }
+        const float px = worldPoint[0];
+        const float py = worldPoint[1];
+        const float pz = worldPoint[2];
+        const float cx = clipFromWorld[0] * px + clipFromWorld[4] * py + clipFromWorld[8] * pz +
+                         clipFromWorld[12];
+        const float cy = clipFromWorld[1] * px + clipFromWorld[5] * py + clipFromWorld[9] * pz +
+                         clipFromWorld[13];
+        const float cw = clipFromWorld[3] * px + clipFromWorld[7] * py + clipFromWorld[11] * pz +
+                         clipFromWorld[15];
+        REQUIRE(cw > 1e-4F);
+        const float ndcX = cx / cw;
+        const float ndcY = cy / cw;
+        return {0.5F + 0.5F * ndcX, 0.5F - 0.5F * ndcY};
+    };
+
+    const auto samplePatchLuma = [](const rhi::FrameScreenshot& frame,
+                                    const std::array<float, 2>& uv,
+                                    int radius) -> float {
+        REQUIRE(uv[0] > 0.02F);
+        REQUIRE(uv[0] < 0.98F);
+        REQUIRE(uv[1] > 0.02F);
+        REQUIRE(uv[1] < 0.98F);
+        const int width = static_cast<int>(frame.width);
+        const int height = static_cast<int>(frame.height);
+        const int cx = std::clamp(
+            static_cast<int>(std::lround(uv[0] * static_cast<float>(width))),
+            radius,
+            width - 1 - radius);
+        const int cy = std::clamp(
+            static_cast<int>(std::lround(uv[1] * static_cast<float>(height))),
+            radius,
+            height - 1 - radius);
+        double total = 0.0;
+        int count = 0;
+        for (int dy = -radius; dy <= radius; ++dy) {
+            for (int dx = -radius; dx <= radius; ++dx) {
+                const std::size_t offset =
+                    (static_cast<std::size_t>(cy + dy) * frame.width +
+                     static_cast<std::size_t>(cx + dx)) *
+                    4u;
+                total += (static_cast<double>(frame.rgba[offset]) +
+                          static_cast<double>(frame.rgba[offset + 1]) +
+                          static_cast<double>(frame.rgba[offset + 2])) /
+                         3.0;
+                ++count;
+            }
+        }
+        return static_cast<float>(total / static_cast<double>(count));
+    };
+
+    struct RoamingRun {
+        ar::render::StaticCamera pose1Camera{};
+        ar::render::StaticCamera pose2Camera{};
+        rhi::FrameScreenshot pose0Initial;
+        rhi::FrameScreenshot pose1NearPillar;
+        rhi::FrameScreenshot pose2CulledPillar;
+        rhi::FrameScreenshot pose2NoShadow;
+        rhi::FrameScreenshot pose3Reset;
+    };
+
+    const auto runShowroomRoaming = [&](bool heapMode, const std::string& runId) -> RoamingRun {
+        runtime::RuntimeConfig config;
+        config.mode =
+            heapMode ? runtime::QueryMode::RequireProduct : runtime::QueryMode::Development;
+        config.query.loader = rhi::SystemLoader{};
+        config.query.device = rhi::ExplicitDeviceIndex{0};
+        config.query.requestedApi = heapMode ? rhi::kApiVersion1_4 : rhi::makeApiVersion(1, 3);
+        config.query.createGraphicsDevice = true;
+        config.query.enableScreenshot = true;
+        config.query.enableSetBinding = !heapMode;
+        config.query.enableDescriptorHeap = heapMode;
+        config.query.enableGBuffer = true;
+        config.staticAssetRoot = assetRoot;
+        config.query.triangleShaders = directShaders;
+        config.query.staticIndirect = indirectShaders;
+        config.query.deferredLighting = lighting;
+        config.window.emplace();
+        config.window->width = 320;
+        config.window->height = 180;
+        config.window->visible = false;
+        config.window->title =
+            "AR free camera shadows " + runId + " " + std::to_string(GetCurrentProcessId());
+        config.diagnostics.runId = runId;
+        config.diagnostics.outputRoot = runRoot;
+
+        auto session = runtime::RuntimeSession::start(config);
+        INFO(describeStart(session));
+        REQUIRE(session.has_value());
+        REQUIRE((*session)->openStaticScene(scenePath));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+        REQUIRE((*session)->replaceEnvironment(directionalEnv, false));
+
+        // Verify RuntimeSession input & cursor-mode bridge on hidden window.
+        const auto sampledInput = (*session)->sampleWindowInput();
+        REQUIRE(sampledInput.has_value());
+        REQUIRE((*session)->setCursorMode(ar::platform::CursorMode::Normal));
+        CHECK((*session)->cursorMode() == ar::platform::CursorMode::Normal);
+        const auto rejectedDisabled = (*session)->setCursorMode(ar::platform::CursorMode::Disabled);
+        REQUIRE_FALSE(rejectedDisabled.has_value());
+        CHECK(rejectedDisabled.error().category == core::ErrorCategory::InvalidState);
+
+        const auto initialCamera = (*session)->activeCamera();
+        REQUIRE(initialCamera.has_value());
+        auto controller = ar::render::FreeCameraController::create(*initialCamera);
+        REQUIRE(controller.has_value());
+
+        const auto capture = [&](rhi::FrameScreenshot& out) {
+            auto status = (*session)->presentFrame(&out);
+            INFO((status ? "" : status.error().message));
+            REQUIRE(status.has_value());
+            REQUIRE(*status == runtime::FrameStatus::Presented);
+            REQUIRE(out.indirect.has_value());
+            REQUIRE(out.gbuffer.size() == 3);
+        };
+
+        RoamingRun out;
+        // Pose 0: showroom overview using controller's leveled initial camera so reset() returns
+        // the exact bit-for-bit camera state.
+        REQUIRE((*session)->setCamera(controller->camera()));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+        capture(out.pose0Initial);
+        CHECK(out.pose0Initial.indirect->visible == 14u);
+
+        // Pose 1: drive FreeCameraController beside left pillar (ID 3) looking down at floor shadow.
+        const auto stepMove = [&](const ar::render::FreeCameraInput& input, int steps) {
+            ar::render::StaticCamera cam = controller->camera();
+            for (int i = 0; i < steps; ++i) {
+                cam = controller->update(input, 0.1F);
+            }
+            return cam;
+        };
+        ar::render::FreeCameraInput moveLeft{};
+        moveLeft.moveLeft = true;
+        moveLeft.sprint = true;
+        (void)stepMove(moveLeft, 4);
+        ar::render::FreeCameraInput moveFwd{};
+        moveFwd.moveForward = true;
+        moveFwd.sprint = true;
+        (void)stepMove(moveFwd, 7);
+        ar::render::FreeCameraInput moveUp{};
+        moveUp.moveUp = true;
+        (void)stepMove(moveUp, 3);
+        ar::render::FreeCameraInput look1{};
+        look1.lookActive = true;
+        look1.lookDeltaX = -80.F;
+        look1.lookDeltaY = 280.F;
+        out.pose1Camera = controller->update(look1, 0.1F);
+        REQUIRE((*session)->setCamera(out.pose1Camera));
+        REQUIRE((*session)->activeCamera() == out.pose1Camera);
+        CHECK((*session)->staticSceneUploadCount() == 1);
+        capture(out.pose1NearPillar);
+
+        // Pose 2: advance & yaw further left so left pillar (ID 3) leaves main camera frustum while
+        // its shadow on the showroom floor remains visible.
+        ar::render::FreeCameraInput stepFwd2{};
+        stepFwd2.moveForward = true;
+        (void)stepMove(stepFwd2, 2);
+        (void)stepMove(moveUp, 2);
+        ar::render::FreeCameraInput look2{};
+        look2.lookActive = true;
+        look2.lookDeltaX = -40.F;
+        look2.lookDeltaY = 40.F;
+        out.pose2Camera = controller->update(look2, 0.1F);
+        REQUIRE((*session)->setCamera(out.pose2Camera));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+        capture(out.pose2CulledPillar);
+        CHECK(
+            std::ranges::find(out.pose2CulledPillar.indirect->drawnIds, 3u) ==
+            out.pose2CulledPillar.indirect->drawnIds.end());
+
+        // Compare same culled-pillar pose with shadows toggled off (zero re-upload).
+        auto noShadowLight = ar::render::defaultDirectionalLight();
+        noShadowLight.castShadows = false;
+        REQUIRE((*session)->setDirectionalLight(noShadowLight));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+        capture(out.pose2NoShadow);
+
+        // Re-enable shadows and reset FreeCameraController back to initial pose.
+        REQUIRE((*session)->setDirectionalLight(ar::render::defaultDirectionalLight()));
+        REQUIRE(controller->reset(*initialCamera));
+        REQUIRE((*session)->setCamera(controller->camera()));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+        capture(out.pose3Reset);
+        const bool resetMatchesInitial = (out.pose3Reset.rgba == out.pose0Initial.rgba);
+        CHECK(resetMatchesInitial);
+
+        const auto closed = (*session)->close();
+        REQUIRE(closed.result == core::ResultKind::Success);
+        REQUIRE(closed.resourcesReleased);
+        CHECK((*session)->staticSceneUploadCount() == 1);
+
+        std::ifstream events(runRoot / runId / "events.jsonl");
+        REQUIRE(events);
+        bool sawValidationEnabled = false;
+        bool sawHeapReady = false;
+        bool sawSetReady = false;
+        for (std::string line; std::getline(events, line);) {
+            const auto id = Json::parse(line).at("event_id").get<std::string>();
+            CHECK(id != "rhi.validation.error");
+            sawValidationEnabled |= (id == "rhi.validation.enabled");
+            sawHeapReady |= (id == "rhi.binding.heap.ready");
+            sawSetReady |= (id == "rhi.binding.set.ready");
+        }
+#ifdef _DEBUG
+        CHECK(sawValidationEnabled);
+#else
+        (void)sawValidationEnabled;
+#endif
+        CHECK(sawHeapReady == heapMode);
+        CHECK(sawSetReady == !heapMode);
+        return out;
+    };
+
+    const RoamingRun setRun = runShowroomRoaming(false, "roam-set");
+    const bool pose1Changed = (setRun.pose1NearPillar.rgba != setRun.pose0Initial.rgba);
+    const bool pose2Changed = (setRun.pose2CulledPillar.rgba != setRun.pose1NearPillar.rgba);
+    CHECK(pose1Changed);
+    CHECK(pose2Changed);
+
+    // Fixed world points on showroom floor (y = 0):
+    // - pShadow (-3.42, 0, -2.07) lies inside left pillar ID 3's cast shadow.
+    // - pLit    (-3.42, 0, -3.50) lies on open sunlit floor nearby.
+    const std::array<float, 3> pShadow{-3.42F, 0.F, -2.07F};
+    const std::array<float, 3> pLit{-3.42F, 0.F, -3.50F};
+
+    const auto pose1ShadowUv = projectWorldToScreenUv(
+        setRun.pose1Camera, pShadow, setRun.pose1NearPillar.width, setRun.pose1NearPillar.height);
+    const auto pose1LitUv = projectWorldToScreenUv(
+        setRun.pose1Camera, pLit, setRun.pose1NearPillar.width, setRun.pose1NearPillar.height);
+    const auto pose2ShadowUv = projectWorldToScreenUv(
+        setRun.pose2Camera,
+        pShadow,
+        setRun.pose2CulledPillar.width,
+        setRun.pose2CulledPillar.height);
+    const auto pose2LitUv = projectWorldToScreenUv(
+        setRun.pose2Camera, pLit, setRun.pose2CulledPillar.width, setRun.pose2CulledPillar.height);
+
+    const float pose1ShadowLuma = samplePatchLuma(setRun.pose1NearPillar, pose1ShadowUv, 2);
+    const float pose1LitLuma = samplePatchLuma(setRun.pose1NearPillar, pose1LitUv, 2);
+    const float pose2ShadowLuma = samplePatchLuma(setRun.pose2CulledPillar, pose2ShadowUv, 2);
+    const float pose2LitLuma = samplePatchLuma(setRun.pose2CulledPillar, pose2LitUv, 2);
+    const float pose2ShadowOffLuma = samplePatchLuma(setRun.pose2NoShadow, pose2ShadowUv, 2);
+    const float pose2LitOffLuma = samplePatchLuma(setRun.pose2NoShadow, pose2LitUv, 2);
+
+    // Shadow stays clearly visible even after left pillar ID 3 is culled in Pose 2, and the
+    // sunlit world point stays consistent across viewpoints and shadow toggling.
+    CHECK(pose1LitLuma > pose1ShadowLuma + 20.F);
+    CHECK(pose2LitLuma > pose2ShadowLuma + 20.F);
+    CHECK(pose2ShadowOffLuma > pose2ShadowLuma + 20.F);
+    CHECK(std::abs(pose2LitOffLuma - pose2LitLuma) < 6.F);
+    CHECK(std::abs(pose2LitLuma - pose1LitLuma) < 16.F);
+
+    if (supportsHeap) {
+        const RoamingRun heapRun = runShowroomRoaming(true, "roam-heap");
+        const auto checkFrameParity =
+            [](const rhi::FrameScreenshot& expected, const rhi::FrameScreenshot& actual) {
+                CHECK(actual.width == expected.width);
+                CHECK(actual.height == expected.height);
+                const bool rgbaEqual = (actual.rgba == expected.rgba);
+                CHECK(rgbaEqual);
+                REQUIRE(expected.indirect.has_value());
+                REQUIRE(actual.indirect.has_value());
+                CHECK(actual.indirect->visible == expected.indirect->visible);
+                CHECK(actual.indirect->drawnIds == expected.indirect->drawnIds);
+            };
+        checkFrameParity(setRun.pose0Initial, heapRun.pose0Initial);
+        checkFrameParity(setRun.pose1NearPillar, heapRun.pose1NearPillar);
+        checkFrameParity(setRun.pose2CulledPillar, heapRun.pose2CulledPillar);
+        checkFrameParity(setRun.pose2NoShadow, heapRun.pose2NoShadow);
+        checkFrameParity(setRun.pose3Reset, heapRun.pose3Reset);
+    }
+
+    // End-to-end ar_triangle CLI verification for --shadows / --shadow-resolution / --free-camera.
+    const auto runTriangleCli = [&](const std::wstring& args) -> DWORD {
+        std::wstring cmdLine = L"\"" + triangleExe.wstring() + L"\" " + args;
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        PROCESS_INFORMATION proc{};
+        REQUIRE(CreateProcessW(
+            triangleExe.c_str(),
+            cmdLine.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            CREATE_NO_WINDOW,
+            nullptr,
+            nullptr,
+            &startup,
+            &proc));
+        const DWORD waited = WaitForSingleObject(proc.hProcess, 45000);
+        DWORD exitCode = 999;
+        if (waited == WAIT_OBJECT_0) {
+            REQUIRE(GetExitCodeProcess(proc.hProcess, &exitCode));
+        } else {
+            TerminateProcess(proc.hProcess, 1);
+        }
+        CloseHandle(proc.hThread);
+        CloseHandle(proc.hProcess);
+        REQUIRE(waited == WAIT_OBJECT_0);
+        return exitCode;
+    };
+
+    const auto readFileBytes = [](const std::filesystem::path& path) {
+        std::ifstream input(path, std::ios::binary);
+        REQUIRE(input.good());
+        return std::vector<char>(
+            std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+    };
+
+    const std::filesystem::path cliSetLogs = runRoot / "cli-set-logs";
+    const std::filesystem::path cliSetPng = runRoot / "cli-set.png";
+    CHECK(
+        runTriangleCli(
+            L"--showroom --shadows --shadow-resolution 1024 --hidden --frames 2 --output \"" +
+            cliSetLogs.wstring() + L"\" --screenshot \"" + cliSetPng.wstring() + L"\"") == 0u);
+    const auto cliSetBytes = readFileBytes(cliSetPng);
+    CHECK_FALSE(cliSetBytes.empty());
+
+    if (supportsHeap) {
+        const std::filesystem::path cliHeapLogs = runRoot / "cli-heap-logs";
+        const std::filesystem::path cliHeapPng = runRoot / "cli-heap.png";
+        CHECK(
+            runTriangleCli(
+                L"--showroom --shadows --shadow-resolution 1024 --descriptor-heap --hidden "
+                L"--frames 2 --output \"" +
+                cliHeapLogs.wstring() + L"\" --screenshot \"" + cliHeapPng.wstring() + L"\"") ==
+            0u);
+        const bool cliPngEqual = (readFileBytes(cliHeapPng) == cliSetBytes);
+        CHECK(cliPngEqual);
+    }
+
+    // Invalid / conflicting CLI combinations must return exit code 2 without creating diagnostics.
+    const std::filesystem::path cliInvalidLogs = runRoot / "cli-invalid-logs";
+    CHECK(
+        runTriangleCli(
+            L"--showroom --free-camera --hidden --frames 2 --output \"" +
+            cliInvalidLogs.wstring() + L"\"") == 2u);
+    CHECK(
+        runTriangleCli(
+            L"--showroom --shadow-resolution 1024 --hidden --frames 2 --output \"" +
+            cliInvalidLogs.wstring() + L"\"") == 2u);
+    CHECK(
+        runTriangleCli(
+            L"--showroom --shadows --shadow-resolution 32 --hidden --frames 2 --output \"" +
+            cliInvalidLogs.wstring() + L"\"") == 2u);
+    CHECK_FALSE(std::filesystem::exists(cliInvalidLogs));
 }

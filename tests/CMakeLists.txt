@@ -158,6 +158,7 @@ set(AR_REQUIRED_RUNTIME_CASES
     sample-static-scene-heap-gbuffer
     sample-static-scene-heap-gpu-driven
     sample-directional-shadow-parity
+    sample-free-camera-shadows
 )
 
 add_executable(ar_runtime_tests
@@ -176,8 +177,10 @@ target_include_directories(ar_runtime_tests
 target_compile_definitions(ar_runtime_tests PRIVATE
     AR_ENABLE_TEST_HOOKS=1
     AR_TEST_SHADER_DIR=u8"${CMAKE_BINARY_DIR}/shaders"
+    AR_SHOWROOM_DEPLOYED_DIR=u8"$<TARGET_FILE_DIR:ar_triangle>/content/showroom"
+    AR_TRIANGLE_EXECUTABLE=u8"$<TARGET_FILE:ar_triangle>"
 )
-add_dependencies(ar_runtime_tests ar_rhi_fixture ar_triangle_shaders)
+add_dependencies(ar_runtime_tests ar_rhi_fixture ar_triangle_shaders ar_triangle)
 foreach(case IN LISTS AR_REQUIRED_RUNTIME_CASES)
     add_test(NAME ${case} COMMAND ar_runtime_tests "[${case}]")
     set_tests_properties(${case} PROPERTIES
@@ -188,7 +191,7 @@ endforeach()
 # hosted CI runner) leave them out with `ctest -LE gpu`; keep it in step with gpu_cases in
 # workflow/p0-checks.json.
 set_tests_properties(runtime-system-inspect runtime-system-development PROPERTIES LABELS gpu)
-set_tests_properties(sample-resize sample-camera-view-update sample-static-scene-heap-gbuffer sample-static-scene-heap-gpu-driven sample-directional-shadow-parity PROPERTIES LABELS gpu TIMEOUT 60
+set_tests_properties(sample-resize sample-camera-view-update sample-static-scene-heap-gbuffer sample-static-scene-heap-gpu-driven sample-directional-shadow-parity sample-free-camera-shadows PROPERTIES LABELS gpu TIMEOUT 90
     ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>;VK_VALIDATION_VALIDATE_SYNC=1")
 
 add_executable(ar_platform_tests platform/test_window.cpp platform/test_window_input.cpp)

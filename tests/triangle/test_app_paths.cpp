@@ -181,6 +181,79 @@ TEST_CASE(
         REQUIRE(showroomConstantIbl.has_value());
         CHECK(showroomConstantIbl->ibl == ar::render::EnvironmentPreset::Constant);
 
+        // P4b shadow & free-camera switches
+        const auto showroomShadowsFree =
+            parseArgs({L"--showroom", L"--shadows", L"--free-camera"}, paths);
+        REQUIRE(showroomShadowsFree.has_value());
+        CHECK(showroomShadowsFree->shadows);
+        CHECK_FALSE(showroomShadowsFree->shadowResolution.has_value());
+        CHECK(showroomShadowsFree->freeCamera);
+        CHECK(showroomShadowsFree->visible);
+
+        const auto showroomShadowsHeap = parseArgs(
+            {L"--showroom",
+             L"--shadows",
+             L"--shadow-resolution",
+             L"1024",
+             L"--descriptor-heap",
+             L"--hidden",
+             L"--frames",
+             L"2"},
+            paths);
+        REQUIRE(showroomShadowsHeap.has_value());
+        CHECK(showroomShadowsHeap->shadows);
+        CHECK(showroomShadowsHeap->shadowResolution == 1024u);
+        CHECK(showroomShadowsHeap->descriptorHeap);
+        CHECK_FALSE(showroomShadowsHeap->freeCamera);
+
+        const auto explicitShadows = parseArgs(
+            {L"--static-scene",
+             L"custom.json",
+             L"--asset-root",
+             L"custom_assets",
+             L"--hdr-lighting",
+             L"--shadows",
+             L"--shadow-resolution",
+             L"512",
+             L"--hidden",
+             L"--frames",
+             L"2"},
+            paths);
+        REQUIRE(explicitShadows.has_value());
+        CHECK(explicitShadows->shadows);
+        CHECK(explicitShadows->shadowResolution == 512u);
+
+        CHECK_FALSE(parseArgs(
+            {L"--showroom", L"--free-camera", L"--hidden", L"--frames", L"2"}, paths));
+        CHECK_FALSE(parseArgs({L"--free-camera"}, paths));
+        CHECK_FALSE(parseArgs({L"--shadows"}, paths));
+        CHECK_FALSE(parseArgs(
+            {L"--static-scene",
+             L"s.json",
+             L"--asset-root",
+             L"a",
+             L"--gbuffer",
+             L"--shadows",
+             L"--hidden",
+             L"--frames",
+             L"2"},
+            paths));
+        CHECK_FALSE(parseArgs({L"--showroom", L"--shadow-resolution", L"1024"}, paths));
+        CHECK_FALSE(
+            parseArgs({L"--showroom", L"--shadows", L"--shadow-resolution", L"32"}, paths));
+        CHECK_FALSE(
+            parseArgs({L"--showroom", L"--shadows", L"--shadow-resolution", L"8192"}, paths));
+        CHECK_FALSE(
+            parseArgs({L"--showroom", L"--shadows", L"--shadow-resolution", L"abc"}, paths));
+        CHECK_FALSE(parseArgs(
+            {L"--showroom",
+             L"--shadows",
+             L"--shadow-resolution",
+             L"512",
+             L"--shadow-resolution",
+             L"1024"},
+            paths));
+
         // Strict conflict matrix with --showroom
         CHECK_FALSE(parseArgs(
             {L"--showroom", L"--static-scene", L"s.json", L"--asset-root", L"assets"}, paths));
@@ -259,6 +332,9 @@ TEST_CASE(
 
         CHECK_FALSE(parseArgs({L"--static-scene", L"custom.json"}, paths));
         CHECK(ar::app::launchUsageText().find("--showroom") != std::string_view::npos);
+        CHECK(ar::app::launchUsageText().find("--shadows") != std::string_view::npos);
+        CHECK(ar::app::launchUsageText().find("--shadow-resolution") != std::string_view::npos);
+        CHECK(ar::app::launchUsageText().find("--free-camera") != std::string_view::npos);
     }
 
     SECTION("Showroom scene deploys cleanly and passes full asset and render packing checks") {

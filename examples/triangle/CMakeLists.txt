@@ -124,5 +124,5 @@ target_compile_definitions(ar_triangle PRIVATE
 set_target_properties(ar_triangle PROPERTIES
     FOLDER "Examples"
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    VS_DEBUGGER_COMMAND_ARGUMENTS "--showroom"
+    VS_DEBUGGER_COMMAND_ARGUMENTS "--showroom --shadows --free-camera"
 )

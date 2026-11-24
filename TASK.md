@@ -185,9 +185,9 @@ T47 已记录 P5 同场景 Set/Heap 验收。后续先准备默认展示场景�
   - 验收：`render-directional-shadow`、`render-free-camera`、`platform-input-state`（均为纯 CPU）与 `platform-window-input`（桌面窗口环境组）全过。
 - [x] T52 RHI 方向光阴影深度 Pass（Direct + 按 `maxDrawIndirectCount` 分批的独立全场景 Indirect）、`LightingFrame` 240B 双帧槽 UBO 延迟光照与 PCF 比较采样，同步打通 1.3 Set 与 1.4 Descriptor Heap（271 图像/10 缓冲/4 采样器槽）与 `setDirectionalLight`：实现独立全场景分批间接阴影命令、240B 双帧槽 UBO 与 3×3 PCF 比较采样、跨 Resize 持久阴影/UBO 资源、Set/Heap 零分叉映射、运行期 `setDirectionalLight`（零重传且未开阴影管线拒 `castShadows==true`）及球体掠射法线黑点回归修复；Debug 与 RelWithDebInfo 各 103/103 零警告通过，DSH 独立评审 `6fe7ddc6` PASS。
   - 验收：更新 `rhi-descriptor-heap-scene-layout`（含分批逻辑），新增 `sample-directional-shadow-parity`（标签 `gpu`）核对 Direct/Indirect、Set/Heap、离屏投影、运行期换光、Resize 与 Debug Sync Validation 零错误。
-- [ ] T53 `RuntimeSession` 输入/相机桥接、`ar_triangle` `--shadows` / `--shadow-resolution` / `--free-camera` 与展示室确定性漫游对照。
+- [x] T53 `RuntimeSession` 输入/相机桥接、`ar_triangle` `--shadows` / `--shadow-resolution` / `--free-camera` 与展示室确定性漫游对照：`RuntimeSession` 暴露输入采样、隐藏窗口保护的 `setCursorMode` 与 `activeCamera`，`ar_triangle` 接通 `--shadows`/`--shadow-resolution`/`--free-camera` 并更新 VS F5 展示室启动参数，新增 `sample-free-camera-shadows`（展示室多步漫游、立柱移出主视锥落影保留、固定世界点受光、复位逐字节一致、Set/Heap 等价与 CLI 冲突检查）；Debug 与 RelWithDebInfo 各 104/104 零警告通过，DSH 独立评审 `40cbf446` PASS。
   - 验收：`sample-free-camera-shadows`（标签 `gpu`）在展示室/确定性场景核对多步漫游位姿、固定世界点受光、离屏投影持续可见、`staticSceneUploadCount == 1`、Set/Heap 逐帧一致与非法开关拒绝，Debug Sync Validation 零错误。
-- [ ] T54 [人工] P4b（展示室 + 方向光阴影 + 自由相机）里程碑验收。
+- [x] T54 [人工] P4b（展示室 + 方向光阴影 + 自由相机）里程碑验收：用户在本机 RTX 4060 可见窗口实跑展示室方向光阴影与自由漫游并确认“可以的”，配合 T51–T53 双配置 104/104 零警告及 DSH 独立评审全过，P4b 里程碑收口完成；后续按用户确认改为“开发期增量快测，里程碑统一双配置门禁 + DSH”。
   - 用户在本地 RTX 4060 可见窗口下按 F5 进入展示室并分别以 1.3 Set 与 1.4 `--descriptor-heap` 实测实时方向光阴影与自由漫游，核对门禁与 DSH 评审证据后进入 P6–P7（ImGui 调试面板、四配置性能基准与独立运行包）。
 
 ## 人工待办（不阻塞队列）
@@ -197,6 +197,8 @@ T47 已记录 P5 同场景 Set/Heap 验收。后续先准备默认展示场景�
 - 首次使用自动循环前：修正 Codex CLI 的默认模型（见 [自动运行](docs/workflow/自动运行.md) 的注意事项），设置 `CLAUDE_CODE_GIT_BASH_PATH`，然后用 `--max-tasks 1` 试跑 T01。
 
 ## 待办池（建议级，不阻塞）
+
+- T53 评审观察：`sample-free-camera-shadows` 内 `visible==14`/亮度阈值与展示室数值耦合且 `stepMove` 存在未用局部赋值，`setCursorMode` 以启动配置 `visible` 判可见性，GPU 用例 `TIMEOUT` 统一放宽至 90s 可改为按用例单设（注：窗口 X 关闭已由 `RuntimeSession::presentFrame` 查 `window.shouldClose()` 返回 `FrameStatus::Closed` 并退出主循环）。
 
 - T51 评审观察：`publishStaticScene` 尚待在 T52 消费 `input.directionalLight` 前调用 `validateDirectionalLight`；`scene::DirectionalLight` 与 `render::DirectionalLight` 为双份镜像结构，后续扩字段时需同步维护；`Window::sampleInput` 内部泵事件与 `WindowInputTracker` 未按右键时的光标累计约定可补头注释。
 

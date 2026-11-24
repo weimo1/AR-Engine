@@ -468,6 +468,48 @@ std::expected<void, core::Error> RuntimeSession::setCamera(const render::StaticC
     return {};
 }
 
+std::optional<render::StaticCamera> RuntimeSession::activeCamera() const noexcept {
+    if (m_impl->closed) {
+        return std::nullopt;
+    }
+    return m_impl->activeCamera;
+}
+
+std::expected<platform::InputState, core::Error> RuntimeSession::sampleWindowInput() {
+    if (m_impl->closed || !m_impl->window) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "this runtime session has no active window"));
+    }
+    return m_impl->window->sampleInput();
+}
+
+std::expected<void, core::Error> RuntimeSession::setCursorMode(platform::CursorMode mode) {
+    if (m_impl->closed || !m_impl->window) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "this runtime session has no active window"));
+    }
+    if (mode == platform::CursorMode::Disabled &&
+        (!m_impl->config.window || !m_impl->config.window->visible)) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "disabled cursor mode requires a visible window"));
+    }
+    m_impl->window->setCursorMode(mode);
+    return {};
+}
+
+std::optional<platform::CursorMode> RuntimeSession::cursorMode() const noexcept {
+    if (m_impl->closed || !m_impl->window) {
+        return std::nullopt;
+    }
+    return m_impl->window->cursorMode();
+}
+
 std::expected<void, core::Error>
 RuntimeSession::setDirectionalLight(const render::DirectionalLight& light) {
     if (m_impl->closed || !m_impl->rhi || !m_impl->staticScene ||

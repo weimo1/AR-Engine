@@ -1,5 +1,7 @@
 #include "AppPaths.h"
 
+#include "render/DirectionalShadow.h"
+
 #include <cerrno>
 #include <cmath>
 #include <cwchar>
@@ -148,6 +150,24 @@ parseLaunchOptions(std::span<const std::wstring_view> args, const AppPaths& path
         } else if (arg == L"--hdr-lighting") {
             options.hdrLighting = true;
             options.gbuffer = true;
+        } else if (arg == L"--shadows") {
+            options.shadows = true;
+        } else if (arg == L"--free-camera") {
+            options.freeCamera = true;
+        } else if (
+            arg == L"--shadow-resolution" && !options.shadowResolution && index + 1 < args.size()) {
+            const std::wstring_view value = args[++index];
+            if (value.empty() || value.find_first_not_of(L"0123456789") != value.npos) {
+                return std::nullopt;
+            }
+            const std::wstring text(value);
+            errno = 0;
+            const unsigned long long parsed = std::wcstoull(text.c_str(), nullptr, 10);
+            if (errno == ERANGE || parsed < ar::render::kMinShadowResolution ||
+                parsed > ar::render::kMaxShadowResolution) {
+                return std::nullopt;
+            }
+            options.shadowResolution = static_cast<std::uint32_t>(parsed);
         } else if (arg == L"--exposure-ev" && !options.exposureEV && index + 1 < args.size()) {
             const std::wstring text(args[++index]);
             wchar_t* end = nullptr;
@@ -247,7 +267,11 @@ parseLaunchOptions(std::span<const std::wstring_view> args, const AppPaths& path
     }
     if ((options.indirectCapacity && !options.staticGpuDriven) ||
         (options.verifyIblRollback && (!options.ibl || !options.frames || *options.frames < 2)) ||
-        (options.exposureEV && !options.hdrLighting) || (options.gbuffer && !options.scene) ||
+        (options.exposureEV && !options.hdrLighting) ||
+        (options.shadowResolution && !options.shadows) ||
+        (options.shadows && (!options.hdrLighting || !options.scene)) ||
+        (options.freeCamera && (!options.visible || !options.scene)) ||
+        (options.gbuffer && !options.scene) ||
         (options.gbufferProbes && options.gbufferProbes->empty()) ||
         options.scene.has_value() != options.assetRoot.has_value() ||
         (options.scene && (options.scene->empty() || options.assetRoot->empty() ||
@@ -264,7 +288,7 @@ std::string_view launchUsageText() noexcept {
            "[--set-binding] [--descriptor-heap] [--static-scene JSON --asset-root DIRECTORY] "
            "[--static-gpu-driven [--indirect-capacity N]] "
            "[--gbuffer [--gbuffer-probes PATH]] [--bindless-materials] [--hdr-lighting "
-           "[--exposure-ev EV]] "
+           "[--exposure-ev EV]] [--shadows [--shadow-resolution N]] [--free-camera] "
            "[--ibl constant|directional] [--screenshot PATH] [--output DIRECTORY]\n";
 }
 

@@ -14,6 +14,7 @@
 #include "AppPaths.h"
 #include "render/CullReference.h"
 #include "render/EnvironmentLighting.h"
+#include "render/FreeCameraController.h"
 #include "runtime/RuntimeSession.h"
 
 #define STBI_WRITE_NO_STDIO
@@ -237,11 +238,35 @@ int wmain(int argc, wchar_t** argv) {
                                                : "triangle.frag.spv"));
         if (options->hdrLighting) {
             auto fullscreen = readShader(shaderDir / "fullscreen.vert.spv");
-            auto direct = readShader(
-                shaderDir / (options->ibl ? "deferred_ibl.frag.spv" : "deferred_direct.frag.spv"));
+            const char* directShaderName = options->ibl
+                                               ? (options->shadows ? "deferred_ibl_shadow.frag.spv"
+                                                                   : "deferred_ibl.frag.spv")
+                                               : (options->shadows ? "deferred_shadow.frag.spv"
+                                                                   : "deferred_direct.frag.spv");
+            auto direct = readShader(shaderDir / directShaderName);
             auto display = readShader(shaderDir / "display_sdr.frag.spv");
             if (!fullscreen || !direct || !display) {
                 return 1;
+            }
+            std::optional<ar::rhi::ShadowMapConfig> shadowConfig;
+            if (options->shadows) {
+                auto shadowDirect = readShader(shaderDir / "shadow_direct.vert.spv");
+                if (!shadowDirect) {
+                    return 1;
+                }
+                std::vector<std::uint32_t> shadowIndirectWords;
+                if (options->staticGpuDriven) {
+                    auto shadowIndirect = readShader(shaderDir / "shadow_indirect.vert.spv");
+                    if (!shadowIndirect) {
+                        return 1;
+                    }
+                    shadowIndirectWords = std::move(*shadowIndirect);
+                }
+                shadowConfig.emplace(
+                    ar::rhi::ShadowMapConfig{
+                        std::move(*shadowDirect),
+                        std::move(shadowIndirectWords),
+                        options->shadowResolution.value_or(2048u)});
             }
             config.query.deferredLighting.emplace(
                 ar::rhi::DeferredLighting{
@@ -249,7 +274,8 @@ int wmain(int argc, wchar_t** argv) {
                     std::move(*direct),
                     std::move(*display),
                     options->exposureEV.value_or(0.F),
-                    options->ibl.has_value()});
+                    options->ibl.has_value(),
+                    std::move(shadowConfig)});
         }
         if (options->staticGpuDriven) {
             auto indirectVertex = readShader(shaderDir / "static_indirect.vert.spv");
@@ -333,16 +359,84 @@ int wmain(int argc, wchar_t** argv) {
         const std::string sceneUtf8 = pathToUtf8(*sceneFile);
         const std::string assetUtf8 = pathToUtf8(*assetDir);
         std::printf(
-            "scene=%s\nasset_root=%s\nbinding=%s\n",
+            "scene=%s\nasset_root=%s\nbinding=%s\nshadows=%s\nfree_camera=%s\n",
             sceneUtf8.c_str(),
             assetUtf8.c_str(),
-            options->descriptorHeap ? "descriptor-heap" : "set");
+            options->descriptorHeap ? "descriptor-heap" : "set",
+            options->shadows ? "on" : "off",
+            options->freeCamera ? "on" : "off");
+        if (options->shadows) {
+            std::printf("shadow_resolution=%u\n", options->shadowResolution.value_or(2048u));
+        }
         std::fflush(stdout);
+    }
+
+    std::optional<ar::render::FreeCameraController> freeCamera;
+    ar::platform::CursorMode cursorMode = ar::platform::CursorMode::Normal;
+    auto lastCameraTick = std::chrono::steady_clock::now();
+    if (options->freeCamera) {
+        const auto initialCamera = (*session)->activeCamera();
+        if (!initialCamera) {
+            std::fputs("free camera requires an active scene camera\n", stderr);
+            closeAndReport(**session);
+            return 1;
+        }
+        auto controller = ar::render::FreeCameraController::create(*initialCamera);
+        if (!controller) {
+            printError(controller.error());
+            closeAndReport(**session);
+            return 1;
+        }
+        freeCamera = std::move(*controller);
     }
 
     unsigned long long presented = 0;
     ar::rhi::FrameScreenshot screenshot;
     while (!options->frames || presented < *options->frames) {
+        if (freeCamera) {
+            const auto now = std::chrono::steady_clock::now();
+            const float deltaSeconds = std::chrono::duration<float>(now - lastCameraTick).count();
+            lastCameraTick = now;
+
+            const auto input = (*session)->sampleWindowInput();
+            if (!input) {
+                printError(input.error());
+                closeAndReport(**session);
+                return 1;
+            }
+            if (input->escapePressed) {
+                break;
+            }
+            const auto desiredCursor =
+                (input->focused && input->lookHeld) ? ar::platform::CursorMode::Disabled
+                                                    : ar::platform::CursorMode::Normal;
+            if (desiredCursor != cursorMode) {
+                if (auto changed = (*session)->setCursorMode(desiredCursor); !changed) {
+                    printError(changed.error());
+                    closeAndReport(**session);
+                    return 1;
+                }
+                cursorMode = desiredCursor;
+            }
+            const ar::render::FreeCameraInput cameraInput{
+                input->moveForward,
+                input->moveBackward,
+                input->moveLeft,
+                input->moveRight,
+                input->moveUp,
+                input->moveDown,
+                input->sprint,
+                input->focused && input->lookHeld,
+                static_cast<float>(input->cursorDeltaX),
+                static_cast<float>(input->cursorDeltaY),
+                static_cast<float>(input->scrollDeltaY)};
+            const auto nextCamera = freeCamera->update(cameraInput, deltaSeconds);
+            if (auto updated = (*session)->setCamera(nextCamera); !updated) {
+                printError(updated.error());
+                closeAndReport(**session);
+                return 1;
+            }
+        }
         const bool capture = options->sceneCandidate ||
             ((options->screenshot || options->gbufferProbes) && presented + 1 == *options->frames);
         const auto frame = (*session)->presentFrame(capture ? &screenshot : nullptr);
@@ -396,6 +490,9 @@ int wmain(int argc, wchar_t** argv) {
                 }
             }
         }
+    }
+    if (cursorMode != ar::platform::CursorMode::Normal) {
+        (void)(*session)->setCursorMode(ar::platform::CursorMode::Normal);
     }
     const ar::core::EndResult result = (*session)->close();
     std::printf("presented_frames=%llu\n", presented);

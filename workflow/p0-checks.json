@@ -328,6 +328,7 @@
         "sample-static-scene-heap-gbuffer",
         "sample-static-scene-heap-gpu-driven",
         "sample-directional-shadow-parity",
+        "sample-free-camera-shadows",
         "runtime-system-inspect",
         "platform-window-create",
         "platform-window-vulkan-extensions",
@@ -368,6 +369,7 @@
         "sample-static-scene-heap-gbuffer",
         "sample-static-scene-heap-gpu-driven",
         "sample-directional-shadow-parity",
+        "sample-free-camera-shadows",
         "runtime-system-inspect"
       ]
     },
@@ -669,6 +671,7 @@
         "sample-static-scene-heap-gbuffer",
         "sample-static-scene-heap-gpu-driven",
         "sample-directional-shadow-parity",
+        "sample-free-camera-shadows",
         "runtime-system-inspect",
         "platform-window-create",
         "platform-window-vulkan-extensions",
@@ -709,6 +712,7 @@
         "sample-static-scene-heap-gbuffer",
         "sample-static-scene-heap-gpu-driven",
         "sample-directional-shadow-parity",
+        "sample-free-camera-shadows",
         "runtime-system-inspect"
       ]
     },
