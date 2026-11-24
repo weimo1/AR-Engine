@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "objective": "完成毕业交付第 1 批（P4b 前置：默认展示场景与启动）：建立应用路径解析 AppPaths、随仓库维护的自制材质展示室资产（地板、背墙、立柱、粗糙度组与金属度组）、CMake 增量资产/Shader 部署与 ar_triangle --showroom（VS F5 默认入口），在 1.3 Set 与 1.4 Descriptor Heap 下稳定出图并保持所有既有 CLI 测试兼容。",
+  "non_goals": [
+    "本批实现方向光阴影 Pass 或自由相机交互（留给后续 P4b p4b-shadow-free-camera）",
+    "本批接入 ImGui 调试面板、观察预设保存或 P6 四配置基准",
+    "本批实现 P7 独立安装包无参默认双击入口或外部大型第三方关卡",
+    "破坏既有 ar_triangle 显式参数（三角形、隐藏窗口、截图、GBuffer、IBL、Descriptor Heap）行为"
+  ],
+  "tags": ["native"],
+  "documents": [],
+  "skills": ["ar-cpp-oop-style", "ar-e2e-side-effect-safety"],
+  "write_paths": [
+    "TASK.md",
+    "openspec/changes/p4b-showroom-launch/**",
+    "examples/triangle/**",
+    "tests/**",
+    "workflow/p0-checks.json"
+  ]
+}

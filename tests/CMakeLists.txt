@@ -374,3 +374,24 @@ add_dependencies(ar_rhi_tests ar_triangle_shaders)
 target_compile_definitions(ar_rhi_tests PRIVATE
     AR_GPU_CULL_SHADER=u8"${CMAKE_BINARY_DIR}/shaders/gpu_cull.comp.spv"
     AR_HEAP_PROBE_SHADER=u8"${CMAKE_BINARY_DIR}/shaders/heap_probe.comp.spv")
+
+add_executable(ar_app_tests
+    triangle/test_app_paths.cpp
+    "${PROJECT_SOURCE_DIR}/examples/triangle/AppPaths.cpp"
+)
+target_include_directories(ar_app_tests PRIVATE "${PROJECT_SOURCE_DIR}/examples/triangle")
+target_link_libraries(ar_app_tests PRIVATE ar_assets ar_render ar_runtime Catch2::Catch2WithMain)
+add_dependencies(ar_app_tests ar_triangle_shaders ar_triangle_content)
+target_compile_definitions(ar_app_tests PRIVATE
+    AR_SHOWROOM_SOURCE_DIR=u8"${PROJECT_SOURCE_DIR}/examples/triangle/content/showroom"
+    AR_SHOWROOM_DEPLOYED_DIR=u8"$<TARGET_FILE_DIR:ar_triangle>/content/showroom"
+    AR_TRIANGLE_DEPLOYED_SHADER_DIR=u8"$<TARGET_FILE_DIR:ar_triangle>/shaders"
+)
+set_target_properties(ar_app_tests PROPERTIES
+    FOLDER "Tests"
+    VS_DEBUGGER_ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
+)
+add_test(NAME app-paths-and-showroom-cli COMMAND ar_app_tests "[app-paths-and-showroom-cli]")
+set_tests_properties(app-paths-and-showroom-cli PROPERTIES
+    ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
+)

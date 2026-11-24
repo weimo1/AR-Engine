@@ -327,7 +327,8 @@
         "sample-static-scene-heap-gpu-driven",
         "runtime-system-inspect",
         "platform-window-create",
-        "platform-window-vulkan-extensions"
+        "platform-window-vulkan-extensions",
+        "app-paths-and-showroom-cli"
       ],
       "gpu_cases": [
         "rhi-device-create",
@@ -659,7 +660,8 @@
         "sample-static-scene-heap-gpu-driven",
         "runtime-system-inspect",
         "platform-window-create",
-        "platform-window-vulkan-extensions"
+        "platform-window-vulkan-extensions",
+        "app-paths-and-showroom-cli"
       ],
       "gpu_cases": [
         "rhi-device-create",

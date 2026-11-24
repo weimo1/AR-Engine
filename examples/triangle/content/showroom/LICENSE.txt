@@ -1,0 +1,7 @@
+AR Engine Showroom Assets
+=========================
+All files under examples/triangle/content/showroom/ (scene.json, glTF documents,
+generate_assets.py, and the deterministic box/sphere buffers and PNG textures it
+generates at build time) are self-authored assets created directly for AR Engine
+and licensed under CC0-1.0 / the repository license with no external third-party
+asset dependencies.

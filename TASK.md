@@ -168,6 +168,15 @@ T47 已记录 P5 同场景 Set/Heap 验收。后续先准备默认展示场景�
 - [x] T48 错误摘要 UTF-8 码点截断、静态场景前置拓扑校验与 GPU-Driven 单次打包及资产去重：按 UTF-8 码点边界截断并计入省略号预算，抽离共享 `StaticMeshGeometry.h` 前置校验与几何级数扩容、间接路径复用 `packStaticSceneDrawData` 单次打包并传空逐 mesh 缓冲、单次 `open()` 去重资产引用；Debug 与 RelWithDebInfo 各 96/96 零警告通过，DSH 独立评审 9/9 PASS。
   - 验收：`core-summary-truncated`（覆盖 511 ASCII + 中文与 508 ASCII + 中文边界零 U+FFFD）、`render-static-scene-draw-data`（覆盖不完整三角形/越界索引/短法线/非有限材质/退化网格拒绝与 64 小网格几何扩容）、`scene-static-roundtrip`（覆盖 128 实例资产去重与失败保留活动场景）及全量 96/96 双配置门禁通过。
 
+### 默认展示场景与启动（P4b 前置）
+
+参见 [默认展示场景方案](openspec/changes/p4b-showroom-launch/design.md)。先落地自制材质展示室、EXE 相邻路径解析 `AppPaths` 与 VS F5 `--showroom` 入口，为后续 P4b 阴影/漫游与 P6–P7 面板/运行包提供统一验收场景。
+
+- [x] T49 应用路径解析 `AppPaths`、自制材质展示室资产与 CMake 增量部署：实现 `AppPaths` 与 `--showroom` 参数/冲突解析、纯文本自制展示室场景与 `generate_assets.py`（CMake 增量复制文本并生成 `.bin`/`.png` 与同步 `.spv` 到运行目录，配置 VS `--showroom`）；Debug 与 RelWithDebInfo 各 97/97 零警告通过，DSH 独立评审 29/29 PASS（注：`main.cpp` 接线与 F5 真实启动在 T50 兑现，当前 `ar_triangle --showroom` 仍返回退出码 2）。
+  - 验收：`app-paths-and-showroom-cli`（CPU）核对 EXE 相对路径、工作目录无关性、`--showroom` 参数冲突拒绝，以及 `StaticSceneSession` 加载展示室 `scene.json` 的实例 ID、共享网格与粗糙度/金属度递增序；`examples/triangle/CMakeLists.txt` 增量同步 `shaders/` 与 `content/showroom/` 并配置 `VS_DEBUGGER_COMMAND_ARGUMENTS "--showroom"`。
+- [ ] T50 `ar_triangle --showroom` 启动接入与双路径出图验收。
+  - 验收：`sample-showroom-launch`（标签 `gpu`）从独立工作目录运行 `ar_triangle --showroom`（1.3 Set 与 1.4 `--descriptor-heap`），核对两路 PNG/探针一致、多材质差异、显式场景覆盖与缺失资产/冲突开关失败，Debug Sync Validation 零错误。
+
 ## 人工待办（不阻塞队列）
 
 - 云端 “Engine CPU build and test” 使用 `--no-gpu`，已配置自动触发与 vcpkg 二进制缓存。后续通过对应提交的 GitHub Actions 日志核对 Windows runner 与缓存命中。
@@ -175,6 +184,8 @@ T47 已记录 P5 同场景 Set/Heap 验收。后续先准备默认展示场景�
 - 首次使用自动循环前：修正 Codex CLI 的默认模型（见 [自动运行](docs/workflow/自动运行.md) 的注意事项），设置 `CLAUDE_CODE_GIT_BASH_PATH`，然后用 `--max-tasks 1` 试跑 T01。
 
 ## 待办池（建议级，不阻塞）
+
+- T49 评审观察：`requireReadableFile/Directory` 当前仅做类型/存在检查（ACL 不可读会推迟到 loader）、`parseLaunchOptions` 为长 if 链且错误返回 `std::string`、部署目录假设 `${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>` 与 `$<TARGET_FILE_DIR:ar_triangle>` 一致，P7 打包/重构时按需整理；本批 `VS_DEBUGGER_COMMAND_ARGUMENTS "--showroom"` 由 T50 接入 `main.cpp` 后兑现。
 
 - T45 评审观察：`publishEnvironment` 写 Heap 外部槽失败后回滚旧环境若再次失败、`StaticSceneDraw::publish` 纹理槽已发布后间接 buffer 槽发布失败，均属设备级低概率部分写入路径，后续加固异常恢复时可评估显式置失效或延后释放候选图像。
 
