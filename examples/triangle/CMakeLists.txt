@@ -112,7 +112,6 @@ add_dependencies(ar_triangle ar_triangle_shaders ar_triangle_content)
 target_link_libraries(ar_triangle PRIVATE ar_runtime ar_render)
 target_compile_definitions(ar_triangle PRIVATE
     AR_TRIANGLE_OUTPUT_ROOT=u8"${CMAKE_BINARY_DIR}/sample-output/$<CONFIG>"
-    AR_TRIANGLE_SHADER_DIR=u8"${shader_dir}"
 )
 set_target_properties(ar_triangle PROPERTIES
     FOLDER "Examples"

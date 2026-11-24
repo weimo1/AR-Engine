@@ -174,7 +174,7 @@ T47 已记录 P5 同场景 Set/Heap 验收。后续先准备默认展示场景�
 
 - [x] T49 应用路径解析 `AppPaths`、自制材质展示室资产与 CMake 增量部署：实现 `AppPaths` 与 `--showroom` 参数/冲突解析、纯文本自制展示室场景与 `generate_assets.py`（CMake 增量复制文本并生成 `.bin`/`.png` 与同步 `.spv` 到运行目录，配置 VS `--showroom`）；Debug 与 RelWithDebInfo 各 97/97 零警告通过，DSH 独立评审 29/29 PASS（注：`main.cpp` 接线与 F5 真实启动在 T50 兑现，当前 `ar_triangle --showroom` 仍返回退出码 2）。
   - 验收：`app-paths-and-showroom-cli`（CPU）核对 EXE 相对路径、工作目录无关性、`--showroom` 参数冲突拒绝，以及 `StaticSceneSession` 加载展示室 `scene.json` 的实例 ID、共享网格与粗糙度/金属度递增序；`examples/triangle/CMakeLists.txt` 增量同步 `shaders/` 与 `content/showroom/` 并配置 `VS_DEBUGGER_COMMAND_ARGUMENTS "--showroom"`。
-- [ ] T50 `ar_triangle --showroom` 启动接入与双路径出图验收。
+- [x] T50 `ar_triangle --showroom` 启动接入与双路径出图验收：`main.cpp` 接入 `AppPaths` 与 `--showroom`、移除硬编码 `AR_TRIANGLE_SHADER_DIR`、补齐启动前资源路径校验与失败收尾，并新增真机 GPU 用例 `sample-showroom-launch`（独立工作目录 1.3 Set 与 1.4 `--descriptor-heap` 双路 PNG/探针等价、多材质校验、显式场景覆盖及冲突/缺失失败路径）；Debug 与 RelWithDebInfo 各 98/98 零警告通过，DSH 独立评审 6/6 PASS。
   - 验收：`sample-showroom-launch`（标签 `gpu`）从独立工作目录运行 `ar_triangle --showroom`（1.3 Set 与 1.4 `--descriptor-heap`），核对两路 PNG/探针一致、多材质差异、显式场景覆盖与缺失资产/冲突开关失败，Debug Sync Validation 零错误。
 
 ## 人工待办（不阻塞队列）
@@ -184,6 +184,8 @@ T47 已记录 P5 同场景 Set/Heap 验收。后续先准备默认展示场景�
 - 首次使用自动循环前：修正 Codex CLI 的默认模型（见 [自动运行](docs/workflow/自动运行.md) 的注意事项），设置 `CLAUDE_CODE_GIT_BASH_PATH`，然后用 `--max-tasks 1` 试跑 T01。
 
 ## 待办池（建议级，不阻塞）
+
+- T50 评审观察：`RuntimeSession::start` 失败分支仅打印 `primaryError`（可复用 `reportEndErrors`）、`pathToUtf8` 在 `AppPaths.cpp` 与 `main.cpp` 重复、`wmain` 偏长可在 P4b/P6 按阶段拆分、`check_showroom_launch.py` 硬编码 20 个 `.spv` 与 14 个 ID 可改为从源数据推导；另观察到既有 GBuffer geometry pass 1 条 validation warning（fragment 写 `preview` 而 `attachment0 == VK_NULL_HANDLE`），后续收敛。
 
 - T49 评审观察：`requireReadableFile/Directory` 当前仅做类型/存在检查（ACL 不可读会推迟到 loader）、`parseLaunchOptions` 为长 if 链且错误返回 `std::string`、部署目录假设 `${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>` 与 `$<TARGET_FILE_DIR:ar_triangle>` 一致，P7 打包/重构时按需整理；本批 `VS_DEBUGGER_COMMAND_ARGUMENTS "--showroom"` 由 T50 接入 `main.cpp` 后兑现。
 

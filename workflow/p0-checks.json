@@ -328,7 +328,8 @@
         "runtime-system-inspect",
         "platform-window-create",
         "platform-window-vulkan-extensions",
-        "app-paths-and-showroom-cli"
+        "app-paths-and-showroom-cli",
+        "sample-showroom-launch"
       ],
       "gpu_cases": [
         "rhi-device-create",
@@ -354,6 +355,7 @@
         "sample-hdr-lighting-probes",
         "sample-ibl-probes",
         "sample-descriptor-heap-scene-parity",
+        "sample-showroom-launch",
         "platform-window-vulkan-extensions",
         "runtime-system-development",
         "sample-resize",
@@ -661,7 +663,8 @@
         "runtime-system-inspect",
         "platform-window-create",
         "platform-window-vulkan-extensions",
-        "app-paths-and-showroom-cli"
+        "app-paths-and-showroom-cli",
+        "sample-showroom-launch"
       ],
       "gpu_cases": [
         "rhi-device-create",
@@ -687,6 +690,7 @@
         "sample-hdr-lighting-probes",
         "sample-ibl-probes",
         "sample-descriptor-heap-scene-parity",
+        "sample-showroom-launch",
         "platform-window-vulkan-extensions",
         "runtime-system-development",
         "sample-resize",

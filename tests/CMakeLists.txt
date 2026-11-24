@@ -395,3 +395,15 @@ add_test(NAME app-paths-and-showroom-cli COMMAND ar_app_tests "[app-paths-and-sh
 set_tests_properties(app-paths-and-showroom-cli PROPERTIES
     ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
 )
+
+add_test(NAME sample-showroom-launch
+    COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_showroom_launch.py"
+        "$<TARGET_FILE:ar_triangle>"
+        "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
+        "$<CONFIG>"
+        "${PROJECT_SOURCE_DIR}/examples/triangle/content/showroom"
+)
+set_tests_properties(sample-showroom-launch PROPERTIES
+    LABELS "gpu" TIMEOUT 90
+    ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1"
+)

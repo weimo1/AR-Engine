@@ -1,172 +1,26 @@
-#include <cerrno>
+#include <array>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include "runtime/RuntimeSession.h"
+#include "AppPaths.h"
 #include "render/CullReference.h"
 #include "render/EnvironmentLighting.h"
+#include "runtime/RuntimeSession.h"
 
 #define STBI_WRITE_NO_STDIO
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
 namespace {
-
-struct Options {
-    std::optional<std::uint32_t> frames;
-    bool visible = true;
-    bool clearOnly = false;
-    bool gpuDriven = false;
-    bool gpuEmpty = false;
-    bool setBinding = false;
-    bool descriptorHeap = false;
-    bool verifyBindingRetirement = false;
-    bool gbuffer = false;
-    bool bindlessMaterials = false;
-    bool staticGpuDriven = false;
-    std::optional<std::uint32_t> indirectCapacity;
-    bool hdrLighting = false;
-    bool verifyIblRollback = false;
-    std::optional<ar::render::EnvironmentPreset> ibl;
-    std::optional<float> exposureEV;
-    std::optional<std::filesystem::path> gbufferProbes;
-    std::optional<std::filesystem::path> scene;
-    std::optional<std::filesystem::path> assetRoot;
-    std::optional<std::filesystem::path> sceneCandidate;
-    std::optional<std::filesystem::path> screenshot;
-    std::filesystem::path output = AR_TRIANGLE_OUTPUT_ROOT;
-};
-
-std::optional<Options> parse(int argc, wchar_t** argv) {
-    Options options;
-    for (int index = 1; index < argc; ++index) {
-        const std::wstring_view arg = argv[index];
-        if (arg == L"--hidden") {
-            options.visible = false;
-        } else if (arg == L"--set-binding-retirement") {
-            options.setBinding = true;
-            options.verifyBindingRetirement = true;
-        } else if (arg == L"--gpu-driven" || arg == L"--gpu-driven-empty") {
-            options.gpuDriven = true;
-            options.gpuEmpty = arg == L"--gpu-driven-empty";
-        } else if (arg == L"--set-binding") {
-            options.setBinding = true;
-        } else if (arg == L"--descriptor-heap") {
-            options.descriptorHeap = true;
-            options.gbuffer = true;
-        } else if (arg == L"--clear-only") {
-            options.clearOnly = true;
-        } else if (arg == L"--ibl" && !options.ibl && index + 1 < argc) {
-            const std::wstring_view preset = argv[++index];
-            if (preset == L"constant") {
-                options.ibl = ar::render::EnvironmentPreset::Constant;
-            } else if (preset == L"directional") {
-                options.ibl = ar::render::EnvironmentPreset::Directional;
-            } else {
-                return std::nullopt;
-            }
-            options.hdrLighting = true;
-            options.gbuffer = true;
-        } else if (arg == L"--verify-ibl-rollback") {
-            options.verifyIblRollback = true;
-        } else if (arg == L"--hdr-lighting") {
-            options.hdrLighting = true;
-            options.gbuffer = true;
-        } else if (arg == L"--exposure-ev" && !options.exposureEV && index + 1 < argc) {
-            const wchar_t* text = argv[++index];
-            wchar_t* end = nullptr;
-            errno = 0;
-            const float exposure = std::wcstof(text, &end);
-            if (end == text || *end != L'\0' || errno == ERANGE ||
-                !std::isfinite(exposure) || std::abs(exposure) > 16.F) {
-                return std::nullopt;
-            }
-            options.exposureEV = exposure;
-        } else if (arg == L"--static-gpu-driven") {
-            options.staticGpuDriven = true;
-            options.bindlessMaterials = true;
-            options.gbuffer = true;
-        } else if (arg == L"--bindless-materials") {
-            options.bindlessMaterials = true;
-            options.gbuffer = true;
-        } else if (arg == L"--gbuffer") {
-            options.gbuffer = true;
-        } else if (arg == L"--gbuffer-probes" && !options.gbufferProbes && index + 1 < argc) {
-            options.gbuffer = true;
-            options.gbufferProbes = argv[++index];
-        } else if (arg == L"--static-scene" && !options.scene && index + 1 < argc) {
-            options.scene = argv[++index];
-        } else if (arg == L"--asset-root" && !options.assetRoot && index + 1 < argc) {
-            options.assetRoot = argv[++index];
-        } else if (arg == L"--static-scene-test" && !options.sceneCandidate && index + 1 < argc) {
-            options.sceneCandidate = argv[++index];
-        } else if ((arg == L"--frames" || arg == L"--indirect-capacity") && index + 1 < argc) {
-            auto& target = arg == L"--frames" ? options.frames : options.indirectCapacity;
-            if (target) {
-                return std::nullopt;
-            }
-            const std::wstring_view value = argv[++index];
-            if (value.empty() || value.find_first_not_of(L"0123456789") != value.npos) {
-                return std::nullopt;
-            }
-            errno = 0;
-            const unsigned long frames = std::wcstoul(value.data(), nullptr, 10);
-            if (errno == ERANGE || (arg == L"--frames" && frames == 0)) {
-                return std::nullopt;
-            }
-            target = static_cast<std::uint32_t>(frames);
-        } else if (arg == L"--screenshot" && !options.screenshot && index + 1 < argc) {
-            options.screenshot = argv[++index];
-            if (options.screenshot->empty()) {
-                return std::nullopt;
-            }
-        } else if (arg == L"--output" && index + 1 < argc) {
-            options.output = argv[++index];
-            if (options.output.empty()) {
-                return std::nullopt;
-            }
-        } else {
-            return std::nullopt;
-        }
-    }
-    if ((!options.visible || options.screenshot || options.gbufferProbes) && !options.frames) {
-        return std::nullopt;
-    }
-    if (options.verifyBindingRetirement && (options.frames != 3 || options.screenshot)) {
-        return std::nullopt;
-    }
-    if (options.clearOnly && options.setBinding) {
-        return std::nullopt;
-    }
-    if (options.gpuDriven && (options.clearOnly || options.setBinding)) {
-        return std::nullopt;
-    }
-    if (options.descriptorHeap && (options.setBinding || options.clearOnly || options.gpuDriven)) {
-        return std::nullopt;
-    }
-    if ((options.indirectCapacity && !options.staticGpuDriven) ||
-        (options.verifyIblRollback && (!options.ibl || !options.frames || *options.frames < 2)) ||
-        (options.exposureEV && !options.hdrLighting) || (options.gbuffer && !options.scene) ||
-        (options.gbufferProbes && options.gbufferProbes->empty()) ||
-        options.scene.has_value() != options.assetRoot.has_value() ||
-        (options.scene && (options.scene->empty() || options.assetRoot->empty() ||
-                           options.gpuDriven || options.clearOnly || options.setBinding)) ||
-        (options.sceneCandidate &&
-         (!options.scene || !options.screenshot || options.frames != 4))) {
-        return std::nullopt;
-    }
-    return options;
-}
 
 bool writeGBufferProbes(const std::filesystem::path& path, const ar::rhi::FrameScreenshot& frame) {
     constexpr std::array names{"overlap", "far-only", "background"};
@@ -273,20 +127,71 @@ void printError(const ar::core::Error& error) {
     std::fputc('\n', stderr);
 }
 
+void reportEndErrors(const ar::core::EndResult& result) {
+    if (result.primaryError) {
+        printError(*result.primaryError);
+    }
+    for (const auto& error : result.cleanupErrors) {
+        printError(error);
+    }
+    for (const auto& error : result.diagnosticErrors) {
+        printError(error);
+    }
+}
+
+void closeAndReport(ar::runtime::RuntimeSession& session) {
+    reportEndErrors(session.close());
+}
+
+std::string pathToUtf8(const std::filesystem::path& path) {
+    const auto text = path.u8string();
+    return std::string(text.begin(), text.end());
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
-    const auto options = parse(argc, argv);
+    const auto exeDir = ar::app::currentExecutableDirectory();
+    if (!exeDir) {
+        std::fprintf(stderr, "%s\n", exeDir.error().c_str());
+        return 1;
+    }
+    const auto paths = ar::app::resolveAppPaths(
+        *exeDir, std::nullopt, std::filesystem::path(AR_TRIANGLE_OUTPUT_ROOT));
+    if (!paths) {
+        std::fprintf(stderr, "%s\n", paths.error().c_str());
+        return 1;
+    }
+
+    std::vector<std::wstring_view> args;
+    if (argc > 1) {
+        args.reserve(static_cast<std::size_t>(argc - 1));
+        for (int index = 1; index < argc; ++index) {
+            args.emplace_back(argv[index]);
+        }
+    }
+    const auto options = ar::app::parseLaunchOptions(args, *paths);
     if (!options) {
-        std::fputs(
-            "usage: ar_triangle [--frames N] [--hidden] [--clear-only] "
-            "[--set-binding] [--descriptor-heap] [--static-scene JSON --asset-root DIRECTORY] "
-            "[--static-gpu-driven [--indirect-capacity N]] "
-            "[--gbuffer [--gbuffer-probes PATH]] [--bindless-materials] [--hdr-lighting "
-            "[--exposure-ev EV]] "
-            "[--ibl constant|directional] [--screenshot PATH] [--output DIRECTORY]\n",
-            stderr);
+        const auto usage = ar::app::launchUsageText();
+        std::fwrite(usage.data(), 1, usage.size(), stderr);
         return 2;
+    }
+
+    std::optional<std::filesystem::path> sceneFile;
+    std::optional<std::filesystem::path> assetDir;
+    if (options->scene) {
+        auto checkedScene = ar::app::requireReadableFile(*options->scene, "scene file");
+        if (!checkedScene) {
+            std::fprintf(stderr, "%s\n", checkedScene.error().c_str());
+            return 1;
+        }
+        auto checkedAssets = ar::app::requireReadableDirectory(*options->assetRoot, "asset root");
+        if (!checkedAssets) {
+            std::fprintf(stderr, "%s\n", checkedAssets.error().c_str());
+            return 1;
+        }
+        sceneFile = std::move(*checkedScene);
+        assetDir = std::move(*checkedAssets);
     }
 
     ar::runtime::RuntimeConfig config;
@@ -304,12 +209,18 @@ int wmain(int argc, wchar_t** argv) {
     config.query.enableSetBindingSample = options->setBinding;
     config.query.verifyBindingRetirement = options->verifyBindingRetirement;
     config.query.enableGBuffer = options->gbuffer;
-    config.staticAssetRoot = options->assetRoot;
+    config.staticAssetRoot = assetDir;
     if (options->verifyBindingRetirement) {
         config.diagnostics.minLevel = ar::core::LogLevel::Debug;
     }
     if (!options->clearOnly) {
-        const std::filesystem::path shaderDir = AR_TRIANGLE_SHADER_DIR;
+        const auto checkedShaderDir =
+            ar::app::requireReadableDirectory(paths->shaders, "shader directory");
+        if (!checkedShaderDir) {
+            std::fprintf(stderr, "%s\n", checkedShaderDir.error().c_str());
+            return 1;
+        }
+        const std::filesystem::path& shaderDir = *checkedShaderDir;
         auto vertex = readShader(
             shaderDir / (options->gbuffer      ? "gbuffer.vert.spv"
                          : options->scene      ? "static_scene.vert.spv"
@@ -383,7 +294,7 @@ int wmain(int argc, wchar_t** argv) {
             ar::rhi::TriangleShaders{std::move(*vertex), std::move(*fragment)};
     }
     config.window.emplace();
-    config.window->title = "AR Engine Triangle";
+    config.window->title = options->showroom ? "AR Engine Showroom" : "AR Engine Triangle";
     config.window->visible = options->visible;
     config.diagnostics.outputRoot = options->output;
     const auto timestamp = std::chrono::system_clock::now().time_since_epoch().count();
@@ -397,9 +308,10 @@ int wmain(int argc, wchar_t** argv) {
         }
         return 1;
     }
-    if (options->scene) {
-        if (auto loaded = (*session)->openStaticScene(*options->scene); !loaded) {
+    if (sceneFile) {
+        if (auto loaded = (*session)->openStaticScene(*sceneFile); !loaded) {
             printError(loaded.error());
+            closeAndReport(**session);
             return 1;
         }
     }
@@ -413,8 +325,19 @@ int wmain(int argc, wchar_t** argv) {
     if (options->ibl) {
         if (auto loaded = replaceEnvironment(*options->ibl, false); !loaded) {
             printError(loaded.error());
+            closeAndReport(**session);
             return 1;
         }
+    }
+    if (sceneFile && assetDir) {
+        const std::string sceneUtf8 = pathToUtf8(*sceneFile);
+        const std::string assetUtf8 = pathToUtf8(*assetDir);
+        std::printf(
+            "scene=%s\nasset_root=%s\nbinding=%s\n",
+            sceneUtf8.c_str(),
+            assetUtf8.c_str(),
+            options->descriptorHeap ? "descriptor-heap" : "set");
+        std::fflush(stdout);
     }
 
     unsigned long long presented = 0;
@@ -437,6 +360,7 @@ int wmain(int argc, wchar_t** argv) {
                                     "environment diffuse: injected failure after diffuse upload") {
                     std::fputs(
                         "expected failure after candidate environment diffuse upload\n", stderr);
+                    closeAndReport(**session);
                     return 1;
                 }
             }
@@ -444,13 +368,16 @@ int wmain(int argc, wchar_t** argv) {
                 constexpr std::array names{"before.png", "rollback.png", "reopened.png"};
                 const auto directory = options->screenshot->parent_path();
                 if (!writeScreenshot(directory / names[presented - 1], screenshot)) {
+                    closeAndReport(**session);
                     return 1;
                 }
                 std::expected<void, ar::core::Error> change;
                 if (presented == 1) {
                     auto rejected = (*session)->openStaticScene(*options->sceneCandidate, true);
-                    if (rejected || rejected.error().message != "injected failure after first candidate mesh upload") {
+                    if (rejected || rejected.error().message !=
+                                        "injected failure after first candidate mesh upload") {
                         std::fputs("expected failure after first candidate mesh upload\n", stderr);
+                        closeAndReport(**session);
                         return 1;
                     }
                 } else if (presented == 2) {
@@ -464,6 +391,7 @@ int wmain(int argc, wchar_t** argv) {
                 }
                 if (!change) {
                     printError(change.error());
+                    closeAndReport(**session);
                     return 1;
                 }
             }
@@ -471,15 +399,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     const ar::core::EndResult result = (*session)->close();
     std::printf("presented_frames=%llu\n", presented);
-    if (result.primaryError) {
-        printError(*result.primaryError);
-    }
-    for (const auto& error : result.cleanupErrors) {
-        printError(error);
-    }
-    for (const auto& error : result.diagnosticErrors) {
-        printError(error);
-    }
+    reportEndErrors(result);
     if (result.result != ar::core::ResultKind::Success) {
         return 1;
     }
