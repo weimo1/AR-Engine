@@ -349,16 +349,19 @@ StaticSceneDraw::prepareEnvironment(const EnvironmentUpload& upload, bool verify
 
 std::expected<std::shared_ptr<StaticSceneDraw::Mesh>, core::Error>
 StaticSceneDraw::upload(const StaticMeshUpload& input) {
-    if (!input.identity || input.vertices.empty() || input.indices.empty() ||
-        input.indices.size() > std::numeric_limits<std::uint32_t>::max() ||
-        input.indices.size() % 3 || std::ranges::any_of(input.indices, [&](std::uint32_t index) {
-            return index >= input.vertices.size();
-        })) {
+    const bool hasPerMeshGeometry = !input.vertices.empty() || !input.indices.empty();
+    if (!input.identity || (!m_indirect && !hasPerMeshGeometry) ||
+        (hasPerMeshGeometry &&
+         (input.vertices.empty() || input.indices.empty() ||
+          input.indices.size() > std::numeric_limits<std::uint32_t>::max() ||
+          input.indices.size() % 3 || std::ranges::any_of(input.indices, [&](std::uint32_t index) {
+              return index >= input.vertices.size();
+          })))) {
         return invalid("invalid static mesh topology or identity");
     }
     auto mesh = std::make_shared<Mesh>(*this);
     mesh->identity = input.identity;
-    mesh->indexCount = static_cast<std::uint32_t>(input.indices.size());
+    mesh->indexCount = m_indirect ? 0u : static_cast<std::uint32_t>(input.indices.size());
     if (auto ready = m_resources.ensureAllocator(); !ready) {
         return std::unexpected(ready.error());
     }

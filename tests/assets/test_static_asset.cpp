@@ -1,5 +1,6 @@
 #include "assets/StaticAssetCache.h"
 #include "render/OpaqueMaterial.h"
+#include "render/StaticSceneDrawData.h"
 #include "runtime/StaticSceneSession.h"
 
 #include <array>
@@ -295,6 +296,71 @@ TEST_CASE("Static scene keeps the active input until a candidate fully loads", "
         writeScene(1, missing);
         CHECK_FALSE(session.open(source).has_value());
         CHECK(session.input() == reopened);
+
+        fs::create_directories(root / "models2");
+        writeQuad(root / "models2");
+        std::string manyInstances = "[";
+        for (int i = 0; i < 64; ++i) {
+            if (i > 0) {
+                manyInstances += ',';
+            }
+            manyInstances += "{\"id\":" + std::to_string(i + 1) +
+                             ",\"asset\":\"models/quad.gltf\",\"position\":[" +
+                             std::to_string(i) +
+                             ",0,0],\"rotation\":[0,0,0,1],\"scale\":[1,1,1]},{\"id\":" +
+                             std::to_string(i + 100) +
+                             ",\"asset\":\"models2/quad.gltf\",\"position\":[" +
+                             std::to_string(i) +
+                             ",2,0],\"rotation\":[0,0,0,1],\"scale\":[1,1,1]}";
+        }
+        manyInstances += ']';
+        writeScene(1, manyInstances);
+        REQUIRE(session.open(source).has_value());
+        const auto deduped = session.input();
+        REQUIRE(deduped);
+        REQUIRE(deduped->draws.size() == 128);
+        const auto firstQuad = deduped->draws[0].mesh;
+        const auto secondQuad = deduped->draws[64].mesh;
+        REQUIRE(firstQuad);
+        REQUIRE(secondQuad);
+        CHECK(firstQuad != secondQuad);
+        for (std::size_t i = 0; i < 64; ++i) {
+            CHECK(deduped->draws[i].objectId == i + 1);
+            CHECK(deduped->draws[i].mesh == firstQuad);
+            CHECK(deduped->draws[64 + i].objectId == i + 100);
+            CHECK(deduped->draws[64 + i].mesh == secondQuad);
+        }
+
+        std::string failingTail = manyInstances;
+        failingTail.pop_back();
+        failingTail +=
+            ",{\"id\":999,\"asset\":\"models/missing.gltf\",\"position\":[0,0,0],"
+            "\"rotation\":[0,0,0,1],\"scale\":[1,1,1]}]";
+        writeScene(1, failingTail);
+        const auto rejected = session.open(source);
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error().stage == ar::runtime::StaticSceneStage::Asset);
+        CHECK(session.input() == deduped);
+
+        writeScene(1, objects);
+        const auto rejectedGeometry = session.open(
+            source,
+            [&](const ar::render::StaticRenderInput& candidate)
+                -> std::expected<void, ar::runtime::StaticSceneError> {
+                auto malformed = candidate;
+                auto badMesh = std::make_shared<ar::assets::StaticMesh>(*malformed.draws[0].mesh);
+                badMesh->indices.push_back(0);
+                malformed.draws[0].mesh = std::move(badMesh);
+                const auto packed = ar::render::packStaticSceneDrawData(malformed);
+                if (!packed) {
+                    return std::unexpected(
+                        ar::runtime::StaticSceneError{
+                            ar::runtime::StaticSceneStage::Asset, source, packed.error().message});
+                }
+                return {};
+            });
+        REQUIRE_FALSE(rejectedGeometry.has_value());
+        CHECK(session.input() == deduped);
     }
     REQUIRE(retained->draws[0].mesh);
     CHECK(retained->draws[0].mesh->indices.size() == 6);

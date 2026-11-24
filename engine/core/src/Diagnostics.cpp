@@ -173,15 +173,43 @@ Json encodeError(const Error& error) {
     return encoded;
 }
 
-// Encodes an error for a budget-constrained summary: the stable identity of the error is kept
-// while the free text is capped, so a truncated summary still explains what failed.
-Json encodeErrorCapped(const Error& error, std::size_t messageLimit) {
-    if (error.message.size() <= messageLimit) {
-        return encodeError(error);
+// Walks a valid UTF-8 string and returns the largest byte prefix <= maxBytes on a code point
+// boundary, so capping free text never slices a multi-byte character into replacement noise.
+std::size_t utf8PrefixBytes(std::string_view validUtf8, std::size_t maxBytes) noexcept {
+    std::size_t offset = 0;
+    while (offset < validUtf8.size()) {
+        const auto lead = static_cast<unsigned char>(validUtf8[offset]);
+        const std::size_t width = lead < 0x80u              ? 1u
+                                  : (lead & 0xE0u) == 0xC0u ? 2u
+                                  : (lead & 0xF0u) == 0xE0u ? 3u
+                                  : (lead & 0xF8u) == 0xF0u ? 4u
+                                                            : 1u;
+        if (width > validUtf8.size() - offset || offset + width > maxBytes) {
+            break;
+        }
+        offset += width;
     }
+    return offset;
+}
+
+// Encodes an error for a budget-constrained summary: the stable identity of the error is kept
+// while the free text is capped on a UTF-8 code point boundary within messageLimit bytes.
+Json encodeErrorCapped(const Error& error, std::size_t messageLimit) {
+    const std::string clean = sanitizeUtf8(error.message);
+    if (clean.size() <= messageLimit) {
+        Error normalized = error;
+        normalized.message = clean;
+        return encodeError(normalized);
+    }
+    constexpr std::string_view kEllipsis = "...";
+    const std::size_t prefixBudget =
+        messageLimit >= kEllipsis.size() ? messageLimit - kEllipsis.size() : 0u;
+    const std::size_t keep = utf8PrefixBytes(clean, prefixBudget);
     Error capped = error;
-    capped.message.resize(messageLimit);
-    capped.message += "...";
+    capped.message.assign(clean, 0, keep);
+    if (messageLimit >= kEllipsis.size()) {
+        capped.message.append(kEllipsis);
+    }
     return encodeError(capped);
 }
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 #include <utility>
 
 #include <glm/ext/matrix_transform.hpp>
@@ -70,20 +71,35 @@ std::expected<void, StaticSceneError> StaticSceneSession::open(
          camera.farPlane}, {}};
     const auto instances = candidate->instances();
     input.draws.reserve(instances.size());
+    // Deduplicate asset resolution within one open() so repeated instances avoid redundant
+    // canonical path syscalls while keeping full root validation on each distinct asset reference.
+    std::unordered_map<std::u8string, std::shared_ptr<const assets::StaticMesh>> loadedMeshes;
     for (const auto& instance : instances) {
         const auto model = modelMatrix(instance.transform);
         if (!std::ranges::all_of(model, [](float value) { return std::isfinite(value); })) {
-            return std::unexpected(StaticSceneError{
-                StaticSceneStage::Validate, source,
-                "non-finite model matrix for object " + std::to_string(instance.id)});
+            return std::unexpected(
+                StaticSceneError{
+                    StaticSceneStage::Validate,
+                    source,
+                    "non-finite model matrix for object " + std::to_string(instance.id)});
         }
-        auto mesh = m_state->assets.load(instance.asset);
-        if (!mesh) {
-            return std::unexpected(StaticSceneError{
-                StaticSceneStage::Asset, mesh.error().source,
-                "object " + std::to_string(instance.id) + ": " + mesh.error().message});
+        const auto assetKey = instance.asset.generic_u8string();
+        std::shared_ptr<const assets::StaticMesh> mesh;
+        if (const auto cached = loadedMeshes.find(assetKey); cached != loadedMeshes.end()) {
+            mesh = cached->second;
+        } else {
+            auto loaded = m_state->assets.load(instance.asset);
+            if (!loaded) {
+                return std::unexpected(
+                    StaticSceneError{
+                        StaticSceneStage::Asset,
+                        loaded.error().source,
+                        "object " + std::to_string(instance.id) + ": " + loaded.error().message});
+            }
+            mesh = std::move(*loaded);
+            loadedMeshes.emplace(assetKey, mesh);
         }
-        input.draws.push_back({instance.id, model, std::move(*mesh)});
+        input.draws.push_back({instance.id, model, std::move(mesh)});
     }
     auto ready = std::make_unique<State::Active>(State::Active{
         std::move(*candidate), std::make_shared<const render::StaticRenderInput>(std::move(input))});

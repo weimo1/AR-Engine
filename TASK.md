@@ -6,7 +6,7 @@
 
 ## 当前阶段
 
-**P2a 资源与上传**：[方案与验收](openspec/changes/p2a-resources-upload/proposal.md)。P1a 已完成人工验收。开发基线为 Vulkan 1.3（Dynamic Rendering、Synchronization2）。本机 RTX 4060 Laptop GPU 在 621.01 驱动下实测设备 API 为 1.4.357。
+T47 已记录 P5 同场景 Set/Heap 验收。后续先准备默认展示场景，再用它验收 P4b 阴影与自由相机。P6 接调试面板和四配置基准，P7 交付独立运行包。各批方案与验收入口见[毕业交付的五项技术方案](docs/实施路线与阶段计划.md#毕业交付的五项技术方案)。
 
 ## 任务队列
 
@@ -162,6 +162,11 @@
   - 验收：`sample-descriptor-heap-scene-parity`（标签 `gpu`）通过 `ar_triangle` 端到端对照 Set 与 `--descriptor-heap`（含 `--static-gpu-driven --hdr-lighting --ibl directional`）的可见性、探针与 PNG，且冲突/不支持组合显式拒绝、不静默回退。
 - [x] T47 [人工] P5 第二批（同场景 Set vs. Heap 对照）里程碑验收。受用户委托复跑三项真机用例，Set/Heap 及 Heap 环境回滚的 PNG 逐字节一致，可见 ID、探针和资源释放检查通过，Debug Sync Validation 零错误。T46 双配置各 96/96，零编译警告。
   - 用户核对同场景 Set/Heap 画面、探针、剔除与 Resize/Validation 证据后，决定进入 P4b（方向光阴影与相机漫游）。
+
+### 前置加固：诊断截断与静态场景装载优化
+
+- [x] T48 错误摘要 UTF-8 码点截断、静态场景前置拓扑校验与 GPU-Driven 单次打包及资产去重：按 UTF-8 码点边界截断并计入省略号预算，抽离共享 `StaticMeshGeometry.h` 前置校验与几何级数扩容、间接路径复用 `packStaticSceneDrawData` 单次打包并传空逐 mesh 缓冲、单次 `open()` 去重资产引用；Debug 与 RelWithDebInfo 各 96/96 零警告通过，DSH 独立评审 9/9 PASS。
+  - 验收：`core-summary-truncated`（覆盖 511 ASCII + 中文与 508 ASCII + 中文边界零 U+FFFD）、`render-static-scene-draw-data`（覆盖不完整三角形/越界索引/短法线/非有限材质/退化网格拒绝与 64 小网格几何扩容）、`scene-static-roundtrip`（覆盖 128 实例资产去重与失败保留活动场景）及全量 96/96 双配置门禁通过。
 
 ## 人工待办（不阻塞队列）
 

@@ -442,6 +442,75 @@ TEST_CASE(
     CHECK(summary["primary_error"]["message"].get<std::string>().size() <= 512);
 }
 
+TEST_CASE(
+    "truncating a multibyte UTF-8 error message cuts on a code point boundary",
+    "[core-summary-truncated]") {
+    const fs::path root = freshRoot("core-summary-truncated-utf8");
+    const RunSummaryIdentity identity = testIdentity();
+
+    SECTION("511 ASCII bytes followed by a 3-byte UTF-8 character in primary_error") {
+        DiagnosticConfig config = testConfig(root, "run-utf8-511");
+        config.quota.summaryBytes = 600;
+        auto created = DiagnosticSession::create(config, identity);
+        REQUIRE(created.has_value());
+        auto session = std::move(*created);
+
+        RunSummaryInput input;
+        input.runId = "run-utf8-511";
+        input.identity = identity;
+        input.primaryResult = ResultKind::InitializationFailed;
+        input.primaryError = Error{
+            ErrorCategory::DeviceNotFound,
+            ErrorStage::Enumeration,
+            std::string(511, 'a') + "\xE4\xB8\xAD",
+            std::nullopt};
+        const EndResult result = session->finish(input);
+
+        CHECK(result.result == ResultKind::OutputFailed);
+        CHECK_FALSE(result.diagnosticsComplete);
+        REQUIRE(result.primaryError.has_value());
+        CHECK(result.primaryError->category == ErrorCategory::DeviceNotFound);
+
+        const nlohmann::json summary = parseJson(readAll(root / "run-utf8-511" / "summary.json"));
+        CHECK(summary["summary_truncated"] == true);
+        CHECK(summary["primary_error"]["category"] == "device_not_found");
+        const std::string message = summary["primary_error"]["message"].get<std::string>();
+        CHECK(message.size() <= 512);
+        CHECK(message.ends_with("..."));
+        CHECK(message.find("\xEF\xBF\xBD") == std::string::npos);
+    }
+
+    SECTION("multibyte UTF-8 character straddling the 509-byte prefix budget") {
+        DiagnosticConfig config = testConfig(root, "run-utf8-508");
+        config.quota.summaryBytes = 1400;
+        auto created = DiagnosticSession::create(config, identity);
+        REQUIRE(created.has_value());
+        auto session = std::move(*created);
+
+        RunSummaryInput input;
+        input.runId = "run-utf8-508";
+        input.identity = identity;
+        input.primaryResult = ResultKind::InitializationFailed;
+        input.primaryError = Error{
+            ErrorCategory::DeviceNotFound,
+            ErrorStage::Enumeration,
+            std::string(508, 'b') + "\xE4\xB8\xAD\xE6\x96\x87",
+            std::nullopt};
+        input.capabilityJson = std::string("{\"padding\":\"") + std::string(1500, 'x') + "\"}";
+        const EndResult result = session->finish(input);
+
+        CHECK(result.result == ResultKind::OutputFailed);
+        CHECK_FALSE(result.diagnosticsComplete);
+
+        const nlohmann::json summary = parseJson(readAll(root / "run-utf8-508" / "summary.json"));
+        CHECK(summary["summary_truncated"] == true);
+        const std::string message = summary["primary_error"]["message"].get<std::string>();
+        CHECK(message == std::string(508, 'b') + "...");
+        CHECK(message.size() <= 512);
+        CHECK(message.find("\xEF\xBF\xBD") == std::string::npos);
+    }
+}
+
 TEST_CASE("finish is idempotent and writes the summary once", "[core-repeat-finish]") {
     const fs::path root = freshRoot("core-repeat-finish");
     const RunSummaryIdentity identity = testIdentity();
