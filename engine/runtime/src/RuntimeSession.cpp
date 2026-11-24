@@ -12,6 +12,7 @@
 #include "core/Error.h"
 #include "rhi/Capabilities.h"
 #include "rhi/RhiSession.h"
+#include "render/DirectionalShadow.h"
 #include "render/PresentationGraph.h"
 #include "render/PresentationSpec.h"
 #include "render/StaticSceneRenderer.h"
@@ -113,7 +114,44 @@ struct RuntimeSession::Impl {
     std::unique_ptr<rhi::RhiSession> rhi;
     std::unique_ptr<StaticSceneSession> staticScene;
     std::optional<render::StaticCamera> activeCamera;
+    std::optional<render::SceneWorldBounds> activeSceneBounds;
+    std::optional<render::EffectiveDirectionalLight> activeDirectionalLight;
     std::uint64_t staticSceneUploadCount = 0;
+
+    std::expected<rhi::DirectionalLightingState, core::Error> buildLightingState(
+        const render::EffectiveDirectionalLight& effective,
+        const render::SceneWorldBounds& bounds) const {
+        rhi::DirectionalLightingState state{};
+        if (effective.legacyViewSpace) {
+            return state;
+        }
+        state.legacyViewSpace = false;
+        state.directionWorld = effective.directionWorld;
+        state.color = effective.color;
+        state.intensity = effective.intensity;
+        state.shadowEnabled = effective.castShadows;
+        if (config.query.deferredLighting && config.query.deferredLighting->shadow) {
+            const auto& shadowCfg = *config.query.deferredLighting->shadow;
+            state.normalBias = shadowCfg.normalBias;
+            state.depthBias = shadowCfg.depthBias;
+            state.pcfRadiusTexels = shadowCfg.pcfRadiusTexels;
+            if (effective.castShadows) {
+                const render::DirectionalLight light{
+                    effective.directionWorld, effective.color, effective.intensity, true};
+                const render::DirectionalShadowConfig shadowConfig{
+                    shadowCfg.resolution,
+                    shadowCfg.normalBias,
+                    shadowCfg.depthBias,
+                    shadowCfg.pcfRadiusTexels};
+                auto shadowView = render::buildDirectionalShadowView(bounds, light, shadowConfig);
+                if (!shadowView) {
+                    return std::unexpected(std::move(shadowView.error()));
+                }
+                state.lightViewProj = shadowView->lightViewProj;
+            }
+        }
+        return state;
+    }
     // Runtime-owned snapshot: survives close and never aliases the rhi report.
     rhi::CapabilityReport report;
     std::optional<core::Error> frameError;
@@ -350,17 +388,51 @@ RuntimeSession::openStaticScene(const std::filesystem::path& source, bool verify
             core::ErrorStage::Capability, "no active static scene session"));
     }
     std::optional<core::Error> gpuError;
-    auto opened = m_impl->staticScene->open(source, [&](const render::StaticRenderInput& input)
-                                              -> std::expected<void, StaticSceneError> {
-        auto ready = render::publishStaticScene(
-            *m_impl->rhi, input, verifyRollback, m_impl->config.query.enableGBuffer);
-        if (!ready) {
-            gpuError = std::move(ready.error());
-            return std::unexpected(StaticSceneError{
-                StaticSceneStage::Asset, source, gpuError->message});
-        }
-        return {};
-    });
+    std::optional<render::SceneWorldBounds> pendingBounds;
+    std::optional<render::EffectiveDirectionalLight> pendingLight;
+    auto opened = m_impl->staticScene->open(
+        source, [&](const render::StaticRenderInput& input) -> std::expected<void, StaticSceneError> {
+            auto bounds = render::computeSceneWorldBounds(input);
+            if (!bounds) {
+                gpuError = std::move(bounds.error());
+                return std::unexpected(
+                    StaticSceneError{StaticSceneStage::Asset, source, gpuError->message});
+            }
+            auto effective = render::resolveDirectionalLight(
+                input.directionalLight, m_impl->rhi->shadowMappingEnabled());
+            if (!effective) {
+                gpuError = std::move(effective.error());
+                return std::unexpected(
+                    StaticSceneError{StaticSceneStage::Asset, source, gpuError->message});
+            }
+            std::optional<rhi::DirectionalLightingState> lightingState;
+            if (m_impl->config.query.deferredLighting) {
+                auto built = m_impl->buildLightingState(*effective, *bounds);
+                if (!built) {
+                    gpuError = std::move(built.error());
+                    return std::unexpected(
+                        StaticSceneError{StaticSceneStage::Asset, source, gpuError->message});
+                }
+                lightingState = *built;
+            }
+            auto ready = render::publishStaticScene(
+                *m_impl->rhi, input, verifyRollback, m_impl->config.query.enableGBuffer);
+            if (!ready) {
+                gpuError = std::move(ready.error());
+                return std::unexpected(
+                    StaticSceneError{StaticSceneStage::Asset, source, gpuError->message});
+            }
+            if (lightingState) {
+                if (auto applied = m_impl->rhi->setDirectionalLighting(*lightingState); !applied) {
+                    gpuError = std::move(applied.error());
+                    return std::unexpected(
+                        StaticSceneError{StaticSceneStage::Asset, source, gpuError->message});
+                }
+            }
+            pendingBounds = *bounds;
+            pendingLight = *effective;
+            return {};
+        });
     if (!opened) {
         if (gpuError) {
             return std::unexpected(std::move(*gpuError));
@@ -373,6 +445,8 @@ RuntimeSession::openStaticScene(const std::filesystem::path& source, bool verify
     if (const auto input = m_impl->staticScene->input()) {
         m_impl->activeCamera = input->camera;
     }
+    m_impl->activeSceneBounds = pendingBounds;
+    m_impl->activeDirectionalLight = pendingLight;
     return {};
 }
 
@@ -391,6 +465,42 @@ std::expected<void, core::Error> RuntimeSession::setCamera(const render::StaticC
         return updated;
     }
     m_impl->activeCamera = camera;
+    return {};
+}
+
+std::expected<void, core::Error>
+RuntimeSession::setDirectionalLight(const render::DirectionalLight& light) {
+    if (m_impl->closed || !m_impl->rhi || !m_impl->staticScene ||
+        !m_impl->config.query.deferredLighting) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "deferred lighting session is not active"));
+    }
+    if (auto valid = render::validateDirectionalLight(light); !valid) {
+        return valid;
+    }
+    const bool shadowPipelineEnabled = m_impl->rhi->shadowMappingEnabled();
+    if (!shadowPipelineEnabled && light.castShadows) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "directional shadows require the shadow pipeline to be enabled at startup"));
+    }
+    auto effective = render::resolveDirectionalLight(light, shadowPipelineEnabled);
+    if (!effective) {
+        return std::unexpected(std::move(effective.error()));
+    }
+    const render::SceneWorldBounds bounds =
+        m_impl->activeSceneBounds.value_or(render::SceneWorldBounds{});
+    auto state = m_impl->buildLightingState(*effective, bounds);
+    if (!state) {
+        return std::unexpected(std::move(state.error()));
+    }
+    if (auto applied = m_impl->rhi->setDirectionalLighting(*state); !applied) {
+        return applied;
+    }
+    m_impl->activeDirectionalLight = *effective;
     return {};
 }
 

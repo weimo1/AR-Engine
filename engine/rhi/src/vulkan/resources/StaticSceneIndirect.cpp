@@ -9,6 +9,7 @@
 #include <vk_mem_alloc.h>
 
 #include "binding/DescriptorHeapTable.h"
+#include "resources/ShadowIndirectBatching.h"
 
 namespace ar::rhi::detail {
 namespace {
@@ -96,6 +97,7 @@ StaticSceneIndirect::Scene::~Scene() {
     destroy(indices);
     destroy(instances);
     destroy(materials);
+    destroy(shadowCommands);
 }
 
 std::expected<void, core::Error> StaticSceneIndirect::open(const StaticIndirectShaders& shaders) {
@@ -351,6 +353,26 @@ StaticSceneIndirect::prepare(
             return std::unexpected(result.error());
         }
     }
+    scene->shadowInstanceCount = static_cast<std::uint32_t>(instances.size());
+    std::vector<VkDrawIndexedIndirectCommand> shadowCmds;
+    shadowCmds.reserve(instances.size());
+    for (std::uint32_t index = 0; index < scene->shadowInstanceCount; ++index) {
+        shadowCmds.push_back(
+            VkDrawIndexedIndirectCommand{
+                instances[index].indexCount,
+                1u,
+                instances[index].firstIndex,
+                instances[index].vertexOffset,
+                index});
+    }
+    if (auto made = fill(
+            scene->shadowCommands,
+            VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+            shadowCmds.size() * sizeof(VkDrawIndexedIndirectCommand),
+            std::as_bytes(std::span{shadowCmds}));
+        !made) {
+        return std::unexpected(made.error());
+    }
     const auto device = m_resources.m_device;
     const auto bufferAddress = [&](VkBuffer buffer) -> std::expected<VkDeviceAddress, core::Error> {
         VkBufferDeviceAddressInfo addressInfo{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
@@ -472,7 +494,7 @@ std::expected<void, core::Error> StaticSceneIndirect::publishHeapBuffers(const S
         VkDeviceSize size;
         VkDescriptorType type;
     };
-    const std::array<SlotWrite, kHeapSceneBufferCount> writes{{
+    const std::array<SlotWrite, kHeapIndirectBufferCount> writes{{
         {0u, scene.instancesAddress, scene.instances.desc.bytes, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
         {1u, scene.materialsAddress, scene.materials.desc.bytes, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
         {2u,
@@ -638,6 +660,49 @@ void StaticSceneIndirect::draw(
         sizeof(std::uint32_t),
         scene.capacity,
         sizeof(VkDrawIndexedIndirectCommand));
+}
+
+void StaticSceneIndirect::drawShadow(
+    const Scene& scene,
+    VkCommandBuffer command,
+    std::size_t slot,
+    VkPipelineLayout layout,
+    const std::array<float, 16>& lightViewProj) const {
+    if (scene.shadowInstanceCount == 0u) {
+        return;
+    }
+    if (m_heapBindings) {
+        VkPushDataInfoEXT pushInfo{VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT};
+        pushInfo.offset = 0;
+        pushInfo.data = {lightViewProj.data(), sizeof(lightViewProj)};
+        m_heapBindings->dispatch().cmdPushData(command, &pushInfo);
+    } else {
+        const auto& frame = scene.frames[slot];
+        vkCmdBindDescriptorSets(
+            command, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &frame.set, 0, nullptr);
+        vkCmdPushConstants(
+            command,
+            layout,
+            VK_SHADER_STAGE_VERTEX_BIT,
+            0,
+            sizeof(lightViewProj),
+            lightViewProj.data());
+    }
+    constexpr VkDeviceSize start = 0;
+    vkCmdBindVertexBuffers(command, 0, 1, &scene.vertices.buffer, &start);
+    vkCmdBindIndexBuffer(command, scene.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+    forEachShadowIndirectBatch(
+        scene.shadowInstanceCount,
+        m_limits.maxDrawIndirectCount,
+        [&](ShadowIndirectBatch batch) {
+            vkCmdDrawIndexedIndirect(
+                command,
+                scene.shadowCommands.buffer,
+                static_cast<VkDeviceSize>(batch.firstCommand) *
+                    sizeof(VkDrawIndexedIndirectCommand),
+                batch.commandCount,
+                sizeof(VkDrawIndexedIndirectCommand));
+        });
 }
 
 std::expected<FrameScreenshot::IndirectVisibility, core::Error>

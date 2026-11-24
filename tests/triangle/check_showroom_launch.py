@@ -158,8 +158,25 @@ def parse_kv_stdout(stdout: str) -> dict[str, str]:
 def verify_deployed_assets(exe_dir: Path, source_showroom: Path) -> None:
     deployed_shaders = exe_dir / "shaders"
     spv_files = sorted(p.name for p in deployed_shaders.glob("*.spv"))
-    if len(spv_files) != 20:
-        raise RuntimeError(f"expected 20 deployed shaders in {deployed_shaders}, got {len(spv_files)}")
+    required_shaders = {
+        "static_indirect.vert.spv",
+        "static_indirect.comp.spv",
+        "static_indirect.frag.spv",
+        "shadow_direct.vert.spv",
+        "shadow_indirect.vert.spv",
+        "fullscreen.vert.spv",
+        "deferred_direct.frag.spv",
+        "deferred_ibl.frag.spv",
+        "deferred_shadow.frag.spv",
+        "deferred_ibl_shadow.frag.spv",
+        "display_sdr.frag.spv",
+    }
+    missing_shaders = sorted(required_shaders - set(spv_files))
+    if missing_shaders or len(spv_files) != 24:
+        raise RuntimeError(
+            f"expected 24 deployed shaders in {deployed_shaders}, got {len(spv_files)} "
+            f"(missing={missing_shaders})"
+        )
 
     deployed_showroom = exe_dir / "content" / "showroom"
     for text_rel in [
@@ -233,6 +250,19 @@ def verify_showroom_image(png_bytes: bytes) -> None:
     if roughness_diff < 1.0:
         raise RuntimeError(
             f"expected visible shading difference across roughness row (r=0.10 vs r=0.90), got L1={roughness_diff}"
+        )
+
+    # Regression check: grazing smooth normals on sphere silhouettes must not drop to pure black.
+    black_silhouette_pixels = 0
+    for y in range(int(height * 0.45), int(height * 0.85)):
+        row_off = y * width * 4
+        for x in range(int(width * 0.20), int(width * 0.80)):
+            idx = row_off + x * 4
+            if rgba[idx] == 0 and rgba[idx + 1] == 0 and rgba[idx + 2] == 0:
+                black_silhouette_pixels += 1
+    if black_silhouette_pixels != 0:
+        raise RuntimeError(
+            f"detected {black_silhouette_pixels} pure-black silhouette pixels in showroom sphere band"
         )
 
 

@@ -1,9 +1,11 @@
 #include "Presentation.h"
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -15,9 +17,18 @@ namespace ar::rhi::detail {
 
 using presentation::create;
 using presentation::failed;
+using presentation::makeShadowCompareSamplerInfo;
 using presentation::toVkFormat;
 
 std::expected<void, core::Error> Presentation::createLightingLayout() {
+    static_assert(sizeof(LightingFrameGpu) == 240);
+    static_assert(offsetof(LightingFrameGpu, inverseProjection) == 0);
+    static_assert(offsetof(LightingFrameGpu, viewToWorld) == 64);
+    static_assert(offsetof(LightingFrameGpu, lightViewProj) == 128);
+    static_assert(offsetof(LightingFrameGpu, lightDirView) == 192);
+    static_assert(offsetof(LightingFrameGpu, lightColor) == 208);
+    static_assert(offsetof(LightingFrameGpu, shadowParams) == 224);
+
     VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     sampler.magFilter = VK_FILTER_NEAREST;
     sampler.minFilter = VK_FILTER_NEAREST;
@@ -29,8 +40,6 @@ std::expected<void, core::Error> Presentation::createLightingLayout() {
         !created) {
         return created;
     }
-    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
-    const std::uint32_t bindingCount = m_lighting->environmentLighting ? 7u : 4u;
     if (m_lighting->environmentLighting) {
         sampler.magFilter = VK_FILTER_LINEAR;
         sampler.minFilter = VK_FILTER_LINEAR;
@@ -42,14 +51,46 @@ std::expected<void, core::Error> Presentation::createLightingLayout() {
             return created;
         }
     }
-    for (std::uint32_t i = 0; i < bindingCount; ++i) {
-        bindings[i] = {
+    if (m_lighting->shadow) {
+        const VkSamplerCreateInfo shadowSampler = makeShadowCompareSamplerInfo(m_physical);
+        if (auto created = create(
+                m_device, m_shadowSampler, shadowSampler, vkCreateSampler, "shadow sampler");
+            !created) {
+            return created;
+        }
+    }
+
+    std::array<VkDescriptorSetLayoutBinding, 9> bindings{};
+    std::uint32_t bindingCount = 0;
+    for (std::uint32_t i = 0; i < 4u; ++i) {
+        bindings[bindingCount++] = {
             i,
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             1,
             VK_SHADER_STAGE_FRAGMENT_BIT,
-            i < 4 ? &m_lightingSampler : &m_environmentSampler};
+            &m_lightingSampler};
     }
+    if (m_lighting->environmentLighting) {
+        for (std::uint32_t i = 0; i < 3u; ++i) {
+            bindings[bindingCount++] = {
+                4u + i,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                1,
+                VK_SHADER_STAGE_FRAGMENT_BIT,
+                &m_environmentSampler};
+        }
+    }
+    if (m_lighting->shadow) {
+        bindings[bindingCount++] = {
+            7u,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            1,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            &m_shadowSampler};
+    }
+    bindings[bindingCount++] = {
+        8u, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+
     VkDescriptorSetLayoutCreateInfo set{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     set.bindingCount = bindingCount;
     set.pBindings = bindings.data();
@@ -62,18 +103,389 @@ std::expected<void, core::Error> Presentation::createLightingLayout() {
         !created) {
         return created;
     }
-    const VkPushConstantRange push{
+    VkPipelineLayoutCreateInfo lightingLayout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    lightingLayout.setLayoutCount = 1;
+    lightingLayout.pSetLayouts = &m_lightingSetLayout;
+    if (auto created = create(
+            m_device,
+            m_lightingLayout,
+            lightingLayout,
+            vkCreatePipelineLayout,
+            "lighting pipeline layout");
+        !created) {
+        return created;
+    }
+
+    const VkDescriptorSetLayoutBinding displayBinding{
+        0u,
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        1,
+        VK_SHADER_STAGE_FRAGMENT_BIT,
+        &m_lightingSampler};
+    VkDescriptorSetLayoutCreateInfo displaySet{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    displaySet.bindingCount = 1;
+    displaySet.pBindings = &displayBinding;
+    if (auto created = create(
+            m_device,
+            m_displaySetLayout,
+            displaySet,
+            vkCreateDescriptorSetLayout,
+            "display descriptor layout");
+        !created) {
+        return created;
+    }
+    const VkPushConstantRange displayPush{
         VK_SHADER_STAGE_FRAGMENT_BIT,
         0,
-        static_cast<std::uint32_t>(
-            sizeof(m_frameView.inverseProjection) + sizeof(std::array<float, 12>))};
-    VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    layout.setLayoutCount = 1;
-    layout.pSetLayouts = &m_lightingSetLayout;
-    layout.pushConstantRangeCount = 1;
-    layout.pPushConstantRanges = &push;
+        static_cast<std::uint32_t>(sizeof(DisplayPushData::bytes))};
+    VkPipelineLayoutCreateInfo displayLayout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    displayLayout.setLayoutCount = 1;
+    displayLayout.pSetLayouts = &m_displaySetLayout;
+    displayLayout.pushConstantRangeCount = 1;
+    displayLayout.pPushConstantRanges = &displayPush;
     return create(
-        m_device, m_lightingLayout, layout, vkCreatePipelineLayout, "lighting pipeline layout");
+        m_device,
+        m_displayLayout,
+        displayLayout,
+        vkCreatePipelineLayout,
+        "display pipeline layout");
+}
+
+std::expected<void, core::Error> Presentation::writeShadowHeapDescriptors() {
+    if (!m_heapBinding || !m_lighting || !m_lighting->shadow) {
+        return {};
+    }
+    for (std::uint32_t frame = 0; frame < kHeapShadowImageCount; ++frame) {
+        VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        view.image = m_shadowDepth[frame].image;
+        view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view.format = VK_FORMAT_D32_SFLOAT;
+        view.components = {
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY};
+        view.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        if (auto written =
+                m_heapBinding->writeExternalImageSlot(kHeapShadowImageBase + frame, view);
+            !written) {
+            return written;
+        }
+    }
+    return {};
+}
+
+void Presentation::resetShadowHeapDescriptors() noexcept {
+    if (!m_heapBinding) {
+        return;
+    }
+    for (std::uint32_t frame = 0; frame < kHeapShadowImageCount; ++frame) {
+        static_cast<void>(
+            m_heapBinding->resetExternalImageSlotToDefault(kHeapShadowImageBase + frame));
+    }
+}
+
+std::expected<void, core::Error> Presentation::createShadowPipeline(
+    bool indirect,
+    const std::vector<std::uint32_t>& vertexCode,
+    VkPipelineLayout layout,
+    VkPipeline& output) {
+    struct ShaderModule {
+        VkDevice device;
+        VkShaderModule handle = VK_NULL_HANDLE;
+        ~ShaderModule() {
+            if (handle) {
+                vkDestroyShaderModule(device, handle, nullptr);
+            }
+        }
+    } module{m_device};
+
+    VkShaderModuleCreateInfo moduleInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    moduleInfo.codeSize = vertexCode.size() * sizeof(std::uint32_t);
+    moduleInfo.pCode = vertexCode.data();
+    if (auto created = create(
+            m_device, module.handle, moduleInfo, vkCreateShaderModule, "shadow shader module");
+        !created) {
+        return created;
+    }
+
+    VkPipelineShaderStageCreateInfo stageInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stageInfo.module = module.handle;
+    stageInfo.pName = "main";
+
+    VkDescriptorSetAndBindingMappingEXT indirectMapping{
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT};
+    VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{
+        VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT};
+    VkPipelineCreateFlags2CreateInfo flags2{VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO};
+
+    const VkVertexInputBindingDescription binding{
+        0, sizeof(StaticVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+    const VkVertexInputAttributeDescription position{
+        0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(StaticVertex, position)};
+    VkPipelineVertexInputStateCreateInfo vertex{
+        VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vertex.vertexBindingDescriptionCount = 1;
+    vertex.pVertexBindingDescriptions = &binding;
+    vertex.vertexAttributeDescriptionCount = 1;
+    vertex.pVertexAttributeDescriptions = &position;
+
+    VkPipelineInputAssemblyStateCreateInfo assembly{
+        VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    const std::uint32_t resolution = m_lighting->shadow->resolution;
+    const float extent = static_cast<float>(resolution);
+    const VkViewport viewport{0.F, 0.F, extent, extent, 0.F, 1.F};
+    const VkRect2D scissor{{0, 0}, {resolution, resolution}};
+    VkPipelineViewportStateCreateInfo viewportState{
+        VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewportState.viewportCount = 1;
+    viewportState.pViewports = &viewport;
+    viewportState.scissorCount = 1;
+    viewportState.pScissors = &scissor;
+
+    VkPipelineRasterizationStateCreateInfo raster{
+        VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.depthBiasEnable = VK_TRUE;
+    raster.depthBiasConstantFactor = 1.5F;
+    raster.depthBiasClamp = 0.0F;
+    raster.depthBiasSlopeFactor = 2.0F;
+    raster.lineWidth = 1.0F;
+
+    VkPipelineMultisampleStateCreateInfo multisample{
+        VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo depth{
+        VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depth.depthTestEnable = VK_TRUE;
+    depth.depthWriteEnable = VK_TRUE;
+    depth.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+    VkPipelineColorBlendStateCreateInfo blend{
+        VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    blend.attachmentCount = 0;
+    blend.pAttachments = nullptr;
+
+    VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    rendering.colorAttachmentCount = 0;
+    rendering.pColorAttachmentFormats = nullptr;
+    rendering.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+
+    if (m_heapBinding) {
+        if (indirect) {
+            const auto& plan = m_heapBinding->plan();
+            indirectMapping.descriptorSet = 0u;
+            indirectMapping.firstBinding = 0u;
+            indirectMapping.bindingCount = 1u;
+            indirectMapping.resourceMask = VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT;
+            indirectMapping.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+            indirectMapping.sourceData.constantOffset.heapOffset =
+                static_cast<std::uint32_t>(plan.bufferBaseOffset);
+            indirectMapping.sourceData.constantOffset.heapArrayStride = 0u;
+            mappingInfo.mappingCount = 1u;
+            mappingInfo.pMappings = &indirectMapping;
+            stageInfo.pNext = &mappingInfo;
+        }
+        flags2.flags = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
+        flags2.pNext = &rendering;
+    }
+
+    VkGraphicsPipelineCreateInfo pipeline{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipeline.pNext =
+        m_heapBinding ? static_cast<const void*>(&flags2) : static_cast<const void*>(&rendering);
+    pipeline.stageCount = 1u;
+    pipeline.pStages = &stageInfo;
+    pipeline.pVertexInputState = &vertex;
+    pipeline.pInputAssemblyState = &assembly;
+    pipeline.pViewportState = &viewportState;
+    pipeline.pRasterizationState = &raster;
+    pipeline.pMultisampleState = &multisample;
+    pipeline.pDepthStencilState = &depth;
+    pipeline.pColorBlendState = &blend;
+    pipeline.layout = m_heapBinding ? VK_NULL_HANDLE : layout;
+    const VkResult result =
+        vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &output);
+    if (result != VK_SUCCESS) {
+        return std::unexpected(failed("vkCreateGraphicsPipelines(shadow)", result));
+    }
+    return {};
+}
+
+std::expected<void, core::Error> Presentation::createPersistentLightingResources() {
+    const LightingFrameGpu initialFrame{};
+    for (std::uint32_t frame = 0; frame < kHeapLightingBufferCount; ++frame) {
+        auto ubo = m_staticScene->createUniformBuffer(sizeof(LightingFrameGpu));
+        if (!ubo) {
+            return std::unexpected(std::move(ubo.error()));
+        }
+        m_lightingFrames[frame] = *ubo;
+        if (auto written = m_staticScene->writeUniformBuffer(
+                m_lightingFrames[frame], std::as_bytes(std::span{&initialFrame, 1}));
+            !written) {
+            return written;
+        }
+        if (m_heapBinding) {
+            if (auto bound = m_heapBinding->writeBufferSlot(
+                    kHeapLightingBufferBase + frame,
+                    m_lightingFrames[frame].address,
+                    VkDeviceSize{sizeof(LightingFrameGpu)},
+                    VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                !bound) {
+                return bound;
+            }
+        }
+    }
+
+    if (!m_lighting->shadow) {
+        return {};
+    }
+
+    const auto& shadow = *m_lighting->shadow;
+    m_lightingState.normalBias = shadow.normalBias;
+    m_lightingState.depthBias = shadow.depthBias;
+    m_lightingState.pcfRadiusTexels = shadow.pcfRadiusTexels;
+
+    const VkExtent2D shadowExtent{shadow.resolution, shadow.resolution};
+    for (std::size_t frame = 0; frame < m_shadowDepth.size(); ++frame) {
+        auto attachment = m_staticScene->createAttachment(
+            shadowExtent,
+            VK_FORMAT_D32_SFLOAT,
+            VK_IMAGE_ASPECT_DEPTH_BIT,
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+        if (!attachment) {
+            return std::unexpected(std::move(attachment.error()));
+        }
+        m_shadowDepth[frame] = *attachment;
+    }
+    if (m_heapBinding) {
+        if (auto written = writeShadowHeapDescriptors(); !written) {
+            resetShadowHeapDescriptors();
+            return written;
+        }
+    }
+
+    const bool indirect = m_staticScene && m_staticScene->indirectEnabled();
+    if (!m_heapBinding) {
+        const VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT, 0u, 64u};
+        VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        layoutInfo.pushConstantRangeCount = 1u;
+        layoutInfo.pPushConstantRanges = &push;
+        if (indirect) {
+            const VkDescriptorSetLayout indirectSetLayout = m_staticScene->indirectLayout();
+            layoutInfo.setLayoutCount = 1u;
+            layoutInfo.pSetLayouts = &indirectSetLayout;
+            if (auto created = create(
+                    m_device,
+                    m_indirectShadowLayout,
+                    layoutInfo,
+                    vkCreatePipelineLayout,
+                    "indirect shadow pipeline layout");
+                !created) {
+                return created;
+            }
+        } else {
+            if (auto created = create(
+                    m_device,
+                    m_directShadowLayout,
+                    layoutInfo,
+                    vkCreatePipelineLayout,
+                    "direct shadow pipeline layout");
+                !created) {
+                return created;
+            }
+        }
+    }
+    if (indirect) {
+        return createShadowPipeline(
+            true, shadow.indirectVertex, m_indirectShadowLayout, m_indirectShadowPipeline);
+    }
+    return createShadowPipeline(
+        false, shadow.directVertex, m_directShadowLayout, m_directShadowPipeline);
+}
+
+std::expected<void, core::Error>
+Presentation::writeLightingFrame(std::size_t frameIndex, bool activeShadows) {
+    LightingFrameGpu gpu{};
+    gpu.inverseProjection = m_frameView.inverseProjection;
+    gpu.inverseProjection[0] *= static_cast<float>(m_swapchain.extent.width) /
+                                static_cast<float>(m_swapchain.extent.height);
+    gpu.viewToWorld = m_frameView.viewToWorld;
+    gpu.lightViewProj = m_lightingState.lightViewProj;
+
+    if (m_lightingState.legacyViewSpace) {
+        gpu.lightDirView = {0.F, 0.F, 1.F, m_lightingState.intensity};
+    } else {
+        const float lx = -m_lightingState.directionWorld[0];
+        const float ly = -m_lightingState.directionWorld[1];
+        const float lz = -m_lightingState.directionWorld[2];
+        const auto& view = m_frameView.view;
+        float vx = view[0] * lx + view[4] * ly + view[8] * lz;
+        float vy = view[1] * lx + view[5] * ly + view[9] * lz;
+        float vz = view[2] * lx + view[6] * ly + view[10] * lz;
+        const float length = std::sqrt(vx * vx + vy * vy + vz * vz);
+        if (length > 1e-6F) {
+            vx /= length;
+            vy /= length;
+            vz /= length;
+        } else {
+            vx = 0.F;
+            vy = 0.F;
+            vz = 1.F;
+        }
+        gpu.lightDirView = {vx, vy, vz, m_lightingState.intensity};
+    }
+
+    gpu.lightColor = {
+        m_lightingState.color[0],
+        m_lightingState.color[1],
+        m_lightingState.color[2],
+        activeShadows ? 1.0F : 0.0F};
+    const float invResolution = (m_lighting && m_lighting->shadow)
+                                    ? (1.0F / static_cast<float>(m_lighting->shadow->resolution))
+                                    : 0.0F;
+    gpu.shadowParams = {
+        m_lightingState.normalBias,
+        m_lightingState.depthBias,
+        invResolution,
+        m_lightingState.pcfRadiusTexels};
+
+    return m_staticScene->writeUniformBuffer(
+        m_lightingFrames[frameIndex], std::as_bytes(std::span{&gpu, 1}));
+}
+
+void Presentation::recordShadow(
+    VkCommandBuffer commands, const Image& output, const PresentationGraphPlan& plan) const {
+    recordGraphBarriers(commands, output, plan, PresentationPass::Shadow);
+
+    const std::uint32_t resolution = m_lighting->shadow->resolution;
+    VkRenderingAttachmentInfo depthAttachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    depthAttachment.imageView = m_shadowDepth[m_frameIndex].view;
+    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depthAttachment.clearValue.depthStencil = {1.0F, 0};
+
+    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea = {{0, 0}, {resolution, resolution}};
+    rendering.layerCount = 1u;
+    rendering.colorAttachmentCount = 0u;
+    rendering.pColorAttachments = nullptr;
+    rendering.pDepthAttachment = &depthAttachment;
+
+    vkCmdBeginRendering(commands, &rendering);
+    const bool indirect = m_staticScene && m_staticScene->indirectEnabled();
+    const VkPipeline pipeline = indirect ? m_indirectShadowPipeline : m_directShadowPipeline;
+    const VkPipelineLayout layout = indirect ? m_indirectShadowLayout : m_directShadowLayout;
+    if (pipeline && m_staticScene) {
+        vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        m_staticScene->recordShadow(commands, layout, m_lightingState.lightViewProj, m_frameIndex);
+    }
+    vkCmdEndRendering(commands);
 }
 
 std::expected<void, core::Error> Presentation::writeAttachmentHeapDescriptors() {
@@ -209,14 +621,18 @@ std::expected<void, core::Error> Presentation::createLightingResources(VkImageUs
     }
     constexpr std::uint32_t setsPerSlot = 2;
     constexpr std::uint32_t gbufferBindings = 4;
-    const std::uint32_t bindingsPerSet = m_lighting->environmentLighting ? 7u : gbufferBindings;
-    const auto setCount = setsPerSlot * static_cast<std::uint32_t>(m_swapchain.attachments.size());
-    const VkDescriptorPoolSize size{
-        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, setCount * bindingsPerSet};
+    const std::uint32_t combinedPerDirect =
+        gbufferBindings + (m_lighting->environmentLighting ? 3u : 0u) +
+        (m_lighting->shadow ? 1u : 0u);
+    const auto slotCount = static_cast<std::uint32_t>(m_swapchain.attachments.size());
+    const std::array<VkDescriptorPoolSize, 2> poolSizes{{
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, slotCount * (combinedPerDirect + 1u)},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, slotCount},
+    }};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pool.maxSets = setCount;
-    pool.poolSizeCount = 1;
-    pool.pPoolSizes = &size;
+    pool.maxSets = setsPerSlot * slotCount;
+    pool.poolSizeCount = static_cast<std::uint32_t>(poolSizes.size());
+    pool.pPoolSizes = poolSizes.data();
     if (auto created = create(
             m_device,
             m_swapchain.lightingPool,
@@ -227,14 +643,15 @@ std::expected<void, core::Error> Presentation::createLightingResources(VkImageUs
         return created;
     }
 
-    for (auto& slot : m_swapchain.attachments) {
+    for (std::size_t frame = 0; frame < m_swapchain.attachments.size(); ++frame) {
+        auto& slot = m_swapchain.attachments[frame];
         auto attachment = m_staticScene->createAttachment(
             m_swapchain.extent, hdrFormat, VK_IMAGE_ASPECT_COLOR_BIT, usage);
         if (!attachment) {
             return std::unexpected(attachment.error());
         }
         slot.hdr = *attachment;
-        const std::array layouts{m_lightingSetLayout, m_lightingSetLayout};
+        const std::array layouts{m_lightingSetLayout, m_displaySetLayout};
         std::array<VkDescriptorSet, setsPerSlot> sets{};
         VkDescriptorSetAllocateInfo allocate{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         allocate.descriptorPool = m_swapchain.lightingPool;
@@ -252,20 +669,42 @@ std::expected<void, core::Error> Presentation::createLightingResources(VkImageUs
             slot.gbuffer[2].view,
             slot.depth.view,
             slot.hdr.view};
-        std::array<VkDescriptorImageInfo, views.size()> images{};
-        std::array<VkWriteDescriptorSet, views.size()> writes{};
+        std::array<VkDescriptorImageInfo, 6> images{};
+        std::array<VkWriteDescriptorSet, 7> writes{};
+        std::uint32_t writeCount = 0;
         for (std::uint32_t i = 0; i < views.size(); ++i) {
             images[i] = {VK_NULL_HANDLE, views[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            auto& write = writes[i];
+            auto& write = writes[writeCount++];
             write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             write.dstSet = i < gbufferBindings ? slot.directSet : slot.displaySet;
-            write.dstBinding = i < gbufferBindings ? i : 0;
+            write.dstBinding = i < gbufferBindings ? i : 0u;
             write.descriptorCount = 1;
             write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             write.pImageInfo = &images[i];
         }
-        vkUpdateDescriptorSets(
-            m_device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        if (m_lighting->shadow) {
+            images[5] = {
+                VK_NULL_HANDLE,
+                m_shadowDepth[frame].view,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            auto& write = writes[writeCount++];
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = slot.directSet;
+            write.dstBinding = 7u;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.pImageInfo = &images[5];
+        }
+        const VkDescriptorBufferInfo uboInfo{
+            m_lightingFrames[frame].buffer, 0, VkDeviceSize{sizeof(LightingFrameGpu)}};
+        auto& uboWrite = writes[writeCount++];
+        uboWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        uboWrite.dstSet = slot.directSet;
+        uboWrite.dstBinding = 8u;
+        uboWrite.descriptorCount = 1;
+        uboWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uboWrite.pBufferInfo = &uboInfo;
+        vkUpdateDescriptorSets(m_device, writeCount, writes.data(), 0, nullptr);
     }
     if (m_environmentReady) {
         writeEnvironmentDescriptors();
@@ -304,6 +743,7 @@ void Presentation::recordLighting(
 
     const auto draw = [&](VkImageView target,
                           VkPipeline pipeline,
+                          VkPipelineLayout layout,
                           VkDescriptorSet set,
                           std::uint32_t size,
                           const void* push) {
@@ -326,43 +766,32 @@ void Presentation::recordLighting(
             m_heapBinding->dispatch().cmdPushData(commands, &pushInfo);
         } else {
             vkCmdBindDescriptorSets(
-                commands,
-                VK_PIPELINE_BIND_POINT_GRAPHICS,
-                m_lightingLayout,
-                0,
-                1,
-                &set,
-                0,
-                nullptr);
-            vkCmdPushConstants(
-                commands, m_lightingLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, size, push);
+                commands, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, nullptr);
+            if (size > 0u) {
+                vkCmdPushConstants(commands, layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, size, push);
+            }
         }
         vkCmdDraw(commands, 3, 1, 0, 0);
         vkCmdEndRendering(commands);
     };
 
-    auto inverse = m_frameView.inverseProjection;
-    inverse[0] *= static_cast<float>(m_swapchain.extent.width) /
-                  static_cast<float>(m_swapchain.extent.height);
-    std::array<float, 12> viewToWorld3x4{};
-    std::memcpy(viewToWorld3x4.data(), m_frameView.viewToWorld.data(), sizeof(viewToWorld3x4));
     if (m_heapBinding) {
-        struct DirectHeapPush {
-            std::array<float, 16> inverseProjection;
-            std::array<float, 12> viewToWorld;
-            std::uint32_t frameSlot;
-        };
-        static_assert(sizeof(DirectHeapPush) == 116);
-        const DirectHeapPush direct{
-            inverse, viewToWorld3x4, static_cast<std::uint32_t>(m_frameIndex)};
-        draw(slot.hdr.view, m_swapchain.directPipeline, VK_NULL_HANDLE, sizeof(direct), &direct);
+        const std::uint32_t frameSlot = static_cast<std::uint32_t>(m_frameIndex);
+        draw(
+            slot.hdr.view,
+            m_swapchain.directPipeline,
+            VK_NULL_HANDLE,
+            VK_NULL_HANDLE,
+            sizeof(frameSlot),
+            &frameSlot);
     } else {
-        const struct DirectPush {
-            std::array<float, 16> inverseProjection;
-            std::array<float, 12> viewToWorld;
-        } direct{inverse, viewToWorld3x4};
-        static_assert(sizeof(DirectPush) == 112);
-        draw(slot.hdr.view, m_swapchain.directPipeline, slot.directSet, sizeof(direct), &direct);
+        draw(
+            slot.hdr.view,
+            m_swapchain.directPipeline,
+            m_lightingLayout,
+            slot.directSet,
+            0u,
+            nullptr);
     }
 
     recordGraphBarriers(commands, output, plan, PresentationPass::Display);
@@ -383,12 +812,14 @@ void Presentation::recordLighting(
             output.view,
             m_swapchain.displayPipeline,
             VK_NULL_HANDLE,
+            VK_NULL_HANDLE,
             sizeof(displayPush),
             &displayPush);
     } else {
         draw(
             output.view,
             m_swapchain.displayPipeline,
+            m_displayLayout,
             slot.displaySet,
             display.size,
             display.bytes.data());
@@ -517,7 +948,7 @@ std::expected<void, core::Error> Presentation::createGraphicsPipeline(
     std::uint32_t vertexMappingCount = 0;
     VkShaderDescriptorSetAndBindingMappingInfoEXT vertexMappingInfo{
         VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT};
-    std::array<VkDescriptorSetAndBindingMappingEXT, 7> fragmentMappings{};
+    std::array<VkDescriptorSetAndBindingMappingEXT, 9> fragmentMappings{};
     std::uint32_t fragmentMappingCount = 0;
     VkShaderDescriptorSetAndBindingMappingInfoEXT fragmentMappingInfo{
         VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT};
@@ -638,7 +1069,7 @@ std::expected<void, core::Error> Presentation::createGraphicsPipeline(
                     b,
                     VK_SPIRV_RESOURCE_TYPE_COMBINED_SAMPLED_IMAGE_BIT_EXT,
                     (kHeapExternalImageBase + b) * imageStride,
-                    112u,
+                    0u,
                     frameAttachmentStride,
                     1u * samplerStride);
             }
@@ -654,6 +1085,25 @@ std::expected<void, core::Error> Presentation::createGraphicsPipeline(
                         2u * samplerStride);
                 }
             }
+            if (m_lighting && m_lighting->shadow) {
+                addPushIndex(
+                    fragmentMappings[fragmentMappingCount++],
+                    0u,
+                    7u,
+                    VK_SPIRV_RESOURCE_TYPE_COMBINED_SAMPLED_IMAGE_BIT_EXT,
+                    kHeapShadowImageBase * imageStride,
+                    0u,
+                    imageStride,
+                    3u * samplerStride);
+            }
+            addPushIndex(
+                fragmentMappings[fragmentMappingCount++],
+                0u,
+                8u,
+                VK_SPIRV_RESOURCE_TYPE_UNIFORM_BUFFER_BIT_EXT,
+                bufferBase + kHeapLightingBufferBase * bufferStride,
+                0u,
+                bufferStride);
             break;
         case PipelineKind::Display:
             addPushIndex(
@@ -697,8 +1147,11 @@ std::expected<void, core::Error> Presentation::createGraphicsPipeline(
     if (geometry) {
         pipeline.pDepthStencilState = &depth;
     }
-    pipeline.layout =
-        m_heapBinding ? VK_NULL_HANDLE : (fullscreen ? m_lightingLayout : m_pipelineLayout);
+    pipeline.layout = m_heapBinding ? VK_NULL_HANDLE
+                      : kind == PipelineKind::Display
+                          ? m_displayLayout
+                          : (kind == PipelineKind::DeferredLighting ? m_lightingLayout
+                                                                    : m_pipelineLayout);
     const VkResult result =
         vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &output);
     if (result != VK_SUCCESS) {

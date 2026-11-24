@@ -251,6 +251,71 @@ void StaticSceneDraw::destroyAttachment(Attachment& attachment) noexcept {
     attachment = {};
 }
 
+std::expected<StaticSceneDraw::UniformBuffer, core::Error>
+StaticSceneDraw::createUniformBuffer(std::size_t bytes) {
+    if (bytes == 0) {
+        return invalid("uniform buffer size must be non-zero");
+    }
+    if (auto ready = m_resources.ensureAllocator(); !ready) {
+        return std::unexpected(ready.error());
+    }
+    const VkBufferUsageFlags usage =
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
+        (m_heapBindings ? static_cast<VkBufferUsageFlags>(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)
+                        : 0);
+    auto allocated = m_resources.allocateBuffer({bytes, BufferMemory::HostVisible}, usage);
+    if (!allocated) {
+        return std::unexpected(allocated.error());
+    }
+    UniformBuffer result{allocated->buffer, allocated->allocation, 0};
+    if (m_heapBindings) {
+        auto getBufferDeviceAddress = reinterpret_cast<PFN_vkGetBufferDeviceAddress>(
+            vkGetDeviceProcAddr
+                ? vkGetDeviceProcAddr(m_resources.m_device, "vkGetBufferDeviceAddress")
+                : nullptr);
+        if (!getBufferDeviceAddress) {
+            getBufferDeviceAddress = vkGetBufferDeviceAddress;
+        }
+        if (!getBufferDeviceAddress) {
+            destroyUniformBuffer(result);
+            return std::unexpected(
+                core::Error{
+                    core::ErrorCategory::LoaderSymbolMissing,
+                    core::ErrorStage::Capability,
+                    "vkGetBufferDeviceAddress entry point is unavailable",
+                    std::nullopt});
+        }
+        VkBufferDeviceAddressInfo addressInfo{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+        addressInfo.buffer = result.buffer;
+        result.address = getBufferDeviceAddress(m_resources.m_device, &addressInfo);
+        if (result.address == 0) {
+            destroyUniformBuffer(result);
+            return std::unexpected(
+                core::Error{
+                    core::ErrorCategory::InitializationFailed,
+                    core::ErrorStage::Capability,
+                    "uniform buffer has no device address",
+                    std::nullopt});
+        }
+    }
+    return result;
+}
+
+std::expected<void, core::Error> StaticSceneDraw::writeUniformBuffer(
+    const UniformBuffer& buffer, std::span<const std::byte> data) {
+    if (!buffer.allocation) {
+        return invalid("uniform buffer allocation is null");
+    }
+    return m_resources.writeAllocation(buffer.allocation, 0, data);
+}
+
+void StaticSceneDraw::destroyUniformBuffer(UniformBuffer& buffer) noexcept {
+    if (buffer.buffer) {
+        vmaDestroyBuffer(m_resources.m_allocator, buffer.buffer, buffer.allocation);
+    }
+    buffer = {};
+}
+
 void StaticSceneDraw::destroyEnvironment(Environment& environment) noexcept {
     for (auto& attachment : environment) {
         destroyAttachment(attachment);
@@ -691,6 +756,40 @@ void StaticSceneDraw::record(
                 0,
                 nullptr);
         }
+        vkCmdDrawIndexed(commands, draw.mesh->indexCount, 1, 0, 0, 0);
+    }
+}
+
+void StaticSceneDraw::recordShadow(
+    VkCommandBuffer commands,
+    VkPipelineLayout layout,
+    const std::array<float, 16>& lightViewProj,
+    std::size_t frame) const {
+    if (m_indirect) {
+        if (m_indirectScene) {
+            m_indirect->drawShadow(*m_indirectScene, commands, frame, layout, lightViewProj);
+        }
+        return;
+    }
+    constexpr VkDeviceSize offset = 0;
+    for (const auto& draw : m_active) {
+        const auto lightClipFromModel = multiplyMat4(lightViewProj, draw.instance.modelMatrix);
+        if (m_heapBindings) {
+            VkPushDataInfoEXT pushInfo{VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT};
+            pushInfo.offset = 0;
+            pushInfo.data = {lightClipFromModel.data(), sizeof(lightClipFromModel)};
+            m_heapBindings->dispatch().cmdPushData(commands, &pushInfo);
+        } else {
+            vkCmdPushConstants(
+                commands,
+                layout,
+                VK_SHADER_STAGE_VERTEX_BIT,
+                0,
+                sizeof(lightClipFromModel),
+                lightClipFromModel.data());
+        }
+        vkCmdBindVertexBuffers(commands, 0, 1, &draw.mesh->vertices.buffer, &offset);
+        vkCmdBindIndexBuffer(commands, draw.mesh->indices.buffer, 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(commands, draw.mesh->indexCount, 1, 0, 0, 0);
     }
 }

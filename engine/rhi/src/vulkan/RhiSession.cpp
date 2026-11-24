@@ -239,6 +239,23 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
                 core::ErrorStage::Validation,
                 "display push builder returned an invalid byte size");
         }
+        if (lighting.shadow) {
+            const auto& shadow = *lighting.shadow;
+            const bool needIndirect =
+                config.staticIndirect.has_value() || !shadow.indirectVertex.empty();
+            if (!validSpirv(shadow.directVertex) ||
+                (needIndirect && !validSpirv(shadow.indirectVertex)) || shadow.resolution < 64u ||
+                shadow.resolution > 4096u || !std::isfinite(shadow.normalBias) ||
+                shadow.normalBias < 0.F || !std::isfinite(shadow.depthBias) ||
+                shadow.depthBias < 0.F || !std::isfinite(shadow.pcfRadiusTexels) ||
+                shadow.pcfRadiusTexels < 0.F) {
+                return makeError(
+                    core::ErrorCategory::InvalidArguments,
+                    core::ErrorStage::Validation,
+                    "shadow map config requires valid SPIR-V, resolution in [64, 4096] and "
+                    "non-negative finite biases");
+            }
+        }
     }
     if (config.enableGBuffer && !config.enableStaticScene) {
         return makeError(
@@ -1383,15 +1400,22 @@ struct RhiSession::Impl {
             if (!envSlot) {
                 return std::unexpected(std::move(envSlot.error()));
             }
+            const VkSamplerCreateInfo shadowCompare =
+                detail::presentation::makeShadowCompareSamplerInfo(physical);
+            auto shadowSlot = descriptorHeap->registerSampler(shadowCompare);
+            if (!shadowSlot) {
+                return std::unexpected(std::move(shadowSlot.error()));
+            }
             if (auto published = descriptorHeap->publishCompleted(true); !published) {
                 return std::unexpected(std::move(published.error()));
             }
             if (descriptorHeap->resolveSampler(*clampSlot) != 1u ||
-                descriptorHeap->resolveSampler(*envSlot) != 2u) {
+                descriptorHeap->resolveSampler(*envSlot) != 2u ||
+                descriptorHeap->resolveSampler(*shadowSlot) != 3u) {
                 return std::unexpected(makeError(
                     core::ErrorCategory::InternalError,
                     core::ErrorStage::Capability,
-                    "Descriptor Heap fixed sampler slots did not map to slots 1 and 2"));
+                    "Descriptor Heap fixed sampler slots did not map to slots 1, 2 and 3"));
             }
             emitEvent(
                 *diagnostics,
@@ -2390,6 +2414,73 @@ std::expected<void, core::Error> RhiSession::setFrameView(const FrameView& view)
     }
     m_impl->presenter->setFrameView(view);
     return {};
+}
+
+std::expected<void, core::Error>
+RhiSession::setDirectionalLighting(const DirectionalLightingState& state) {
+    if (m_impl->closed || !m_impl->presenter || !m_impl->config.deferredLighting) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "deferred lighting is not active"));
+    }
+    const auto allFinite = [](std::span<const float> values) {
+        return std::ranges::all_of(values, [](float value) { return std::isfinite(value); });
+    };
+    if (!allFinite(state.directionWorld) || !allFinite(state.color) ||
+        !std::isfinite(state.intensity) || state.intensity < 0.F ||
+        !std::isfinite(state.normalBias) || state.normalBias < 0.F ||
+        !std::isfinite(state.depthBias) || state.depthBias < 0.F ||
+        !std::isfinite(state.pcfRadiusTexels) || state.pcfRadiusTexels < 0.F ||
+        std::ranges::any_of(state.color, [](float channel) { return channel < 0.F; })) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "directional lighting state contains invalid parameters"));
+    }
+    DirectionalLightingState normalized = state;
+    if (!normalized.legacyViewSpace) {
+        const float dx = normalized.directionWorld[0];
+        const float dy = normalized.directionWorld[1];
+        const float dz = normalized.directionWorld[2];
+        const float lengthSquared = dx * dx + dy * dy + dz * dz;
+        if (!std::isfinite(lengthSquared) || lengthSquared <= 1e-12F) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::InvalidArguments,
+                core::ErrorStage::Validation,
+                "directional lighting direction must be non-zero"));
+        }
+        const float invLength = 1.F / std::sqrt(lengthSquared);
+        normalized.directionWorld = {dx * invLength, dy * invLength, dz * invLength};
+    }
+    if (normalized.shadowEnabled) {
+        if (!m_impl->config.deferredLighting->shadow) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::InvalidState,
+                core::ErrorStage::Capability,
+                "directional shadow mapping is not enabled on this session"));
+        }
+        if (!allFinite(normalized.lightViewProj)) {
+            return std::unexpected(makeError(
+                core::ErrorCategory::InvalidArguments,
+                core::ErrorStage::Validation,
+                "directional shadow lightViewProj contains non-finite values"));
+        }
+    }
+    m_impl->presenter->setDirectionalLighting(normalized);
+    emitEvent(
+        *m_impl->diagnostics,
+        core::LogLevel::Info,
+        "rhi.lighting.directional",
+        std::string("mode=") + (normalized.legacyViewSpace ? "legacy" : "world") +
+            " shadow_pipeline=" + (m_impl->config.deferredLighting->shadow ? "on" : "off") +
+            " shadow_active=" + (normalized.shadowEnabled ? "on" : "off"));
+    return {};
+}
+
+bool RhiSession::shadowMappingEnabled() const noexcept {
+    return !m_impl->closed && m_impl->config.deferredLighting.has_value() &&
+           m_impl->config.deferredLighting->shadow.has_value();
 }
 
 std::uint64_t RhiSession::staticSceneUploadCount() const noexcept {

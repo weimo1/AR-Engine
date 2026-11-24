@@ -183,7 +183,7 @@ T47 已记录 P5 同场景 Set/Heap 验收。后续先准备默认展示场景�
 
 - [x] T51 P4b 纯 CPU 契约与数学：`scene` 可选 `directional_light`（v1 兼容往返与校验）、`FrameView::viewToWorld` 4×4、`render::DirectionalShadow` 完整光相机与 `orthoRH_ZO` 公式及四象限优先级、`PresentationGraph` 阴影 Pass/Sync2 屏障、`platform::WindowInputTracker` 纯 CPU 状态机与 GLFW 窗口接线、`render::FreeCameraController` 零滚转收敛与往返；Debug 与 RelWithDebInfo 各 102/102 零警告通过，DSH 独立评审 33/33 PASS（注：RHI 阴影执行与相机接线分别在 T52/T53 落地，当前仅建立纯 CPU 契约且不改变既有基线行为）。
   - 验收：`render-directional-shadow`、`render-free-camera`、`platform-input-state`（均为纯 CPU）与 `platform-window-input`（桌面窗口环境组）全过。
-- [ ] T52 RHI 方向光阴影深度 Pass（Direct + 按 `maxDrawIndirectCount` 分批的独立全场景 Indirect）、`LightingFrame` 240B 双帧槽 UBO 延迟光照与 PCF 比较采样，同步打通 1.3 Set 与 1.4 Descriptor Heap（271 图像/10 缓冲/4 采样器槽）与 `setDirectionalLight`。
+- [x] T52 RHI 方向光阴影深度 Pass（Direct + 按 `maxDrawIndirectCount` 分批的独立全场景 Indirect）、`LightingFrame` 240B 双帧槽 UBO 延迟光照与 PCF 比较采样，同步打通 1.3 Set 与 1.4 Descriptor Heap（271 图像/10 缓冲/4 采样器槽）与 `setDirectionalLight`：实现独立全场景分批间接阴影命令、240B 双帧槽 UBO 与 3×3 PCF 比较采样、跨 Resize 持久阴影/UBO 资源、Set/Heap 零分叉映射、运行期 `setDirectionalLight`（零重传且未开阴影管线拒 `castShadows==true`）及球体掠射法线黑点回归修复；Debug 与 RelWithDebInfo 各 103/103 零警告通过，DSH 独立评审 `6fe7ddc6` PASS。
   - 验收：更新 `rhi-descriptor-heap-scene-layout`（含分批逻辑），新增 `sample-directional-shadow-parity`（标签 `gpu`）核对 Direct/Indirect、Set/Heap、离屏投影、运行期换光、Resize 与 Debug Sync Validation 零错误。
 - [ ] T53 `RuntimeSession` 输入/相机桥接、`ar_triangle` `--shadows` / `--shadow-resolution` / `--free-camera` 与展示室确定性漫游对照。
   - 验收：`sample-free-camera-shadows`（标签 `gpu`）在展示室/确定性场景核对多步漫游位姿、固定世界点受光、离屏投影持续可见、`staticSceneUploadCount == 1`、Set/Heap 逐帧一致与非法开关拒绝，Debug Sync Validation 零错误。

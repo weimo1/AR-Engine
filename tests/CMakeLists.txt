@@ -157,6 +157,7 @@ set(AR_REQUIRED_RUNTIME_CASES
     sample-camera-view-update
     sample-static-scene-heap-gbuffer
     sample-static-scene-heap-gpu-driven
+    sample-directional-shadow-parity
 )
 
 add_executable(ar_runtime_tests
@@ -187,7 +188,7 @@ endforeach()
 # hosted CI runner) leave them out with `ctest -LE gpu`; keep it in step with gpu_cases in
 # workflow/p0-checks.json.
 set_tests_properties(runtime-system-inspect runtime-system-development PROPERTIES LABELS gpu)
-set_tests_properties(sample-resize sample-camera-view-update sample-static-scene-heap-gbuffer sample-static-scene-heap-gpu-driven PROPERTIES LABELS gpu TIMEOUT 60
+set_tests_properties(sample-resize sample-camera-view-update sample-static-scene-heap-gbuffer sample-static-scene-heap-gpu-driven sample-directional-shadow-parity PROPERTIES LABELS gpu TIMEOUT 60
     ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>;VK_VALIDATION_VALIDATE_SYNC=1")
 
 add_executable(ar_platform_tests platform/test_window.cpp platform/test_window_input.cpp)

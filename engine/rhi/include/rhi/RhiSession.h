@@ -61,12 +61,22 @@ struct StaticIndirectShaders {
     std::uint32_t capacity = UINT32_MAX;
 };
 
+struct ShadowMapConfig {
+    std::vector<std::uint32_t> directVertex;
+    std::vector<std::uint32_t> indirectVertex;
+    std::uint32_t resolution = 2048u;
+    float normalBias = 0.02F;
+    float depthBias = 0.0005F;
+    float pcfRadiusTexels = 1.0F;
+};
+
 struct DeferredLighting {
     std::vector<std::uint32_t> vertex;
     std::vector<std::uint32_t> directFragment;
     std::vector<std::uint32_t> displayFragment;
     float exposureEV = 0.F;
     bool environmentLighting = false;
+    std::optional<ShadowMapConfig> shadow;
 };
 
 struct GBufferProbe {
@@ -208,6 +218,9 @@ public:
         bool verifyRollback = false,
         const StaticIndirectGeometry* indirect = nullptr);
     [[nodiscard]] std::expected<void, core::Error> setFrameView(const FrameView& view);
+    [[nodiscard]] std::expected<void, core::Error>
+    setDirectionalLighting(const DirectionalLightingState& state);
+    [[nodiscard]] bool shadowMappingEnabled() const noexcept;
     [[nodiscard]] std::uint64_t staticSceneUploadCount() const noexcept;
     [[nodiscard]] bool staticIndirectEnabled() const noexcept;
     [[nodiscard]] std::expected<void, core::Error>

@@ -74,8 +74,9 @@ std::expected<void, core::Error> Presentation::open(
     m_lighting = lighting;
     if (m_heapBinding) {
         const auto& plan = m_heapBinding->plan();
-        if (plan.imageStride == 0 || plan.samplerStride == 0 ||
+        if (plan.imageStride == 0 || plan.samplerStride == 0 || plan.bufferStride == 0 ||
             plan.imageRegionSize < kHeapTotalSceneImages * plan.imageStride ||
+            plan.bufferRegionSize < kHeapSceneBufferCount * plan.bufferStride ||
             plan.samplerRegionSize < kHeapSceneSamplerCount * plan.samplerStride ||
             plan.imageStride > (std::numeric_limits<std::uint32_t>::max)() ||
             plan.imageRegionSize > (std::numeric_limits<std::uint32_t>::max)() ||
@@ -129,6 +130,11 @@ std::expected<void, core::Error> Presentation::open(
     }
     if (m_lighting && !m_heapBinding) {
         if (auto created = createLightingLayout(); !created) {
+            return created;
+        }
+    }
+    if (m_lighting) {
+        if (auto created = createPersistentLightingResources(); !created) {
             return created;
         }
     }
@@ -405,9 +411,15 @@ std::expected<void, core::Error> Presentation::record(
     const PresentationGraphPlan* plan) {
     const float inverseAspect = static_cast<float>(m_swapchain.extent.height) /
                                 static_cast<float>(m_swapchain.extent.width);
+    const bool activeShadows = activeShadowPass();
     if (m_staticScene) {
         if (auto updated = m_staticScene->updateFrameView(m_frameIndex, m_frameView, inverseAspect);
             !updated) {
+            return updated;
+        }
+    }
+    if (m_lighting) {
+        if (auto updated = writeLightingFrame(m_frameIndex, activeShadows); !updated) {
             return updated;
         }
     }
@@ -423,6 +435,9 @@ std::expected<void, core::Error> Presentation::record(
         const VkBindHeapInfoEXT samplerBind = m_heapBinding->samplerBindInfo();
         m_heapBinding->dispatch().cmdBindResourceHeap(commands, &resourceBind);
         m_heapBinding->dispatch().cmdBindSamplerHeap(commands, &samplerBind);
+    }
+    if (plan && activeShadows) {
+        recordShadow(commands, image, *plan);
     }
 
     VkImageMemoryBarrier2 barrier{};
@@ -543,6 +558,24 @@ std::expected<void, core::Error> Presentation::record(
         m_staticScene->indirectReadback(commands, m_frameIndex, *plan);
     }
     if (m_lighting && plan) {
+        if (m_lighting->shadow && !activeShadows &&
+            m_shadowStates[m_frameIndex].layout != GraphLayout::ShaderRead) {
+            VkImageMemoryBarrier2 shadowInit{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+            shadowInit.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+            shadowInit.srcAccessMask = VK_ACCESS_2_NONE;
+            shadowInit.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            shadowInit.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            shadowInit.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            shadowInit.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            shadowInit.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            shadowInit.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            shadowInit.image = m_shadowDepth[m_frameIndex].image;
+            shadowInit.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            VkDependencyInfo shadowInitDep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            shadowInitDep.imageMemoryBarrierCount = 1;
+            shadowInitDep.pImageMemoryBarriers = &shadowInit;
+            vkCmdPipelineBarrier2(commands, &shadowInitDep);
+        }
         recordLighting(commands, image, *plan);
     }
 
@@ -656,15 +689,18 @@ Presentation::draw(Frame& frame, bool capture) {
     auto& image = m_swapchain.images[imageIndex];
     auto& slot = m_swapchain.attachments[m_frameIndex];
     std::optional<PresentationGraphPlan> graph;
+    const bool activeShadows = activeShadowPass();
     if (m_planPresentation && m_enableGBuffer) {
         auto states = slot.graphStates;
         states[std::to_underlying(PresentationImage::Output)] = image.state;
+        states[std::to_underlying(PresentationImage::ShadowDepth)] = m_shadowStates[m_frameIndex];
         auto planned = m_planPresentation(
             {states,
              m_lighting != nullptr,
              capture,
              m_environmentReady,
-             m_staticScene && m_staticScene->indirectEnabled()});
+             m_staticScene && m_staticScene->indirectEnabled(),
+             activeShadows});
         if (!planned) {
             return std::unexpected(std::move(planned.error()));
         }
@@ -713,9 +749,18 @@ Presentation::draw(Frame& frame, bool capture) {
 
     if (graph) {
         constexpr auto output = std::to_underlying(PresentationImage::Output);
+        constexpr auto shadowDepth = std::to_underlying(PresentationImage::ShadowDepth);
         image.state = graph->finalStates[output];
+        if (activeShadows) {
+            m_shadowStates[m_frameIndex] = graph->finalStates[shadowDepth];
+        } else if (m_lighting && m_lighting->shadow &&
+                   m_shadowStates[m_frameIndex].layout != GraphLayout::ShaderRead) {
+            m_shadowStates[m_frameIndex] = {
+                GraphLayout::ShaderRead, std::to_underlying(GraphUsage::FragmentSample)};
+        }
         slot.graphStates = graph->finalStates;
         slot.graphStates[output] = {};
+        slot.graphStates[shadowDepth] = {};
     }
 
     VkSwapchainPresentFenceInfoKHR presentFence{};
@@ -917,24 +962,43 @@ std::optional<core::Error> Presentation::close() {
     destroySwapchain();
     if (m_heapBinding) {
         resetEnvironmentHeapDescriptors();
+        resetShadowHeapDescriptors();
     }
     if (m_staticScene) {
         m_staticScene->destroyEnvironment(m_environment);
+        for (auto& attachment : m_shadowDepth) {
+            m_staticScene->destroyAttachment(attachment);
+        }
+        for (auto& frameUbo : m_lightingFrames) {
+            m_staticScene->destroyUniformBuffer(frameUbo);
+        }
     }
-    if (m_pipelineLayout) {
-        vkDestroyPipelineLayout(m_device, std::exchange(m_pipelineLayout, VK_NULL_HANDLE), nullptr);
+    m_shadowStates = {};
+    for (VkPipeline* pipeline : {&m_directShadowPipeline, &m_indirectShadowPipeline}) {
+        if (*pipeline) {
+            vkDestroyPipeline(m_device, std::exchange(*pipeline, VK_NULL_HANDLE), nullptr);
+        }
     }
-    if (m_lightingLayout) {
-        vkDestroyPipelineLayout(m_device, std::exchange(m_lightingLayout, VK_NULL_HANDLE), nullptr);
+    for (VkPipelineLayout* layout :
+         {&m_directShadowLayout,
+          &m_indirectShadowLayout,
+          &m_pipelineLayout,
+          &m_lightingLayout,
+          &m_displayLayout}) {
+        if (*layout) {
+            vkDestroyPipelineLayout(m_device, std::exchange(*layout, VK_NULL_HANDLE), nullptr);
+        }
     }
-    if (m_lightingSetLayout) {
-        vkDestroyDescriptorSetLayout(m_device, std::exchange(m_lightingSetLayout, VK_NULL_HANDLE), nullptr);
+    for (VkDescriptorSetLayout* setLayout : {&m_lightingSetLayout, &m_displaySetLayout}) {
+        if (*setLayout) {
+            vkDestroyDescriptorSetLayout(
+                m_device, std::exchange(*setLayout, VK_NULL_HANDLE), nullptr);
+        }
     }
-    if (m_lightingSampler) {
-        vkDestroySampler(m_device, std::exchange(m_lightingSampler, VK_NULL_HANDLE), nullptr);
-    }
-    if (m_environmentSampler) {
-        vkDestroySampler(m_device, std::exchange(m_environmentSampler, VK_NULL_HANDLE), nullptr);
+    for (VkSampler* sampler : {&m_lightingSampler, &m_environmentSampler, &m_shadowSampler}) {
+        if (*sampler) {
+            vkDestroySampler(m_device, std::exchange(*sampler, VK_NULL_HANDLE), nullptr);
+        }
     }
     return error;
 }

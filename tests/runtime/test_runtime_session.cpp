@@ -24,6 +24,7 @@
 #include "core/Diagnostics.h"
 #include "core/Error.h"
 #include "platform/Window.h"
+#include "render/DirectionalShadow.h"
 #include "render/EnvironmentLighting.h"
 #include "render/PresentationGraph.h"
 #include "render/PresentationSpec.h"
@@ -32,6 +33,7 @@
 #include "runtime/RuntimeConfig.h"
 #include "runtime/RuntimeSession.h"
 #include "vulkan/binding/DescriptorHeapLayout.h"
+#include "vulkan/resources/ShadowIndirectBatching.h"
 
 namespace core = ar::core;
 namespace rhi = ar::rhi;
@@ -1188,16 +1190,35 @@ TEST_CASE(
     "[rhi-descriptor-heap-scene-layout]") {
     using namespace rhi::detail;
 
-    // Scene Heap slot partitions match design.md: 256 scene + 10 per-frame attachments + 3 IBL.
+    // Scene Heap slot partitions match design.md:
+    // 256 scene + 10 per-frame attachments + 3 IBL + 2 shadow depth = 271 images,
+    // 8 indirect + 2 LightingFrame UBO = 10 buffers, 4 samplers.
     STATIC_REQUIRE(kHeapSceneImageLimit == 256u);
     STATIC_REQUIRE(kHeapExternalImageBase == 256u);
     STATIC_REQUIRE(kHeapAttachmentSlotsPerFrame == 5u);
     STATIC_REQUIRE(kHeapFrameSlotCount == 2u);
     STATIC_REQUIRE(kHeapEnvironmentImageBase == 266u);
     STATIC_REQUIRE(kHeapEnvironmentImageCount == 3u);
-    STATIC_REQUIRE(kHeapTotalSceneImages == 269u);
-    STATIC_REQUIRE(kHeapSceneBufferCount == 8u);
+    STATIC_REQUIRE(kHeapShadowImageBase == 269u);
+    STATIC_REQUIRE(kHeapShadowImageCount == 2u);
+    STATIC_REQUIRE(kHeapTotalSceneImages == 271u);
+    STATIC_REQUIRE(kHeapIndirectBufferCount == 8u);
+    STATIC_REQUIRE(kHeapLightingBufferBase == 8u);
+    STATIC_REQUIRE(kHeapLightingBufferCount == 2u);
+    STATIC_REQUIRE(kHeapSceneBufferCount == 10u);
     STATIC_REQUIRE(kHeapSceneSamplerCount == 4u);
+
+    // Shadow indirect batching respects small maxDrawIndirectCount limits without truncation.
+    CHECK(planShadowIndirectBatches(0u, 2u).empty());
+    CHECK(planShadowIndirectBatches(5u, 0u).empty());
+    CHECK(
+        planShadowIndirectBatches(5u, 2u) ==
+        std::vector<ShadowIndirectBatch>{{0u, 2u}, {2u, 2u}, {4u, 1u}});
+    CHECK(
+        planShadowIndirectBatches(4u, 2u) ==
+        std::vector<ShadowIndirectBatch>{{0u, 2u}, {2u, 2u}});
+    CHECK(planShadowIndirectBatches(3u, 10u) == std::vector<ShadowIndirectBatch>{{0u, 3u}});
+    CHECK(planShadowIndirectBatches(1u, 1u) == std::vector<ShadowIndirectBatch>{{0u, 1u}});
 
     rhi::DescriptorHeapLimits limits{};
     limits.samplerHeapAlignment = 128;
@@ -1219,13 +1240,13 @@ TEST_CASE(
     const auto plan = planDescriptorHeaps(limits, sceneCapacity);
     REQUIRE(plan.has_value());
     CHECK(plan->imageStride == 64u);
-    CHECK(plan->imageRegionSize == 269u * 64u);
+    CHECK(plan->imageRegionSize == 271u * 64u);
     CHECK(plan->bufferStride == 32u);
     CHECK(plan->bufferBaseOffset >= plan->imageRegionSize);
     CHECK((plan->bufferBaseOffset % limits.bufferDescriptorAlignment) == 0u);
-    CHECK(plan->bufferRegionSize == 8u * 32u);
+    CHECK(plan->bufferRegionSize == 10u * 32u);
     CHECK(
-        (kHeapEnvironmentImageBase + kHeapEnvironmentImageCount) * plan->imageStride <=
+        (kHeapShadowImageBase + kHeapShadowImageCount) * plan->imageStride <=
         plan->bufferBaseOffset);
     CHECK(plan->resourceReservedOffset >= plan->bufferBaseOffset + plan->bufferRegionSize);
     CHECK((plan->resourceReservedOffset % limits.resourceHeapAlignment) == 0u);
@@ -1366,6 +1387,45 @@ TEST_CASE(
         REQUIRE_FALSE(opened.has_value());
         CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
 
+        // T52: Shadow map config request validation (resolution bounds, SPIR-V, biases).
+        auto badShadowRes = makeBase();
+        badShadowRes.deferredLighting = rhi::DeferredLighting{
+            dummySpirv,
+            dummySpirv,
+            dummySpirv,
+            0.F,
+            false,
+            rhi::ShadowMapConfig{dummySpirv, {}, 32u}};
+        opened = rhi::RhiSession::open(badShadowRes, **diagnostics);
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
+
+        auto badShadowIndirectMissing = makeBase();
+        badShadowIndirectMissing.staticIndirect =
+            rhi::StaticIndirectShaders{{dummySpirv, dummySpirv}, dummySpirv, UINT32_MAX};
+        badShadowIndirectMissing.deferredLighting = rhi::DeferredLighting{
+            dummySpirv,
+            dummySpirv,
+            dummySpirv,
+            0.F,
+            false,
+            rhi::ShadowMapConfig{dummySpirv, {}, 1024u}};
+        opened = rhi::RhiSession::open(badShadowIndirectMissing, **diagnostics);
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
+
+        auto badShadowBias = makeBase();
+        badShadowBias.deferredLighting = rhi::DeferredLighting{
+            dummySpirv,
+            dummySpirv,
+            dummySpirv,
+            0.F,
+            false,
+            rhi::ShadowMapConfig{dummySpirv, {}, 1024u, -0.01F}};
+        opened = rhi::RhiSession::open(badShadowBias, **diagnostics);
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
+
         core::RunSummaryInput summary;
         summary.runId = runId;
         summary.identity = identity;
@@ -1438,8 +1498,13 @@ TEST_CASE(
     {
         auto config = makeHeapWindowConfig(
             "rhi-heap-window-api13", "loader=1.4;device=1.3;devices=1;surface=ok");
-        config.query.deferredLighting =
-            rhi::DeferredLighting{dummySpirv, dummySpirv, dummySpirv, 0.F, true};
+        config.query.deferredLighting = rhi::DeferredLighting{
+            dummySpirv,
+            dummySpirv,
+            dummySpirv,
+            0.F,
+            true,
+            rhi::ShadowMapConfig{dummySpirv, dummySpirv, 1024u}};
         config.query.staticIndirect =
             rhi::StaticIndirectShaders{{dummySpirv, dummySpirv}, dummySpirv, UINT32_MAX};
         auto started = runtime::RuntimeSession::start(config);
@@ -2292,4 +2357,440 @@ TEST_CASE(
 
     runOverflow(false, "set-overflow");
     runOverflow(true, "heap-overflow");
+}
+
+TEST_CASE(
+    "Directional shadow depth pass and LightingFrame UBO match across Direct/Indirect and Set/Heap",
+    "[sample-directional-shadow-parity]") {
+    const auto shader = [](const char* name) {
+        std::ifstream input(
+            std::filesystem::path(AR_TEST_SHADER_DIR) / name, std::ios::binary | std::ios::ate);
+        const auto size = static_cast<std::streamoff>(input.tellg());
+        REQUIRE(size > 0);
+        REQUIRE(size % 4 == 0);
+        std::vector<std::uint32_t> words(static_cast<std::size_t>(size / 4));
+        REQUIRE(input.seekg(0).read(reinterpret_cast<char*>(words.data()), size));
+        return words;
+    };
+
+    const std::string baseRunId = "sample-directional-shadow-parity";
+    const std::filesystem::path runRoot = freshRunDirectory(baseRunId);
+    const std::filesystem::path assetRoot = runRoot / "assets";
+    const std::filesystem::path modelsDir = assetRoot / "models";
+    std::filesystem::create_directories(modelsDir);
+
+    bool supportsHeap = false;
+    {
+        runtime::RuntimeConfig probe;
+        probe.mode = runtime::QueryMode::Inspect;
+        probe.query.loader = rhi::SystemLoader{};
+        probe.query.requestedApi = rhi::makeApiVersion(1, 3);
+        probe.query.device = rhi::ExplicitDeviceIndex{0};
+        probe.diagnostics.outputRoot = runRoot;
+        probe.diagnostics.runId = "probe";
+        auto probed = runtime::RuntimeSession::start(probe);
+        INFO(describeStart(probed));
+        REQUIRE(probed.has_value());
+        const auto& report = (*probed)->report();
+        supportsHeap = report.loaderApi >= rhi::kApiVersion1_4 &&
+                       report.deviceApi >= rhi::kApiVersion1_4 &&
+                       report.descriptorHeap == rhi::DescriptorHeapStatus::Supported;
+        REQUIRE((*probed)->close().resourcesReleased);
+    }
+
+    // Horizontal XZ unit quad (y = 0, +Y normal) used for both the floor receiver and occluders.
+    const std::array<float, 12> positions{
+        -1.F, 0.F, -1.F, 1.F, 0.F, -1.F, 1.F, 0.F, 1.F, -1.F, 0.F, 1.F};
+    const std::array<float, 8> uvs{0.F, 0.F, 1.F, 0.F, 1.F, 1.F, 0.F, 1.F};
+    const std::array<std::uint16_t, 6> indices{0, 3, 2, 0, 2, 1};
+    const std::array<float, 12> normals{0.F, 1.F, 0.F, 0.F, 1.F, 0.F, 0.F, 1.F, 0.F, 0.F, 1.F, 0.F};
+    constexpr std::array<unsigned char, 68> whitePng{
+        137, 80,  78,  71,  13,  10,  26,  10,  0,   0,   0,   13,  73,  72,  68,  82,  0,
+        0,   0,   1,   0,   0,   0,   1,   8,   6,   0,   0,   0,   31,  21,  196, 137, 0,
+        0,   0,   11,  73,  68,  65,  84,  120, 156, 99,  248, 15,  4,   0,   9,   251, 3,
+        253, 251, 94,  107, 43,  0,   0,   0,   0,   73,  69,  78,  68,  174, 66,  96,  130};
+
+    {
+        std::ofstream bin(modelsDir / "quad_xz.bin", std::ios::binary);
+        bin.write(
+            reinterpret_cast<const char*>(positions.data()),
+            static_cast<std::streamsize>(sizeof(positions)));
+        bin.write(
+            reinterpret_cast<const char*>(uvs.data()), static_cast<std::streamsize>(sizeof(uvs)));
+        bin.write(
+            reinterpret_cast<const char*>(indices.data()),
+            static_cast<std::streamsize>(sizeof(indices)));
+        bin.write(
+            reinterpret_cast<const char*>(normals.data()),
+            static_cast<std::streamsize>(sizeof(normals)));
+        REQUIRE(bin.good());
+    }
+    {
+        std::ofstream img(modelsDir / "white.png", std::ios::binary);
+        img.write(
+            reinterpret_cast<const char*>(whitePng.data()),
+            static_cast<std::streamsize>(sizeof(whitePng)));
+        REQUIRE(img.good());
+    }
+    const auto writeGltf = [&](const char* fileName, const char* baseColorJson) {
+        std::ofstream gltf(modelsDir / fileName, std::ios::binary);
+        gltf << R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],)"
+             << R"("nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":)"
+             << R"({"POSITION":0,"TEXCOORD_0":1,"NORMAL":3},"indices":2,"material":0,"mode":4}]}],)"
+             << R"("buffers":[{"uri":"quad_xz.bin","byteLength":140}],)"
+             << R"("bufferViews":[{"buffer":0,"byteLength":48},)"
+             << R"({"buffer":0,"byteOffset":48,"byteLength":32},)"
+             << R"({"buffer":0,"byteOffset":80,"byteLength":12},)"
+             << R"({"buffer":0,"byteOffset":92,"byteLength":48}],)"
+             << R"("accessors":[{"bufferView":0,"byteOffset":0,"componentType":5126,"count":4,)"
+             << R"("type":"VEC3","min":[-1,0,-1],"max":[1,0,1]},)"
+             << R"({"bufferView":1,"byteOffset":0,"componentType":5126,"count":4,"type":"VEC2"},)"
+             << R"({"bufferView":2,"byteOffset":0,"componentType":5123,"count":6,"type":"SCALAR"},)"
+             << R"({"bufferView":3,"byteOffset":0,"componentType":5126,"count":4,"type":"VEC3"}],)"
+             << R"("materials":[{"pbrMetallicRoughness":{"baseColorFactor":)" << baseColorJson
+             << R"(,"baseColorTexture":{"index":0},"metallicFactor":0.0,"roughnessFactor":0.9}}],)"
+             << R"("textures":[{"source":0}],"images":[{"uri":"white.png"}]})";
+        REQUIRE(gltf.good());
+    };
+    writeGltf("floor.gltf", "[0.85,0.85,0.85,1.0]");
+    writeGltf("occluder.gltf", "[0.25,0.45,0.85,1.0]");
+
+    // Deterministic top-down scene:
+    // - Camera at (0, 6, 0) looking straight down (-Y), fov_y = 90 deg.
+    // - All 4 probes sit at u = 0.5 (x = 0) so they hit the exact same floor points across resize:
+    //   Probe 0 (0.5, 0.46) -> (0, 0, -0.48): lit under D1, shadowed by obj 2 under D2.
+    //   Probe 1 (0.5, 0.29) -> (0, 0, -2.52): shadowed by visible obj 2 under D1, lit under D2.
+    //   Probe 2 (0.5, 0.71) -> (0, 0, +2.52): shadowed by culled obj 3 under D1, lit under D2.
+    //   Probe 3 (0.5, 0.12) -> (0, 0, -4.56): always lit under both D1 and D2.
+    const std::filesystem::path scenePath = runRoot / "shadow_scene.json";
+    const double invSqrt2 = std::sqrt(0.5);
+    const ar::render::DirectionalLight lightD1{{-1.F, -1.F, 0.F}, {1.F, 1.F, 1.F}, 6.0F, true};
+    const ar::render::DirectionalLight lightD2{{-1.F, -1.F, 1.F}, {1.F, 1.F, 1.F}, 6.0F, true};
+    const ar::render::DirectionalLight lightD1NoShadow{
+        {-1.F, -1.F, 0.F}, {1.F, 1.F, 1.F}, 6.0F, false};
+    {
+        std::ofstream scene(scenePath, std::ios::binary);
+        scene << Json{
+            {"version", 1},
+            {"camera",
+             {{"position", {0.0, 6.0, 0.0}},
+              {"orientation", {-invSqrt2, 0.0, 0.0, invSqrt2}},
+              {"fov_y", std::numbers::pi_v<double> * 0.5},
+              {"near", 0.1},
+              {"far", 50.0}}},
+            {"directional_light",
+             {{"direction", {-1.0, -1.0, 0.0}},
+              {"color", {1.0, 1.0, 1.0}},
+              {"intensity", 6.0},
+              {"cast_shadows", true}}},
+            {"objects",
+             {{{"id", 1},
+               {"asset", "models/floor.gltf"},
+               {"position", {0.0, 0.0, 0.0}},
+               {"rotation", {0.0, 0.0, 0.0, 1.0}},
+               {"scale", {12.0, 1.0, 8.0}}},
+              {{"id", 2},
+               {"asset", "models/occluder.gltf"},
+               {"position", {2.0, 2.0, -2.5}},
+               {"rotation", {0.0, 0.0, 0.0, 1.0}},
+               {"scale", {1.0, 1.0, 1.0}}},
+              {{"id", 3},
+               {"asset", "models/occluder.gltf"},
+               {"position", {5.0, 5.0, 2.5}},
+               {"rotation", {0.0, 0.0, 0.0, 1.0}},
+               {"scale", {1.2, 1.0, 1.2}}}}}};
+        REQUIRE(scene.good());
+    }
+
+    const rhi::TriangleShaders directShaders{
+        shader("gbuffer.vert.spv"), shader("gbuffer_bindless.frag.spv")};
+    const rhi::StaticIndirectShaders indirectShaders{
+        {shader("static_indirect.vert.spv"), shader("static_indirect.frag.spv")},
+        shader("static_indirect.comp.spv"),
+        UINT32_MAX};
+    const rhi::ShadowMapConfig shadowCfg{
+        shader("shadow_direct.vert.spv"), shader("shadow_indirect.vert.spv"), 1024u};
+    const rhi::DeferredLighting shadowLighting{
+        shader("fullscreen.vert.spv"),
+        shader("deferred_shadow.frag.spv"),
+        shader("display_sdr.frag.spv"),
+        0.F,
+        false,
+        shadowCfg};
+    const rhi::DeferredLighting noShadowLighting{
+        shader("fullscreen.vert.spv"),
+        shader("deferred_direct.frag.spv"),
+        shader("display_sdr.frag.spv"),
+        0.F,
+        false,
+        std::nullopt};
+
+    auto shadowSpec = ar::render::buildDeferredPresentationSpec(0.F);
+    shadowSpec.probes.normalizedCoords = {
+        {0.5F, 0.46F}, {0.5F, 0.29F}, {0.5F, 0.71F}, {0.5F, 0.12F}};
+
+    const auto makeConfig =
+        [&](bool heapMode, bool indirectMode, bool enableShadows, const std::string& runId) {
+            runtime::RuntimeConfig config;
+            config.mode =
+                heapMode ? runtime::QueryMode::RequireProduct : runtime::QueryMode::Development;
+            config.query.loader = rhi::SystemLoader{};
+            config.query.device = rhi::ExplicitDeviceIndex{0};
+            config.query.requestedApi = heapMode ? rhi::kApiVersion1_4 : rhi::makeApiVersion(1, 3);
+            config.query.createGraphicsDevice = true;
+            config.query.enableScreenshot = true;
+            config.query.enableSetBinding = !heapMode;
+            config.query.enableDescriptorHeap = heapMode;
+            config.query.enableGBuffer = true;
+            config.staticAssetRoot = assetRoot;
+            config.query.triangleShaders = directShaders;
+            config.query.presentationSpec = shadowSpec;
+            config.query.deferredLighting = enableShadows ? shadowLighting : noShadowLighting;
+            if (indirectMode) {
+                config.query.staticIndirect = indirectShaders;
+            }
+            config.window.emplace();
+            config.window->width = 320;
+            config.window->height = 180;
+            config.window->visible = false;
+            config.window->title =
+                "AR shadow parity " + runId + " " + std::to_string(GetCurrentProcessId());
+            config.diagnostics.runId = runId;
+            config.diagnostics.outputRoot = runRoot;
+            return config;
+        };
+
+    const auto hdrLum = [](const rhi::GBufferProbe& probe) {
+        REQUIRE(probe.hdrColor.has_value());
+        return ((*probe.hdrColor)[0] + (*probe.hdrColor)[1] + (*probe.hdrColor)[2]) / 3.F;
+    };
+
+    const auto verifyEvents = [&](const std::string& runId, bool heapMode) {
+        std::ifstream events(runRoot / runId / "events.jsonl");
+        REQUIRE(events);
+        bool sawValidationEnabled = false;
+        bool sawHeapReady = false;
+        bool sawSetReady = false;
+        bool sawDirectionalLog = false;
+        for (std::string line; std::getline(events, line);) {
+            const auto id = Json::parse(line).at("event_id").get<std::string>();
+            CHECK(id != "rhi.validation.error");
+            sawValidationEnabled |= (id == "rhi.validation.enabled");
+            sawHeapReady |= (id == "rhi.binding.heap.ready");
+            sawSetReady |= (id == "rhi.binding.set.ready");
+            sawDirectionalLog |= (id == "rhi.lighting.directional");
+        }
+#ifdef _DEBUG
+        CHECK(sawValidationEnabled);
+#else
+        (void)sawValidationEnabled;
+#endif
+        CHECK(sawHeapReady == heapMode);
+        CHECK(sawSetReady == !heapMode);
+        CHECK(sawDirectionalLog);
+    };
+
+    // 1. No-shadow pipeline baseline: rejects castShadows == true (InvalidState), allows false.
+    rhi::FrameScreenshot noShadowReference;
+    {
+        const auto config = makeConfig(false, false, false, "set-no-shadow-ref");
+        auto session = runtime::RuntimeSession::start(config);
+        INFO(describeStart(session));
+        REQUIRE(session.has_value());
+        REQUIRE((*session)->openStaticScene(scenePath));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+
+        const auto rejectedCast = (*session)->setDirectionalLight(lightD1);
+        REQUIRE_FALSE(rejectedCast.has_value());
+        CHECK(rejectedCast.error().category == core::ErrorCategory::InvalidState);
+
+        const auto rejectedZeroDir =
+            (*session)->setDirectionalLight({{0.F, 0.F, 0.F}, {1.F, 1.F, 1.F}, 6.0F, false});
+        REQUIRE_FALSE(rejectedZeroDir.has_value());
+        CHECK(rejectedZeroDir.error().category == core::ErrorCategory::InvalidArguments);
+
+        REQUIRE((*session)->setDirectionalLight(lightD1NoShadow));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+
+        auto status = (*session)->presentFrame(&noShadowReference);
+        INFO((status ? "" : status.error().message));
+        REQUIRE(status.has_value());
+        REQUIRE(*status == runtime::FrameStatus::Presented);
+        REQUIRE(noShadowReference.gbuffer.size() == 4);
+        for (const auto& probe : noShadowReference.gbuffer) {
+            CHECK(hdrLum(probe) > 0.6F);
+        }
+
+        const auto closed = (*session)->close();
+        REQUIRE(closed.result == core::ResultKind::Success);
+        REQUIRE(closed.resourcesReleased);
+        verifyEvents("set-no-shadow-ref", false);
+    }
+
+    struct ShadowRun {
+        rhi::FrameScreenshot d1Slot0;
+        rhi::FrameScreenshot d1Slot1;
+        rhi::FrameScreenshot d2Shifted;
+        rhi::FrameScreenshot d1Disabled;
+        rhi::FrameScreenshot resized1;
+        rhi::FrameScreenshot resized2;
+    };
+
+    const auto runShadowPath =
+        [&](bool heapMode, bool indirectMode, const std::string& runId) -> ShadowRun {
+        const auto config = makeConfig(heapMode, indirectMode, true, runId);
+        auto session = runtime::RuntimeSession::start(config);
+        INFO(describeStart(session));
+        REQUIRE(session.has_value());
+        REQUIRE((*session)->openStaticScene(scenePath));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+
+        const std::wstring title(config.window->title.begin(), config.window->title.end());
+        const HWND window = FindWindowW(nullptr, title.c_str());
+        REQUIRE(window != nullptr);
+
+        const auto capture = [&](rhi::FrameScreenshot& out) {
+            auto status = (*session)->presentFrame(&out);
+            INFO((status ? "" : status.error().message));
+            REQUIRE(status.has_value());
+            REQUIRE(*status == runtime::FrameStatus::Presented);
+            REQUIRE(out.gbuffer.size() == 4);
+            for (const auto& probe : out.gbuffer) {
+                REQUIRE(probe.hdrColor.has_value());
+            }
+            if (indirectMode) {
+                REQUIRE(out.indirect.has_value());
+            }
+        };
+
+        ShadowRun out;
+        // Initial D1 light (shadows ON) across both frame slots.
+        capture(out.d1Slot0);
+        capture(out.d1Slot1);
+        CHECK(out.d1Slot1.rgba == out.d1Slot0.rgba);
+        CHECK(hdrLum(out.d1Slot0.gbuffer[0]) > 0.6F);
+        CHECK(hdrLum(out.d1Slot0.gbuffer[1]) < 0.05F); // In-frustum occluder (ID 2) shadow
+        CHECK(hdrLum(out.d1Slot0.gbuffer[2]) < 0.05F); // Off-frustum occluder (ID 3) shadow
+        CHECK(hdrLum(out.d1Slot0.gbuffer[3]) > 0.6F);
+        if (indirectMode) {
+            // Off-frustum object 3 is culled from main view yet still casts shadow onto Probe 2.
+            CHECK(out.d1Slot0.indirect->visible == 2u);
+            CHECK(out.d1Slot0.indirect->drawnIds == std::vector<std::uint64_t>{1u, 2u});
+        }
+
+        // Runtime light shift D1 -> D2 (zero scene re-upload): Probe 0 enters shadow; 1 & 2 lit.
+        REQUIRE((*session)->setDirectionalLight(lightD2));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+        capture(out.d2Shifted);
+        CHECK(hdrLum(out.d2Shifted.gbuffer[0]) < 0.05F);
+        CHECK(hdrLum(out.d2Shifted.gbuffer[1]) > 0.5F);
+        CHECK(hdrLum(out.d2Shifted.gbuffer[2]) > 0.5F);
+        CHECK(hdrLum(out.d2Shifted.gbuffer[3]) > 0.5F);
+
+        // Runtime disable shadows (castShadows = false): all 4 probes lit, matches no-shadow ref.
+        REQUIRE((*session)->setDirectionalLight(lightD1NoShadow));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+        capture(out.d1Disabled);
+        for (std::size_t i = 0; i < 4; ++i) {
+            CHECK(hdrLum(out.d1Disabled.gbuffer[i]) > 0.6F);
+            for (std::size_t c = 0; c < 3; ++c) {
+                CHECK(
+                    (*out.d1Disabled.gbuffer[i].hdrColor)[c] ==
+                    Catch::Approx((*noShadowReference.gbuffer[i].hdrColor)[c]).margin(2e-3F));
+            }
+        }
+
+        // Re-enable D1 shadows and resize swapchain: shadows stay stable across both frame slots.
+        REQUIRE((*session)->setDirectionalLight(lightD1));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+        REQUIRE(SetWindowPos(
+            window, nullptr, 0, 0, 460, 280, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE));
+        RECT client{};
+        REQUIRE(GetClientRect(window, &client));
+        capture(out.resized1);
+        capture(out.resized2);
+        CHECK(out.resized1.width == static_cast<std::uint32_t>(client.right));
+        CHECK(out.resized1.height == static_cast<std::uint32_t>(client.bottom));
+        CHECK(out.resized1.width != out.d1Slot0.width);
+        CHECK(out.resized1.height != out.d1Slot0.height);
+        CHECK(out.resized2.rgba == out.resized1.rgba);
+        CHECK(hdrLum(out.resized1.gbuffer[0]) > 0.6F);
+        CHECK(hdrLum(out.resized1.gbuffer[1]) < 0.05F);
+        CHECK(hdrLum(out.resized1.gbuffer[2]) < 0.05F);
+        CHECK(hdrLum(out.resized1.gbuffer[3]) > 0.6F);
+
+        const auto closed = (*session)->close();
+        REQUIRE(closed.result == core::ResultKind::Success);
+        REQUIRE(closed.resourcesReleased);
+        CHECK((*session)->staticSceneUploadCount() == 1);
+        verifyEvents(runId, heapMode);
+        return out;
+    };
+
+    const auto checkExactParity =
+        [](const rhi::FrameScreenshot& expected, const rhi::FrameScreenshot& actual) {
+            CHECK(actual.width == expected.width);
+            CHECK(actual.height == expected.height);
+            CHECK(actual.rgba == expected.rgba);
+            REQUIRE(actual.gbuffer.size() == expected.gbuffer.size());
+            for (std::size_t i = 0; i < expected.gbuffer.size(); ++i) {
+                REQUIRE(expected.gbuffer[i].hdrColor.has_value());
+                REQUIRE(actual.gbuffer[i].hdrColor.has_value());
+                for (std::size_t c = 0; c < 3; ++c) {
+                    CHECK(
+                        (*actual.gbuffer[i].hdrColor)[c] ==
+                        Catch::Approx((*expected.gbuffer[i].hdrColor)[c]).margin(2e-3F));
+                }
+            }
+            if (expected.indirect.has_value() && actual.indirect.has_value()) {
+                CHECK(actual.indirect->visible == expected.indirect->visible);
+                CHECK(actual.indirect->drawnIds == expected.indirect->drawnIds);
+            }
+        };
+
+    const auto checkNearParity =
+        [](const rhi::FrameScreenshot& expected, const rhi::FrameScreenshot& actual) {
+            CHECK(actual.width == expected.width);
+            CHECK(actual.height == expected.height);
+            REQUIRE(actual.rgba.size() == expected.rgba.size());
+            int maxDiff = 0;
+            for (std::size_t i = 0; i < expected.rgba.size(); ++i) {
+                const int diff = std::abs(
+                    static_cast<int>(actual.rgba[i]) - static_cast<int>(expected.rgba[i]));
+                maxDiff = (std::max)(maxDiff, diff);
+            }
+            CHECK(maxDiff <= 1);
+            REQUIRE(actual.gbuffer.size() == expected.gbuffer.size());
+            for (std::size_t i = 0; i < expected.gbuffer.size(); ++i) {
+                for (std::size_t c = 0; c < 3; ++c) {
+                    CHECK(
+                        (*actual.gbuffer[i].hdrColor)[c] ==
+                        Catch::Approx((*expected.gbuffer[i].hdrColor)[c]).margin(2e-3F));
+                }
+            }
+        };
+
+    const ShadowRun directSet = runShadowPath(false, false, "set-direct");
+    const ShadowRun indirectSet = runShadowPath(false, true, "set-indirect");
+    checkNearParity(directSet.d1Slot0, indirectSet.d1Slot0);
+    checkNearParity(directSet.d2Shifted, indirectSet.d2Shifted);
+    checkNearParity(directSet.d1Disabled, indirectSet.d1Disabled);
+    checkNearParity(directSet.resized1, indirectSet.resized1);
+
+    if (supportsHeap) {
+        const ShadowRun directHeap = runShadowPath(true, false, "heap-direct");
+        const ShadowRun indirectHeap = runShadowPath(true, true, "heap-indirect");
+        checkExactParity(directSet.d1Slot0, directHeap.d1Slot0);
+        checkExactParity(directSet.d1Slot1, directHeap.d1Slot1);
+        checkExactParity(directSet.d2Shifted, directHeap.d2Shifted);
+        checkExactParity(directSet.d1Disabled, directHeap.d1Disabled);
+        checkExactParity(directSet.resized1, directHeap.resized1);
+        checkExactParity(directSet.resized2, directHeap.resized2);
+        checkExactParity(indirectSet.d1Slot0, indirectHeap.d1Slot0);
+        checkExactParity(indirectSet.d1Slot1, indirectHeap.d1Slot1);
+        checkExactParity(indirectSet.d2Shifted, indirectHeap.d2Shifted);
+        checkExactParity(indirectSet.d1Disabled, indirectHeap.d1Disabled);
+        checkExactParity(indirectSet.resized1, indirectHeap.resized1);
+        checkExactParity(indirectSet.resized2, indirectHeap.resized2);
+    }
 }

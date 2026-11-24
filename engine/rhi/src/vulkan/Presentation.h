@@ -58,6 +58,9 @@ public:
     void setFrameView(const FrameView& view) noexcept {
         m_frameView = view;
     }
+    void setDirectionalLighting(const DirectionalLightingState& state) noexcept {
+        m_lightingState = state;
+    }
     std::expected<void, core::Error>
     publishEnvironment(const EnvironmentUpload& upload, bool verifyRollback);
     std::expected<PresentStatus, core::Error>
@@ -119,6 +122,20 @@ private:
     enum class DrawStatus { Presented, Suboptimal, OutOfDate };
     enum class PipelineKind { DirectGeometry, IndirectGeometry, DeferredLighting, Display };
 
+    struct alignas(16) LightingFrameGpu {
+        std::array<float, 16> inverseProjection{};
+        std::array<float, 16> viewToWorld{};
+        std::array<float, 16> lightViewProj{};
+        std::array<float, 4> lightDirView{};
+        std::array<float, 4> lightColor{};
+        std::array<float, 4> shadowParams{};
+    };
+
+    [[nodiscard]] bool activeShadowPass() const noexcept {
+        return m_lighting != nullptr && m_lighting->shadow.has_value() &&
+               m_lightingState.shadowEnabled;
+    }
+
     struct Fence {
         VkFence handle = VK_NULL_HANDLE;
         bool pending = false;
@@ -145,13 +162,25 @@ private:
         VkPipeline& output,
         PipelineKind kind = PipelineKind::DirectGeometry);
     std::expected<void, core::Error> createLightingLayout();
+    std::expected<void, core::Error> createPersistentLightingResources();
+    std::expected<void, core::Error> createShadowPipeline(
+        bool indirect,
+        const std::vector<std::uint32_t>& vertexCode,
+        VkPipelineLayout layout,
+        VkPipeline& output);
     std::expected<void, core::Error> createLightingResources(VkImageUsageFlags usage);
     std::expected<void, core::Error> writeAttachmentHeapDescriptors();
     void resetAttachmentHeapDescriptors() noexcept;
     std::expected<void, core::Error>
     writeEnvironmentHeapDescriptors(const StaticSceneDraw::Environment& environment);
     void resetEnvironmentHeapDescriptors() noexcept;
+    std::expected<void, core::Error> writeShadowHeapDescriptors();
+    void resetShadowHeapDescriptors() noexcept;
     void writeEnvironmentDescriptors() const;
+    std::expected<void, core::Error>
+    writeLightingFrame(std::size_t frameIndex, bool activeShadows);
+    void recordShadow(
+        VkCommandBuffer commands, const Image& output, const PresentationGraphPlan& plan) const;
     void recordLighting(
         VkCommandBuffer commands, const Image& output, const PresentationGraphPlan& plan) const;
     std::expected<void, core::Error> createReadback(VkPhysicalDevice physical, Readback& readback);
@@ -189,9 +218,20 @@ private:
     const DeferredLighting* m_lighting = nullptr;
     VkSampler m_lightingSampler = VK_NULL_HANDLE;
     VkSampler m_environmentSampler = VK_NULL_HANDLE;
+    VkSampler m_shadowSampler = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_lightingSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_lightingLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_displaySetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_displayLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_directShadowLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_indirectShadowLayout = VK_NULL_HANDLE;
+    VkPipeline m_directShadowPipeline = VK_NULL_HANDLE;
+    VkPipeline m_indirectShadowPipeline = VK_NULL_HANDLE;
+    std::array<StaticSceneDraw::UniformBuffer, 2> m_lightingFrames{};
+    std::array<StaticSceneDraw::Attachment, 2> m_shadowDepth{};
+    std::array<PresentationImageState, 2> m_shadowStates{};
     FrameView m_frameView{};
+    DirectionalLightingState m_lightingState{};
     StaticSceneDraw::Environment m_environment{};
     bool m_environmentReady = false;
     VkExtent2D m_requestedExtent{};

@@ -13,6 +13,7 @@
 
 #include "StaticMeshGeometry.h"
 #include "assets/StaticAssetCache.h"
+#include "render/DirectionalShadow.h"
 #include "render/StaticSceneDrawData.h"
 #include "rhi/RhiSession.h"
 
@@ -85,6 +86,11 @@ buildFrameView(const StaticCamera& camera, bool enableGBuffer) {
 
 std::expected<void, core::Error> publishStaticScene(
     rhi::RhiSession& rhi, const StaticRenderInput& input, bool verifyRollback, bool enableGBuffer) {
+    if (input.directionalLight) {
+        if (auto valid = validateDirectionalLight(*input.directionalLight); !valid) {
+            return valid;
+        }
+    }
     auto frameView = buildFrameView(input.camera, enableGBuffer);
     if (!frameView) {
         return std::unexpected(std::move(frameView.error()));

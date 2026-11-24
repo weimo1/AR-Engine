@@ -60,6 +60,28 @@ inline core::Error unavailable(const char* message) {
     return {core::ErrorCategory::QueryFailed, core::ErrorStage::Capability, message, std::nullopt};
 }
 
+inline VkSamplerCreateInfo makeShadowCompareSamplerInfo(VkPhysicalDevice physical) noexcept {
+    VkFormatProperties properties{};
+    vkGetPhysicalDeviceFormatProperties(physical, VK_FORMAT_D32_SFLOAT, &properties);
+    const VkFilter filter =
+        (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0
+            ? VK_FILTER_LINEAR
+            : VK_FILTER_NEAREST;
+    VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    sampler.magFilter = filter;
+    sampler.minFilter = filter;
+    sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    sampler.compareEnable = VK_TRUE;
+    sampler.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    sampler.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    sampler.minLod = 0.F;
+    sampler.maxLod = 0.F;
+    return sampler;
+}
+
 template <class Handle, class Info, class Create>
 std::expected<void, core::Error>
 create(VkDevice device, Handle& handle, const Info& info, Create function, const char* name) {

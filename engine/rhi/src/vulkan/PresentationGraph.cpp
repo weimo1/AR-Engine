@@ -68,7 +68,7 @@ void Presentation::recordGraphBarriers(
         slot.gbuffer[2].image,
         slot.depth.image,
         slot.hdr.image,
-        VkImage{VK_NULL_HANDLE}};
+        m_shadowDepth[m_frameIndex].image};
     static_assert(images.size() == std::to_underlying(PresentationImage::Count));
     std::array<VkImageMemoryBarrier2, images.size()> barriers{};
     std::uint32_t count = 0;
@@ -115,7 +115,7 @@ bool Presentation::validGraphPlan(const PresentationGraphPlan& plan, bool captur
         slot.gbuffer[2].image != VK_NULL_HANDLE,
         slot.depth.image != VK_NULL_HANDLE,
         slot.hdr.image != VK_NULL_HANDLE,
-        false};
+        m_shadowDepth[m_frameIndex].image != VK_NULL_HANDLE};
     static_assert(bound.size() == std::to_underlying(PresentationImage::Count));
     for (const auto& pass : plan.barriers) {
         std::array<bool, bound.size()> seen{};

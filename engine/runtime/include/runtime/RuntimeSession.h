@@ -54,6 +54,8 @@ public:
     [[nodiscard]] std::expected<void, core::Error>
     openStaticScene(const std::filesystem::path& source, bool verifyRollback = false);
     [[nodiscard]] std::expected<void, core::Error> setCamera(const render::StaticCamera& camera);
+    [[nodiscard]] std::expected<void, core::Error>
+    setDirectionalLight(const render::DirectionalLight& light);
     [[nodiscard]] std::uint64_t staticSceneUploadCount() const noexcept;
     [[nodiscard]] std::expected<void, core::Error>
     saveStaticScene(const std::filesystem::path& destination) const;

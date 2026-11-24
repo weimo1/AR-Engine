@@ -17,9 +17,16 @@ inline constexpr std::uint32_t kHeapFrameSlotCount = 2;
 inline constexpr std::uint32_t kHeapEnvironmentImageBase =
     kHeapExternalImageBase + kHeapFrameSlotCount * kHeapAttachmentSlotsPerFrame;
 inline constexpr std::uint32_t kHeapEnvironmentImageCount = 3;
-inline constexpr std::uint32_t kHeapTotalSceneImages =
+inline constexpr std::uint32_t kHeapShadowImageBase =
     kHeapEnvironmentImageBase + kHeapEnvironmentImageCount;
-inline constexpr std::uint32_t kHeapSceneBufferCount = 8;
+inline constexpr std::uint32_t kHeapShadowImageCount = kHeapFrameSlotCount;
+inline constexpr std::uint32_t kHeapTotalSceneImages =
+    kHeapShadowImageBase + kHeapShadowImageCount;
+inline constexpr std::uint32_t kHeapIndirectBufferCount = 8;
+inline constexpr std::uint32_t kHeapLightingBufferBase = kHeapIndirectBufferCount;
+inline constexpr std::uint32_t kHeapLightingBufferCount = kHeapFrameSlotCount;
+inline constexpr std::uint32_t kHeapSceneBufferCount =
+    kHeapLightingBufferBase + kHeapLightingBufferCount;
 inline constexpr std::uint32_t kHeapSceneSamplerCount = 4;
 
 struct DescriptorHeapCapacity {

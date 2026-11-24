@@ -26,6 +26,11 @@ public:
         VmaAllocation_T* allocation = nullptr;
         VkImageView view = VK_NULL_HANDLE;
     };
+    struct UniformBuffer {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VmaAllocation_T* allocation = nullptr;
+        VkDeviceAddress address = 0;
+    };
     struct Draw {
         std::shared_ptr<Mesh> mesh;
         StaticInstanceDraw instance;
@@ -45,6 +50,10 @@ public:
         std::uint32_t mipCount = 1,
         bool cube = false);
     void destroyAttachment(Attachment& attachment) noexcept;
+    std::expected<UniformBuffer, core::Error> createUniformBuffer(std::size_t bytes);
+    std::expected<void, core::Error>
+    writeUniformBuffer(const UniformBuffer& buffer, std::span<const std::byte> data);
+    void destroyUniformBuffer(UniformBuffer& buffer) noexcept;
 
     using Environment = std::array<Attachment, 3>;
     std::expected<Environment, core::Error>
@@ -64,6 +73,11 @@ public:
         VkPipelineLayout layout,
         const FrameView& view,
         float inverseAspect,
+        std::size_t frame) const;
+    void recordShadow(
+        VkCommandBuffer commands,
+        VkPipelineLayout layout,
+        const std::array<float, 16>& lightViewProj,
         std::size_t frame) const;
     void
     cull(VkCommandBuffer commands, std::size_t frame, const PresentationGraphPlan& graph) const;

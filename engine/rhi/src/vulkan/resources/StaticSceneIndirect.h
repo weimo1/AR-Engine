@@ -34,7 +34,7 @@ public:
         ~Scene();
         Scene(const Scene&) = delete;
         StaticSceneIndirect& owner;
-        Buffer vertices, indices, instances, materials;
+        Buffer vertices, indices, instances, materials, shadowCommands;
         VkDeviceAddress instancesAddress = 0;
         VkDeviceAddress materialsAddress = 0;
         struct Frame {
@@ -48,6 +48,7 @@ public:
         VkDescriptorPool pool = VK_NULL_HANDLE;
         std::vector<std::uint64_t> objectIds;
         std::uint32_t capacity = 0;
+        std::uint32_t shadowInstanceCount = 0;
     };
 
     explicit StaticSceneIndirect(
@@ -77,6 +78,12 @@ public:
         std::size_t slot,
         VkPipelineLayout layout,
         VkDescriptorSet textures) const;
+    void drawShadow(
+        const Scene& scene,
+        VkCommandBuffer command,
+        std::size_t slot,
+        VkPipelineLayout layout,
+        const std::array<float, 16>& lightViewProj) const;
     void barrier(
         const Scene& scene,
         VkCommandBuffer command,

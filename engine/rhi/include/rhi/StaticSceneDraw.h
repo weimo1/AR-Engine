@@ -37,6 +37,21 @@ struct FrameView {
     std::array<float, 16> viewToWorld{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 };
 
+struct DirectionalLightingState {
+    // True preserves legacy view-space headlamp L_view = (0, 0, 1) for existing non-shadow scenes.
+    bool legacyViewSpace = true;
+    // Unit world-space propagation direction (from light toward scene), used when !legacyViewSpace.
+    std::array<float, 3> directionWorld{0.F, 0.F, -1.F};
+    std::array<float, 3> color{1.F, 1.F, 1.F};
+    float intensity = 6.0F;
+    bool shadowEnabled = false;
+    // Column-major lightProj * lightView, valid when shadowEnabled is true.
+    std::array<float, 16> lightViewProj{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    float normalBias = 0.02F;
+    float depthBias = 0.0005F;
+    float pcfRadiusTexels = 1.0F;
+};
+
 struct StaticInstanceDraw {
     std::uint32_t meshIndex;
     // Column-major world-space model transform.
