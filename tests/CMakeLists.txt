@@ -343,6 +343,13 @@ set_tests_properties(sample-ibl-probes PROPERTIES
     LABELS "gpu"
     ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1")
 
+add_test(NAME sample-descriptor-heap-scene-parity
+    COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_descriptor_heap_scene.py"
+        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>")
+set_tests_properties(sample-descriptor-heap-scene-parity PROPERTIES
+    LABELS "gpu" TIMEOUT 60
+    ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1")
+
 add_executable(ar_render_tests render/test_cull_reference.cpp render/test_environment_lighting.cpp render/test_frame_view.cpp render/test_presentation_spec.cpp render/test_render_graph.cpp render/test_static_scene_draw_data.cpp)
 target_link_libraries(ar_render_tests PRIVATE ar_render ar_assets Catch2::Catch2WithMain)
 add_test(NAME render-culling-reference COMMAND ar_render_tests "[render-culling-reference]")

@@ -158,7 +158,7 @@
   - 验收：`rhi-descriptor-heap-scene-layout`（CPU，含布局、版本不足 vs. 1.4 缺 Heap 能力失败映射与窗口资源清理）与 `sample-static-scene-heap-gbuffer`（标签 `gpu`）验证 UBO/内部附件槽/多固定 Sampler 布局、`RequireProduct` 窗口呈现、同场景 Set vs. Heap GBuffer 探针与 PNG 一致、`setCamera` 零重传（`staticSceneUploadCount == 1`）及 Debug Sync Validation 零错误。
 - [x] T45 GPU-Driven 间接绘制与延迟光照/IBL/Display 全链路接入 Heap：无 DescriptorPool/Set/PipelineLayout 的 GPU-Driven 间接绘制与延迟光照/IBL/Display 全链路及外部槽安全更新协议已接入，双配置各 95/95 零警告、RTX 4060 非溢出对照/环境替换/Resize/溢出合法子集全部通过、Debug Sync Validation 零错误，DSH 独立评审 10/10 PASS。
   - 验收：`sample-static-scene-heap-gpu-driven`（标签 `gpu`）验证同一场景下 1.3 Set 与 1.4 Heap 的非溢出可见集合/HDR/IBL 探针/SDR 输出一致、容量截断溢出各自满足合法子集与无越界、交换链 Resize 与运行期环境替换（`Constant`→回滚→`Directional`）无过期描述符、Debug Sync Validation 零错误。
-- [ ] T46 `ar_triangle --descriptor-heap` 入口与端到端 Set/Heap 对照脚本
+- [x] T46 `ar_triangle --descriptor-heap` 入口与端到端 Set/Heap 对照脚本：`ar_triangle` 接入 `--descriptor-heap` 与冲突参数拒绝，`sample-descriptor-heap-scene-parity` 端到端验证 Set/Heap 剔除、探针与整帧 PNG 完全一致及回滚不变、Debug Sync Validation 零错误，双配置各 96/96 零警告，DSH 独立评审 4/4 PASS。
   - 验收：`sample-descriptor-heap-scene-parity`（标签 `gpu`）通过 `ar_triangle` 端到端对照 Set 与 `--descriptor-heap`（含 `--static-gpu-driven --hdr-lighting --ibl directional`）的可见性、探针与 PNG，且冲突/不支持组合显式拒绝、不静默回退。
 - [ ] T47 [人工] P5 第二批（同场景 Set vs. Heap 对照）里程碑验收
   - 用户核对同场景 Set/Heap 画面、探针、剔除与 Resize/Validation 证据后，决定进入 P4b（方向光阴影与相机漫游）。

@@ -29,6 +29,7 @@ struct Options {
     bool gpuDriven = false;
     bool gpuEmpty = false;
     bool setBinding = false;
+    bool descriptorHeap = false;
     bool verifyBindingRetirement = false;
     bool gbuffer = false;
     bool bindlessMaterials = false;
@@ -60,6 +61,9 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
             options.gpuEmpty = arg == L"--gpu-driven-empty";
         } else if (arg == L"--set-binding") {
             options.setBinding = true;
+        } else if (arg == L"--descriptor-heap") {
+            options.descriptorHeap = true;
+            options.gbuffer = true;
         } else if (arg == L"--clear-only") {
             options.clearOnly = true;
         } else if (arg == L"--ibl" && !options.ibl && index + 1 < argc) {
@@ -145,6 +149,9 @@ std::optional<Options> parse(int argc, wchar_t** argv) {
         return std::nullopt;
     }
     if (options.gpuDriven && (options.clearOnly || options.setBinding)) {
+        return std::nullopt;
+    }
+    if (options.descriptorHeap && (options.setBinding || options.clearOnly || options.gpuDriven)) {
         return std::nullopt;
     }
     if ((options.indirectCapacity && !options.staticGpuDriven) ||
@@ -273,7 +280,7 @@ int wmain(int argc, wchar_t** argv) {
     if (!options) {
         std::fputs(
             "usage: ar_triangle [--frames N] [--hidden] [--clear-only] "
-            "[--set-binding] [--static-scene JSON --asset-root DIRECTORY] "
+            "[--set-binding] [--descriptor-heap] [--static-scene JSON --asset-root DIRECTORY] "
             "[--static-gpu-driven [--indirect-capacity N]] "
             "[--gbuffer [--gbuffer-probes PATH]] [--bindless-materials] [--hdr-lighting "
             "[--exposure-ev EV]] "
@@ -283,13 +290,17 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     ar::runtime::RuntimeConfig config;
-    config.mode = ar::runtime::QueryMode::Development;
-    config.query.requestedApi = ar::rhi::makeApiVersion(1, 3);
+    config.mode = options->descriptorHeap ? ar::runtime::QueryMode::RequireProduct
+                                          : ar::runtime::QueryMode::Development;
+    config.query.requestedApi =
+        options->descriptorHeap ? ar::rhi::kApiVersion1_4 : ar::rhi::makeApiVersion(1, 3);
     config.query.createGraphicsDevice = true;
     config.query.enableScreenshot =
         options->screenshot.has_value() || options->gbufferProbes.has_value() ||
         options->verifyBindingRetirement;
-    config.query.enableSetBinding = options->setBinding || options->bindlessMaterials;
+    config.query.enableDescriptorHeap = options->descriptorHeap;
+    config.query.enableSetBinding =
+        !options->descriptorHeap && (options->setBinding || options->bindlessMaterials);
     config.query.enableSetBindingSample = options->setBinding;
     config.query.verifyBindingRetirement = options->verifyBindingRetirement;
     config.query.enableGBuffer = options->gbuffer;
@@ -306,12 +317,13 @@ int wmain(int argc, wchar_t** argv) {
                          : options->setBinding ? "set_binding.vert.spv"
                                                : "triangle.vert.spv"));
         auto fragment = readShader(
-            shaderDir / (options->bindlessMaterials ? "gbuffer_bindless.frag.spv"
-                         : options->gbuffer         ? "gbuffer.frag.spv"
-                         : options->scene           ? "static_scene.frag.spv"
-                         : options->gpuDriven       ? "gpu_draw.frag.spv"
-                         : options->setBinding      ? "set_binding.frag.spv"
-                                                    : "triangle.frag.spv"));
+            shaderDir / ((options->bindlessMaterials || options->descriptorHeap)
+                             ? "gbuffer_bindless.frag.spv"
+                         : options->gbuffer    ? "gbuffer.frag.spv"
+                         : options->scene      ? "static_scene.frag.spv"
+                         : options->gpuDriven  ? "gpu_draw.frag.spv"
+                         : options->setBinding ? "set_binding.frag.spv"
+                                               : "triangle.frag.spv"));
         if (options->hdrLighting) {
             auto fullscreen = readShader(shaderDir / "fullscreen.vert.spv");
             auto direct = readShader(
