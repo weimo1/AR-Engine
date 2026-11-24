@@ -117,6 +117,7 @@ private:
     };
 
     enum class DrawStatus { Presented, Suboptimal, OutOfDate };
+    enum class PipelineKind { DirectGeometry, IndirectGeometry, DeferredLighting, Display };
 
     struct Fence {
         VkFence handle = VK_NULL_HANDLE;
@@ -137,12 +138,19 @@ private:
     std::expected<void, core::Error> createFrame(Frame& frame, std::uint32_t graphicsFamily);
     std::expected<bool, core::Error> createSwapchain(VkExtent2D framebuffer);
     void destroySwapchain() noexcept;
-    std::expected<void, core::Error>
-    createGraphicsPipeline(VkFormat format, const std::vector<std::uint32_t>& vertexCode,
-                           const std::vector<std::uint32_t>& fragmentCode, VkPipeline& output,
-                           bool fullscreen = false);
+    std::expected<void, core::Error> createGraphicsPipeline(
+        VkFormat format,
+        const std::vector<std::uint32_t>& vertexCode,
+        const std::vector<std::uint32_t>& fragmentCode,
+        VkPipeline& output,
+        PipelineKind kind = PipelineKind::DirectGeometry);
     std::expected<void, core::Error> createLightingLayout();
     std::expected<void, core::Error> createLightingResources(VkImageUsageFlags usage);
+    std::expected<void, core::Error> writeAttachmentHeapDescriptors();
+    void resetAttachmentHeapDescriptors() noexcept;
+    std::expected<void, core::Error>
+    writeEnvironmentHeapDescriptors(const StaticSceneDraw::Environment& environment);
+    void resetEnvironmentHeapDescriptors() noexcept;
     void writeEnvironmentDescriptors() const;
     void recordLighting(
         VkCommandBuffer commands, const Image& output, const PresentationGraphPlan& plan) const;

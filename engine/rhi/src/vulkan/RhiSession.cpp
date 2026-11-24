@@ -208,12 +208,6 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
             core::ErrorStage::Validation,
             "a graphics device requires a Vulkan API request of at least 1.3");
     }
-    if (config.enableDescriptorHeap && config.deferredLighting) {
-        return makeError(
-            core::ErrorCategory::InvalidArguments,
-            core::ErrorStage::Validation,
-            "deferred lighting is not yet enabled for Descriptor Heap");
-    }
     if (config.deferredLighting) {
         const auto& lighting = *config.deferredLighting;
         const auto validSpirv = [](const auto& words) {
@@ -238,7 +232,8 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
         const auto srgbPush = config.presentationSpec->buildDisplayPush(
             config.presentationSpec->displayExposureEV, true);
         if (unormPush.size == 0 || unormPush.size > unormPush.bytes.size() || srgbPush.size == 0 ||
-            srgbPush.size > srgbPush.bytes.size()) {
+            srgbPush.size > srgbPush.bytes.size() ||
+            (config.enableDescriptorHeap && (unormPush.size > 8u || srgbPush.size > 8u))) {
             return makeError(
                 core::ErrorCategory::InvalidArguments,
                 core::ErrorStage::Validation,
@@ -326,15 +321,15 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
         const auto validShader = [](const auto& words) {
             return words.size() >= 5 && words.front() == 0x07230203u;
         };
-        if (!config.enableGBuffer || !config.enableSetBinding || !config.planPresentation ||
-            config.gpuDriven || config.enableDescriptorHeap ||
+        if (!config.enableGBuffer || (!config.enableSetBinding && !config.enableDescriptorHeap) ||
+            !config.planPresentation || config.gpuDriven ||
             !validShader(config.staticIndirect->graphics.vertex) ||
             !validShader(config.staticIndirect->graphics.fragment) ||
             !validShader(config.staticIndirect->compute)) {
             return makeError(
                 core::ErrorCategory::InvalidArguments,
                 core::ErrorStage::Validation,
-                "static indirect requires the Set GBuffer graph and valid shaders");
+                "static indirect requires the bindless GBuffer graph and valid shaders");
         }
     }
     if (config.enableStaticScene &&

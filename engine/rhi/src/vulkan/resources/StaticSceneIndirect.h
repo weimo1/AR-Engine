@@ -5,6 +5,8 @@
 
 namespace ar::rhi::detail {
 
+class DescriptorHeapTable;
+
 class StaticSceneIndirect {
     using Buffer = DeviceResources::BufferSlot;
 
@@ -33,8 +35,13 @@ public:
         Scene(const Scene&) = delete;
         StaticSceneIndirect& owner;
         Buffer vertices, indices, instances, materials;
+        VkDeviceAddress instancesAddress = 0;
+        VkDeviceAddress materialsAddress = 0;
         struct Frame {
             Buffer commands, counts, view;
+            VkDeviceAddress commandsAddress = 0;
+            VkDeviceAddress countsAddress = 0;
+            VkDeviceAddress viewAddress = 0;
             VkDescriptorSet set = VK_NULL_HANDLE;
         };
         std::array<Frame, 2> frames;
@@ -43,7 +50,9 @@ public:
         std::uint32_t capacity = 0;
     };
 
-    explicit StaticSceneIndirect(DeviceResources& resources) : m_resources(resources) {}
+    explicit StaticSceneIndirect(
+        DeviceResources& resources, DescriptorHeapTable* heapBindings = nullptr)
+        : m_resources(resources), m_heapBindings(heapBindings) {}
     ~StaticSceneIndirect();
     StaticSceneIndirect(const StaticSceneIndirect&) = delete;
     std::expected<void, core::Error> open(const StaticIndirectShaders& shaders);
@@ -51,6 +60,7 @@ public:
         const StaticIndirectGeometry& geometry,
         std::span<const Instance> instances,
         std::span<const Material> materials);
+    std::expected<void, core::Error> publishHeapBuffers(const Scene& scene);
     std::expected<void, core::Error> updateFrameView(
         const Scene& scene, std::size_t slot, const FrameView& view, float inverseAspect);
     VkDescriptorSetLayout layout() const noexcept {
@@ -81,6 +91,8 @@ public:
 
 private:
     DeviceResources& m_resources;
+    DescriptorHeapTable* m_heapBindings = nullptr;
+    PFN_vkGetBufferDeviceAddress m_getBufferDeviceAddress = nullptr;
     VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_computeLayout = VK_NULL_HANDLE;
     VkPipeline m_pipeline = VK_NULL_HANDLE;

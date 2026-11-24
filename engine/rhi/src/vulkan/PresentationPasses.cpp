@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <utility>
 #include <vector>
 
@@ -75,7 +76,137 @@ std::expected<void, core::Error> Presentation::createLightingLayout() {
         m_device, m_lightingLayout, layout, vkCreatePipelineLayout, "lighting pipeline layout");
 }
 
+std::expected<void, core::Error> Presentation::writeAttachmentHeapDescriptors() {
+    if (!m_heapBinding) {
+        return {};
+    }
+    const auto make2DView = [](VkImage image, VkFormat format, VkImageAspectFlags aspect) {
+        VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        view.image = image;
+        view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view.format = format;
+        view.components = {
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY};
+        view.subresourceRange = {aspect, 0, 1, 0, 1};
+        return view;
+    };
+    const VkFormat depthFormat = toVkFormat(m_spec.depthFormat);
+    const VkFormat hdrFormat = toVkFormat(m_spec.hdrFormat);
+    for (std::size_t frame = 0; frame < m_swapchain.attachments.size(); ++frame) {
+        const auto& slot = m_swapchain.attachments[frame];
+        const auto base = static_cast<std::uint32_t>(
+            kHeapExternalImageBase + frame * kHeapAttachmentSlotsPerFrame);
+        const std::array<VkImageViewCreateInfo, kHeapAttachmentSlotsPerFrame> views{
+            make2DView(
+                slot.gbuffer[0].image,
+                toVkFormat(m_spec.gbufferFormats[0]),
+                VK_IMAGE_ASPECT_COLOR_BIT),
+            make2DView(
+                slot.gbuffer[1].image,
+                toVkFormat(m_spec.gbufferFormats[1]),
+                VK_IMAGE_ASPECT_COLOR_BIT),
+            make2DView(
+                slot.gbuffer[2].image,
+                toVkFormat(m_spec.gbufferFormats[2]),
+                VK_IMAGE_ASPECT_COLOR_BIT),
+            make2DView(slot.depth.image, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT),
+            make2DView(slot.hdr.image, hdrFormat, VK_IMAGE_ASPECT_COLOR_BIT),
+        };
+        for (std::uint32_t i = 0; i < views.size(); ++i) {
+            if (auto written = m_heapBinding->writeExternalImageSlot(base + i, views[i]);
+                !written) {
+                return written;
+            }
+        }
+    }
+    return {};
+}
+
+void Presentation::resetAttachmentHeapDescriptors() noexcept {
+    if (!m_heapBinding) {
+        return;
+    }
+    constexpr std::uint32_t count = kHeapFrameSlotCount * kHeapAttachmentSlotsPerFrame;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        static_cast<void>(
+            m_heapBinding->resetExternalImageSlotToDefault(kHeapExternalImageBase + i));
+    }
+}
+
+std::expected<void, core::Error>
+Presentation::writeEnvironmentHeapDescriptors(const StaticSceneDraw::Environment& environment) {
+    if (!m_heapBinding) {
+        return {};
+    }
+    const auto makeEnvView = [](VkImage image,
+                                VkImageViewType viewType,
+                                VkFormat format,
+                                std::uint32_t levels,
+                                std::uint32_t layers) {
+        VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        view.image = image;
+        view.viewType = viewType;
+        view.format = format;
+        view.components = {
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY};
+        view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, levels, 0, layers};
+        return view;
+    };
+    const std::array<VkImageViewCreateInfo, kHeapEnvironmentImageCount> views{
+        makeEnvView(
+            environment[0].image, VK_IMAGE_VIEW_TYPE_CUBE, VK_FORMAT_R16G16B16A16_SFLOAT, 1u, 6u),
+        makeEnvView(
+            environment[1].image, VK_IMAGE_VIEW_TYPE_CUBE, VK_FORMAT_R16G16B16A16_SFLOAT, 5u, 6u),
+        makeEnvView(environment[2].image, VK_IMAGE_VIEW_TYPE_2D, VK_FORMAT_R16G16_SFLOAT, 1u, 1u),
+    };
+    for (std::uint32_t i = 0; i < views.size(); ++i) {
+        if (auto written =
+                m_heapBinding->writeExternalImageSlot(kHeapEnvironmentImageBase + i, views[i]);
+            !written) {
+            return written;
+        }
+    }
+    return {};
+}
+
+void Presentation::resetEnvironmentHeapDescriptors() noexcept {
+    if (!m_heapBinding) {
+        return;
+    }
+    for (std::uint32_t i = 0; i < kHeapEnvironmentImageCount; ++i) {
+        static_cast<void>(
+            m_heapBinding->resetExternalImageSlotToDefault(kHeapEnvironmentImageBase + i));
+    }
+}
+
 std::expected<void, core::Error> Presentation::createLightingResources(VkImageUsageFlags usage) {
+    const VkFormat hdrFormat = toVkFormat(m_spec.hdrFormat);
+    if (m_heapBinding) {
+        for (auto& slot : m_swapchain.attachments) {
+            auto attachment = m_staticScene->createAttachment(
+                m_swapchain.extent, hdrFormat, VK_IMAGE_ASPECT_COLOR_BIT, usage);
+            if (!attachment) {
+                return std::unexpected(attachment.error());
+            }
+            slot.hdr = *attachment;
+        }
+        if (auto written = writeAttachmentHeapDescriptors(); !written) {
+            resetAttachmentHeapDescriptors();
+            return written;
+        }
+        if (m_environmentReady) {
+            if (auto written = writeEnvironmentHeapDescriptors(m_environment); !written) {
+                return written;
+            }
+        }
+        return {};
+    }
     constexpr std::uint32_t setsPerSlot = 2;
     constexpr std::uint32_t gbufferBindings = 4;
     const std::uint32_t bindingsPerSet = m_lighting->environmentLighting ? 7u : gbufferBindings;
@@ -96,7 +227,6 @@ std::expected<void, core::Error> Presentation::createLightingResources(VkImageUs
         return created;
     }
 
-    const VkFormat hdrFormat = toVkFormat(m_spec.hdrFormat);
     for (auto& slot : m_swapchain.attachments) {
         auto attachment = m_staticScene->createAttachment(
             m_swapchain.extent, hdrFormat, VK_IMAGE_ASPECT_COLOR_BIT, usage);
@@ -189,9 +319,24 @@ void Presentation::recordLighting(
         render.pColorAttachments = &color;
         vkCmdBeginRendering(commands, &render);
         vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-        vkCmdBindDescriptorSets(
-            commands, VK_PIPELINE_BIND_POINT_GRAPHICS, m_lightingLayout, 0, 1, &set, 0, nullptr);
-        vkCmdPushConstants(commands, m_lightingLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, size, push);
+        if (m_heapBinding) {
+            VkPushDataInfoEXT pushInfo{VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT};
+            pushInfo.offset = 0;
+            pushInfo.data = {push, size};
+            m_heapBinding->dispatch().cmdPushData(commands, &pushInfo);
+        } else {
+            vkCmdBindDescriptorSets(
+                commands,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                m_lightingLayout,
+                0,
+                1,
+                &set,
+                0,
+                nullptr);
+            vkCmdPushConstants(
+                commands, m_lightingLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, size, push);
+        }
         vkCmdDraw(commands, 3, 1, 0, 0);
         vkCmdEndRendering(commands);
     };
@@ -199,24 +344,53 @@ void Presentation::recordLighting(
     auto inverse = m_frameView.inverseProjection;
     inverse[0] *= static_cast<float>(m_swapchain.extent.width) /
                   static_cast<float>(m_swapchain.extent.height);
-    const struct DirectPush {
-        std::array<float, 16> inverseProjection;
-        std::array<float, 12> viewToWorld;
-    } direct{inverse, m_frameView.viewToWorld};
-    static_assert(sizeof(DirectPush) == 112);
-    draw(slot.hdr.view, m_swapchain.directPipeline, slot.directSet, sizeof(direct), &direct);
+    if (m_heapBinding) {
+        struct DirectHeapPush {
+            std::array<float, 16> inverseProjection;
+            std::array<float, 12> viewToWorld;
+            std::uint32_t frameSlot;
+        };
+        static_assert(sizeof(DirectHeapPush) == 116);
+        const DirectHeapPush direct{
+            inverse, m_frameView.viewToWorld, static_cast<std::uint32_t>(m_frameIndex)};
+        draw(slot.hdr.view, m_swapchain.directPipeline, VK_NULL_HANDLE, sizeof(direct), &direct);
+    } else {
+        const struct DirectPush {
+            std::array<float, 16> inverseProjection;
+            std::array<float, 12> viewToWorld;
+        } direct{inverse, m_frameView.viewToWorld};
+        static_assert(sizeof(DirectPush) == 112);
+        draw(slot.hdr.view, m_swapchain.directPipeline, slot.directSet, sizeof(direct), &direct);
+    }
 
     recordGraphBarriers(commands, output, plan, PresentationPass::Display);
 
     const bool srgb = m_swapchain.format == VK_FORMAT_B8G8R8A8_SRGB ||
                       m_swapchain.format == VK_FORMAT_R8G8B8A8_SRGB;
     const DisplayPushData display = m_spec.buildDisplayPush(m_spec.displayExposureEV, srgb);
-    draw(
-        output.view,
-        m_swapchain.displayPipeline,
-        slot.displaySet,
-        display.size,
-        display.bytes.data());
+    if (m_heapBinding) {
+        struct DisplayHeapPush {
+            std::array<std::byte, 8> payload{};
+            std::uint32_t frameSlot = 0;
+        };
+        static_assert(sizeof(DisplayHeapPush) == 12);
+        DisplayHeapPush displayPush{};
+        std::memcpy(displayPush.payload.data(), display.bytes.data(), display.size);
+        displayPush.frameSlot = static_cast<std::uint32_t>(m_frameIndex);
+        draw(
+            output.view,
+            m_swapchain.displayPipeline,
+            VK_NULL_HANDLE,
+            sizeof(displayPush),
+            &displayPush);
+    } else {
+        draw(
+            output.view,
+            m_swapchain.displayPipeline,
+            slot.displaySet,
+            display.size,
+            display.bytes.data());
+    }
 }
 
 std::expected<void, core::Error> Presentation::createGraphicsPipeline(
@@ -224,7 +398,8 @@ std::expected<void, core::Error> Presentation::createGraphicsPipeline(
     const std::vector<std::uint32_t>& vertexCode,
     const std::vector<std::uint32_t>& fragmentCode,
     VkPipeline& output,
-    bool fullscreen) {
+    PipelineKind kind) {
+    const bool fullscreen = kind == PipelineKind::DeferredLighting || kind == PipelineKind::Display;
     const bool geometry = m_staticScene && !fullscreen;
     const bool gbuffer = m_enableGBuffer && !fullscreen;
     struct ShaderModules {
@@ -336,33 +511,171 @@ std::expected<void, core::Error> Presentation::createGraphicsPipeline(
         depth.depthCompareOp = m_spec.depthReverseZ ? VK_COMPARE_OP_GREATER : VK_COMPARE_OP_LESS;
     }
     VkPipelineCreateFlags2CreateInfo flags2{VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO};
-    std::array<VkDescriptorSetAndBindingMappingEXT, 2> heapMappings{};
-    VkShaderDescriptorSetAndBindingMappingInfoEXT heapMappingInfo{
+    std::array<VkDescriptorSetAndBindingMappingEXT, 2> vertexMappings{};
+    std::uint32_t vertexMappingCount = 0;
+    VkShaderDescriptorSetAndBindingMappingInfoEXT vertexMappingInfo{
+        VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT};
+    std::array<VkDescriptorSetAndBindingMappingEXT, 7> fragmentMappings{};
+    std::uint32_t fragmentMappingCount = 0;
+    VkShaderDescriptorSetAndBindingMappingInfoEXT fragmentMappingInfo{
         VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT};
     if (m_heapBinding) {
         const auto& plan = m_heapBinding->plan();
-        heapMappings[0].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-        heapMappings[0].descriptorSet = 0;
-        heapMappings[0].firstBinding = 0;
-        heapMappings[0].bindingCount = 1;
-        heapMappings[0].resourceMask = VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT;
-        heapMappings[0].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-        heapMappings[0].sourceData.constantOffset.heapOffset = 0;
-        heapMappings[0].sourceData.constantOffset.heapArrayStride =
-            static_cast<std::uint32_t>(plan.imageStride);
+        const auto imageStride = static_cast<std::uint32_t>(plan.imageStride);
+        const auto samplerStride = static_cast<std::uint32_t>(plan.samplerStride);
+        const auto bufferBase = static_cast<std::uint32_t>(plan.bufferBaseOffset);
+        const auto bufferStride = static_cast<std::uint32_t>(plan.bufferStride);
+        const auto frameAttachmentStride = kHeapAttachmentSlotsPerFrame * imageStride;
 
-        heapMappings[1].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-        heapMappings[1].descriptorSet = 0;
-        heapMappings[1].firstBinding = 1;
-        heapMappings[1].bindingCount = 1;
-        heapMappings[1].resourceMask = VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT;
-        heapMappings[1].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
-        heapMappings[1].sourceData.constantOffset.heapOffset = 0;
-        heapMappings[1].sourceData.constantOffset.heapArrayStride = 0;
+        const auto addConstant = [](VkDescriptorSetAndBindingMappingEXT& dst,
+                                    std::uint32_t set,
+                                    std::uint32_t binding,
+                                    VkSpirvResourceTypeFlagsEXT mask,
+                                    std::uint32_t heapOffset,
+                                    std::uint32_t arrayStride,
+                                    std::uint32_t samplerHeapOffset = 0u) {
+            dst = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT};
+            dst.descriptorSet = set;
+            dst.firstBinding = binding;
+            dst.bindingCount = 1;
+            dst.resourceMask = mask;
+            dst.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+            dst.sourceData.constantOffset.heapOffset = heapOffset;
+            dst.sourceData.constantOffset.heapArrayStride = arrayStride;
+            dst.sourceData.constantOffset.pEmbeddedSampler = nullptr;
+            dst.sourceData.constantOffset.samplerHeapOffset = samplerHeapOffset;
+            dst.sourceData.constantOffset.samplerHeapArrayStride = 0;
+        };
 
-        heapMappingInfo.mappingCount = static_cast<std::uint32_t>(heapMappings.size());
-        heapMappingInfo.pMappings = heapMappings.data();
-        stageInfos[1].pNext = &heapMappingInfo;
+        const auto addPushIndex = [](VkDescriptorSetAndBindingMappingEXT& dst,
+                                     std::uint32_t set,
+                                     std::uint32_t binding,
+                                     VkSpirvResourceTypeFlagsEXT mask,
+                                     std::uint32_t heapOffset,
+                                     std::uint32_t pushOffset,
+                                     std::uint32_t indexStride,
+                                     std::uint32_t samplerHeapOffset = 0u) {
+            dst = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT};
+            dst.descriptorSet = set;
+            dst.firstBinding = binding;
+            dst.bindingCount = 1;
+            dst.resourceMask = mask;
+            dst.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT;
+            dst.sourceData.pushIndex.heapOffset = heapOffset;
+            dst.sourceData.pushIndex.pushOffset = pushOffset;
+            dst.sourceData.pushIndex.heapIndexStride = indexStride;
+            dst.sourceData.pushIndex.heapArrayStride = 0;
+            dst.sourceData.pushIndex.pEmbeddedSampler = nullptr;
+            dst.sourceData.pushIndex.useCombinedImageSamplerIndex = VK_FALSE;
+            dst.sourceData.pushIndex.samplerHeapOffset = samplerHeapOffset;
+            dst.sourceData.pushIndex.samplerPushOffset = pushOffset;
+            dst.sourceData.pushIndex.samplerHeapIndexStride = 0;
+            dst.sourceData.pushIndex.samplerHeapArrayStride = 0;
+        };
+
+        switch (kind) {
+        case PipelineKind::DirectGeometry:
+            addConstant(
+                fragmentMappings[fragmentMappingCount++],
+                0u,
+                0u,
+                VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT,
+                0u,
+                imageStride);
+            addConstant(
+                fragmentMappings[fragmentMappingCount++],
+                0u,
+                1u,
+                VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT,
+                0u,
+                0u);
+            break;
+        case PipelineKind::IndirectGeometry:
+            addConstant(
+                vertexMappings[vertexMappingCount++],
+                1u,
+                0u,
+                VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT,
+                bufferBase,
+                0u);
+            addPushIndex(
+                vertexMappings[vertexMappingCount++],
+                1u,
+                4u,
+                VK_SPIRV_RESOURCE_TYPE_UNIFORM_BUFFER_BIT_EXT,
+                bufferBase + 6u * bufferStride,
+                0u,
+                bufferStride);
+            addConstant(
+                fragmentMappings[fragmentMappingCount++],
+                0u,
+                0u,
+                VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT,
+                0u,
+                imageStride);
+            addConstant(
+                fragmentMappings[fragmentMappingCount++],
+                0u,
+                1u,
+                VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT,
+                0u,
+                0u);
+            addConstant(
+                fragmentMappings[fragmentMappingCount++],
+                1u,
+                1u,
+                VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT,
+                bufferBase + 1u * bufferStride,
+                0u);
+            break;
+        case PipelineKind::DeferredLighting:
+            for (std::uint32_t b = 0; b < 4u; ++b) {
+                addPushIndex(
+                    fragmentMappings[fragmentMappingCount++],
+                    0u,
+                    b,
+                    VK_SPIRV_RESOURCE_TYPE_COMBINED_SAMPLED_IMAGE_BIT_EXT,
+                    (kHeapExternalImageBase + b) * imageStride,
+                    112u,
+                    frameAttachmentStride,
+                    1u * samplerStride);
+            }
+            if (m_lighting && m_lighting->environmentLighting) {
+                for (std::uint32_t k = 0; k < kHeapEnvironmentImageCount; ++k) {
+                    addConstant(
+                        fragmentMappings[fragmentMappingCount++],
+                        0u,
+                        4u + k,
+                        VK_SPIRV_RESOURCE_TYPE_COMBINED_SAMPLED_IMAGE_BIT_EXT,
+                        (kHeapEnvironmentImageBase + k) * imageStride,
+                        0u,
+                        2u * samplerStride);
+                }
+            }
+            break;
+        case PipelineKind::Display:
+            addPushIndex(
+                fragmentMappings[fragmentMappingCount++],
+                0u,
+                0u,
+                VK_SPIRV_RESOURCE_TYPE_COMBINED_SAMPLED_IMAGE_BIT_EXT,
+                (kHeapExternalImageBase + 4u) * imageStride,
+                8u,
+                frameAttachmentStride,
+                1u * samplerStride);
+            break;
+        }
+
+        if (vertexMappingCount > 0) {
+            vertexMappingInfo.mappingCount = vertexMappingCount;
+            vertexMappingInfo.pMappings = vertexMappings.data();
+            stageInfos[0].pNext = &vertexMappingInfo;
+        }
+        if (fragmentMappingCount > 0) {
+            fragmentMappingInfo.mappingCount = fragmentMappingCount;
+            fragmentMappingInfo.pMappings = fragmentMappings.data();
+            stageInfos[1].pNext = &fragmentMappingInfo;
+        }
 
         flags2.flags = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
         flags2.pNext = &rendering;

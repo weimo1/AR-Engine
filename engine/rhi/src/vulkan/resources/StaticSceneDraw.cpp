@@ -138,7 +138,7 @@ StaticSceneDraw::~StaticSceneDraw() {
 
 std::expected<void, core::Error> StaticSceneDraw::open(const StaticIndirectShaders* indirect) {
     if (indirect) {
-        m_indirect.emplace(m_resources);
+        m_indirect.emplace(m_resources, m_heapBindings);
         return m_indirect->open(*indirect);
     }
     if (m_bindings || m_heapBindings) {
@@ -516,12 +516,17 @@ StaticSceneDraw::prepareIndirect(
         }
         const auto& range = geometry->ranges[instance.meshIndex];
         const auto material = static_cast<std::uint32_t>(materials.size());
+        const auto textureSlot = [&](std::size_t index) {
+            return m_heapBindings
+                       ? static_cast<std::uint32_t>(draw.mesh->textures[index].heapBinding->slot)
+                       : static_cast<std::uint32_t>(draw.mesh->textures[index].binding->slot);
+        };
         materials.push_back(
             {instance.baseColorFactor,
              instance.normalFromModel[3],
              instance.normalFromModel[7],
-             static_cast<std::uint32_t>(draw.mesh->textures[0].binding->slot),
-             static_cast<std::uint32_t>(draw.mesh->textures[1].binding->slot)});
+             textureSlot(0),
+             textureSlot(1)});
         instances.push_back(
             {instance.modelMatrix,
              instance.normalFromModel,
@@ -543,6 +548,14 @@ std::expected<void, core::Error> StaticSceneDraw::publish(
     if (m_heapBindings) {
         if (auto published = m_heapBindings->publishCompleted(true); !published) {
             return std::unexpected(std::move(published.error()));
+        }
+    }
+    if (m_indirect && indirect) {
+        if (auto written = m_indirect->publishHeapBuffers(*indirect); !written) {
+            if (m_indirectScene) {
+                static_cast<void>(m_indirect->publishHeapBuffers(*m_indirectScene));
+            }
+            return std::unexpected(std::move(written.error()));
         }
     }
     m_indirectScene = std::move(indirect);
@@ -599,7 +612,12 @@ void StaticSceneDraw::record(
     std::size_t frame) const {
     if (m_indirect) {
         if (m_indirectScene) {
-            m_indirect->draw(*m_indirectScene, commands, frame, layout, m_bindings->set());
+            m_indirect->draw(
+                *m_indirectScene,
+                commands,
+                frame,
+                layout,
+                m_bindings ? m_bindings->set() : VK_NULL_HANDLE);
         }
         return;
     }

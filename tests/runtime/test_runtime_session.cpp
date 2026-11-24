@@ -24,6 +24,7 @@
 #include "core/Diagnostics.h"
 #include "core/Error.h"
 #include "platform/Window.h"
+#include "render/EnvironmentLighting.h"
 #include "render/PresentationGraph.h"
 #include "render/PresentationSpec.h"
 #include "rhi/Capabilities.h"
@@ -1336,17 +1337,32 @@ TEST_CASE(
         REQUIRE_FALSE(opened.has_value());
         CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
 
-        auto deferredInT44 = makeBase();
-        deferredInT44.deferredLighting =
-            rhi::DeferredLighting{dummySpirv, dummySpirv, dummySpirv, 0.F, false};
-        opened = rhi::RhiSession::open(deferredInT44, **diagnostics);
+        // T45: Heap accepts deferredLighting + staticIndirect when GBuffer and shaders are valid;
+        // invalid shader / oversized display push / missing GBuffer are still rejected.
+        auto badIndirectShader = makeBase();
+        badIndirectShader.staticIndirect =
+            rhi::StaticIndirectShaders{{dummySpirv, {0x12345678u}}, dummySpirv, UINT32_MAX};
+        opened = rhi::RhiSession::open(badIndirectShader, **diagnostics);
         REQUIRE_FALSE(opened.has_value());
         CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
 
-        auto indirectInT44 = makeBase();
-        indirectInT44.staticIndirect =
-            rhi::StaticIndirectShaders{{dummySpirv, dummySpirv}, dummySpirv, UINT32_MAX};
-        opened = rhi::RhiSession::open(indirectInT44, **diagnostics);
+        auto badDeferredNoGBuffer = makeBase();
+        badDeferredNoGBuffer.enableGBuffer = false;
+        badDeferredNoGBuffer.deferredLighting =
+            rhi::DeferredLighting{dummySpirv, dummySpirv, dummySpirv, 0.F, false};
+        opened = rhi::RhiSession::open(badDeferredNoGBuffer, **diagnostics);
+        REQUIRE_FALSE(opened.has_value());
+        CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
+
+        auto oversizedHeapDisplayPush = makeBase();
+        oversizedHeapDisplayPush.deferredLighting =
+            rhi::DeferredLighting{dummySpirv, dummySpirv, dummySpirv, 0.F, false};
+        oversizedHeapDisplayPush.presentationSpec->buildDisplayPush = [](float, bool) noexcept {
+            rhi::DisplayPushData data{};
+            data.size = 12u;
+            return data;
+        };
+        opened = rhi::RhiSession::open(oversizedHeapDisplayPush, **diagnostics);
         REQUIRE_FALSE(opened.has_value());
         CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
 
@@ -1417,10 +1433,15 @@ TEST_CASE(
         reopened->reset();
     };
 
-    // Failure mapping 1: RequireProduct window on Vulkan 1.3 device -> ApiVersionUnsupported.
+    // Failure mapping 1: RequireProduct window on Vulkan 1.3 device -> ApiVersionUnsupported
+    // (also confirms deferredLighting + staticIndirect passes T45 Heap request validation).
     {
-        const auto config = makeHeapWindowConfig(
+        auto config = makeHeapWindowConfig(
             "rhi-heap-window-api13", "loader=1.4;device=1.3;devices=1;surface=ok");
+        config.query.deferredLighting =
+            rhi::DeferredLighting{dummySpirv, dummySpirv, dummySpirv, 0.F, true};
+        config.query.staticIndirect =
+            rhi::StaticIndirectShaders{{dummySpirv, dummySpirv}, dummySpirv, UINT32_MAX};
         auto started = runtime::RuntimeSession::start(config);
         REQUIRE_FALSE(started.has_value());
         const auto& failure = started.error();
@@ -1798,4 +1819,477 @@ TEST_CASE(
     checkParity(setResult.orbited1, heapResult.orbited1);
     checkParity(setResult.orbited2, heapResult.orbited2);
     checkParity(setResult.restored, heapResult.restored);
+}
+
+TEST_CASE(
+    "GPU-driven indirect draw and deferred IBL/Display Descriptor Heap path matches Set baseline",
+    "[sample-static-scene-heap-gpu-driven]") {
+    const auto shader = [](const char* name) {
+        std::ifstream input(
+            std::filesystem::path(AR_TEST_SHADER_DIR) / name, std::ios::binary | std::ios::ate);
+        const auto size = static_cast<std::streamoff>(input.tellg());
+        REQUIRE(size > 0);
+        REQUIRE(size % 4 == 0);
+        std::vector<std::uint32_t> words(static_cast<std::size_t>(size / 4));
+        REQUIRE(input.seekg(0).read(reinterpret_cast<char*>(words.data()), size));
+        return words;
+    };
+
+    const std::string baseRunId = "sample-static-scene-heap-gpu-driven";
+    const std::filesystem::path runRoot = freshRunDirectory(baseRunId);
+    const std::filesystem::path assetRoot = runRoot / "assets";
+    const std::filesystem::path modelsDir = assetRoot / "models";
+    std::filesystem::create_directories(modelsDir);
+
+    bool supportsHeap = false;
+    {
+        runtime::RuntimeConfig probe;
+        probe.mode = runtime::QueryMode::Inspect;
+        probe.query.loader = rhi::SystemLoader{};
+        probe.query.requestedApi = rhi::makeApiVersion(1, 3);
+        probe.query.device = rhi::ExplicitDeviceIndex{0};
+        probe.diagnostics.outputRoot = runRoot;
+        probe.diagnostics.runId = "probe";
+        auto probed = runtime::RuntimeSession::start(probe);
+        INFO(describeStart(probed));
+        REQUIRE(probed.has_value());
+        const auto& report = (*probed)->report();
+        supportsHeap = report.loaderApi >= rhi::kApiVersion1_4 &&
+                       report.deviceApi >= rhi::kApiVersion1_4 &&
+                       report.descriptorHeap == rhi::DescriptorHeapStatus::Supported;
+        REQUIRE((*probed)->close().resourcesReleased);
+    }
+
+    const std::array<float, 12> positions{
+        -1.F, -1.F, 0.F, 1.F, -1.F, 0.F, 1.F, 1.F, 0.F, -1.F, 1.F, 0.F};
+    const std::array<float, 8> uvs{0.F, 0.F, 1.F, 0.F, 1.F, 1.F, 0.F, 1.F};
+    const std::array<std::uint16_t, 6> indices{0, 1, 2, 0, 2, 3};
+    const std::array<float, 12> normals{0.F, 0.F, 1.F, 0.F, 0.F, 1.F, 0.F, 0.F, 1.F, 0.F, 0.F, 1.F};
+    constexpr std::array<unsigned char, 71> redBluePng{
+        137, 80,  78, 71,  13,  10,  26,  10, 0,   0,   0,   13,  73, 72,  68,  82, 0,   0,
+        0,   2,   0,  0,   0,   1,   8,   6,  0,   0,   0,   244, 34, 127, 138, 0,  0,   0,
+        14,  73,  68, 65,  84,  120, 156, 99, 248, 207, 192, 0,   66, 255, 1,   15, 249, 3,
+        253, 133, 17, 153, 118, 0,   0,   0,  0,   73,  69,  78,  68, 174, 66,  96, 130};
+    constexpr std::array<unsigned char, 70> greenPng{
+        137, 80,  78, 71,  13, 10,  26,  10, 0,  0,   0,   13,  73,  72,  68,  82, 0, 0,
+        0,   1,   0,  0,   0,  1,   8,   6,  0,  0,   0,   31,  21,  196, 137, 0,  0, 0,
+        13,  73,  68, 65,  84, 120, 156, 99, 96, 248, 207, 240, 31,  0,   4,   1,  1, 255,
+        113, 235, 71, 229, 0,  0,   0,   0,  73, 69,  78,  68,  174, 66,  96,  130};
+
+    {
+        std::ofstream bin(modelsDir / "quad.bin", std::ios::binary);
+        bin.write(
+            reinterpret_cast<const char*>(positions.data()),
+            static_cast<std::streamsize>(sizeof(positions)));
+        bin.write(
+            reinterpret_cast<const char*>(uvs.data()), static_cast<std::streamsize>(sizeof(uvs)));
+        bin.write(
+            reinterpret_cast<const char*>(indices.data()),
+            static_cast<std::streamsize>(sizeof(indices)));
+        bin.write(
+            reinterpret_cast<const char*>(normals.data()),
+            static_cast<std::streamsize>(sizeof(normals)));
+        REQUIRE(bin.good());
+    }
+    {
+        std::ofstream img(modelsDir / "red_blue.png", std::ios::binary);
+        img.write(
+            reinterpret_cast<const char*>(redBluePng.data()),
+            static_cast<std::streamsize>(sizeof(redBluePng)));
+        REQUIRE(img.good());
+    }
+    {
+        std::ofstream img(modelsDir / "green.png", std::ios::binary);
+        img.write(
+            reinterpret_cast<const char*>(greenPng.data()),
+            static_cast<std::streamsize>(sizeof(greenPng)));
+        REQUIRE(img.good());
+    }
+    const auto writeGltf = [&](const char* fileName,
+                               const char* imageName,
+                               const char* metallic,
+                               const char* roughness) {
+        std::ofstream gltf(modelsDir / fileName, std::ios::binary);
+        gltf << R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],)"
+             << R"("nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":)"
+             << R"({"POSITION":0,"TEXCOORD_0":1,"NORMAL":3},"indices":2,"material":0,"mode":4}]}],)"
+             << R"("buffers":[{"uri":"quad.bin","byteLength":140}],)"
+             << R"("bufferViews":[{"buffer":0,"byteLength":48},)"
+             << R"({"buffer":0,"byteOffset":48,"byteLength":32},)"
+             << R"({"buffer":0,"byteOffset":80,"byteLength":12},)"
+             << R"({"buffer":0,"byteOffset":92,"byteLength":48}],)"
+             << R"("accessors":[{"bufferView":0,"byteOffset":0,"componentType":5126,"count":4,)"
+             << R"("type":"VEC3","min":[-1,-1,0],"max":[1,1,0]},)"
+             << R"({"bufferView":1,"byteOffset":0,"componentType":5126,"count":4,"type":"VEC2"},)"
+             << R"({"bufferView":2,"byteOffset":0,"componentType":5123,"count":6,"type":"SCALAR"},)"
+             << R"({"bufferView":3,"byteOffset":0,"componentType":5126,"count":4,"type":"VEC3"}],)"
+             << R"("materials":[{"pbrMetallicRoughness":{"baseColorFactor":[1,1,1,1],)"
+             << R"("baseColorTexture":{"index":0},"metallicFactor":)" << metallic
+             << R"(,"roughnessFactor":)" << roughness << R"(}}],)"
+             << R"("textures":[{"source":0}],"images":[{"uri":")" << imageName << R"("}]})";
+        REQUIRE(gltf.good());
+    };
+    // Dielectric upper quad + smooth metallic lower quad make Constant vs. Directional IBL
+    // distinct.
+    writeGltf("upper.gltf", "red_blue.png", "0.15", "0.65");
+    writeGltf("lower.gltf", "green.png", "0.95", "0.15");
+
+    const ar::render::StaticCamera initialCamera{
+        {0.F, 0.F, 3.F}, {0.F, 0.F, 0.F, 1.F}, std::numbers::pi_v<float> * 0.5F, 0.1F, 100.F};
+    ar::render::StaticCamera turnedAway = initialCamera;
+    turnedAway.orientation = {0.F, 1.F, 0.F, 0.F};
+
+    // Scene A (non-overflow): 3 visible objects (IDs 1, 2, 3) + 1 off-frustum culled object (ID 4).
+    const std::filesystem::path mainScenePath = runRoot / "main_scene.json";
+    {
+        std::ofstream scene(mainScenePath, std::ios::binary);
+        scene << Json{
+            {"version", 1},
+            {"camera",
+             {{"position", {0.0, 0.0, 3.0}},
+              {"orientation", {0.0, 0.0, 0.0, 1.0}},
+              {"fov_y", std::numbers::pi_v<double> * 0.5},
+              {"near", 0.1},
+              {"far", 100.0}}},
+            {"objects",
+             {{{"id", 1},
+               {"asset", "models/upper.gltf"},
+               {"position", {0.0, 0.72, 0.0}},
+               {"rotation", {0.0, 0.0, 0.0, 1.0}},
+               {"scale", {1.0, 0.5, 1.0}}},
+              {{"id", 2},
+               {"asset", "models/lower.gltf"},
+               {"position", {0.0, -2.08, -1.0}},
+               {"rotation", {0.0, 0.0, 0.0, 1.0}},
+               {"scale", {1.2, 0.7, 1.0}}},
+              {{"id", 3},
+               {"asset", "models/upper.gltf"},
+               {"position", {1.8, 0.0, -0.5}},
+               {"rotation", {0.0, 0.0, 0.0, 1.0}},
+               {"scale", {0.4, 0.4, 1.0}}},
+              {{"id", 4},
+               {"asset", "models/lower.gltf"},
+               {"position", {0.0, 200.0, 0.0}},
+               {"rotation", {0.0, 0.0, 0.0, 1.0}},
+               {"scale", {1.0, 1.0, 1.0}}}}}};
+        REQUIRE(scene.good());
+    }
+
+    // Scene B (capacity overflow): 4 visible objects (IDs 1..4) + 1 culled object (ID 5).
+    const std::filesystem::path overflowScenePath = runRoot / "overflow_scene.json";
+    {
+        std::ofstream scene(overflowScenePath, std::ios::binary);
+        scene << Json{
+            {"version", 1},
+            {"camera",
+             {{"position", {0.0, 0.0, 3.0}},
+              {"orientation", {0.0, 0.0, 0.0, 1.0}},
+              {"fov_y", std::numbers::pi_v<double> * 0.5},
+              {"near", 0.1},
+              {"far", 100.0}}},
+            {"objects",
+             {{{"id", 1},
+               {"asset", "models/upper.gltf"},
+               {"position", {-1.2, 0.6, 0.0}},
+               {"rotation", {0.0, 0.0, 0.0, 1.0}},
+               {"scale", {0.4, 0.4, 1.0}}},
+              {{"id", 2},
+               {"asset", "models/lower.gltf"},
+               {"position", {1.2, 0.6, 0.0}},
+               {"rotation", {0.0, 0.0, 0.0, 1.0}},
+               {"scale", {0.4, 0.4, 1.0}}},
+              {{"id", 3},
+               {"asset", "models/upper.gltf"},
+               {"position", {-1.2, -0.6, 0.0}},
+               {"rotation", {0.0, 0.0, 0.0, 1.0}},
+               {"scale", {0.4, 0.4, 1.0}}},
+              {{"id", 4},
+               {"asset", "models/lower.gltf"},
+               {"position", {1.2, -0.6, 0.0}},
+               {"rotation", {0.0, 0.0, 0.0, 1.0}},
+               {"scale", {0.4, 0.4, 1.0}}},
+              {{"id", 5},
+               {"asset", "models/upper.gltf"},
+               {"position", {0.0, 0.0, 15.0}},
+               {"rotation", {0.0, 0.0, 0.0, 1.0}},
+               {"scale", {1.0, 1.0, 1.0}}}}}};
+        REQUIRE(scene.good());
+    }
+
+    const auto constantPacked = ar::render::packEnvironmentLighting(
+        ar::render::bakeEnvironmentLighting(ar::render::EnvironmentPreset::Constant));
+    const auto directionalPacked = ar::render::packEnvironmentLighting(
+        ar::render::bakeEnvironmentLighting(ar::render::EnvironmentPreset::Directional));
+    const rhi::EnvironmentUpload constantEnv{
+        constantPacked.diffuse, constantPacked.specular, constantPacked.brdf};
+    const rhi::EnvironmentUpload directionalEnv{
+        directionalPacked.diffuse, directionalPacked.specular, directionalPacked.brdf};
+
+    const rhi::TriangleShaders directShaders{
+        shader("gbuffer.vert.spv"), shader("gbuffer_bindless.frag.spv")};
+    const rhi::StaticIndirectShaders indirectShadersBase{
+        {shader("static_indirect.vert.spv"), shader("static_indirect.frag.spv")},
+        shader("static_indirect.comp.spv"),
+        UINT32_MAX};
+    const rhi::DeferredLighting iblLighting{
+        shader("fullscreen.vert.spv"),
+        shader("deferred_ibl.frag.spv"),
+        shader("display_sdr.frag.spv"),
+        0.F,
+        true};
+    const rhi::DeferredLighting directLighting{
+        shader("fullscreen.vert.spv"),
+        shader("deferred_direct.frag.spv"),
+        shader("display_sdr.frag.spv"),
+        0.F,
+        false};
+
+    const auto makeConfig =
+        [&](bool heapMode, const std::string& runId, bool useIbl, std::uint32_t capacity) {
+            runtime::RuntimeConfig config;
+            config.mode =
+                heapMode ? runtime::QueryMode::RequireProduct : runtime::QueryMode::Development;
+            config.query.loader = rhi::SystemLoader{};
+            config.query.device = rhi::ExplicitDeviceIndex{0};
+            config.query.requestedApi = heapMode ? rhi::kApiVersion1_4 : rhi::makeApiVersion(1, 3);
+            config.query.createGraphicsDevice = true;
+            config.query.enableScreenshot = true;
+            config.query.enableSetBinding = !heapMode;
+            config.query.enableDescriptorHeap = heapMode;
+            config.query.enableGBuffer = true;
+            config.staticAssetRoot = assetRoot;
+            config.query.triangleShaders = directShaders;
+            config.query.deferredLighting = useIbl ? iblLighting : directLighting;
+            config.query.staticIndirect = indirectShadersBase;
+            config.query.staticIndirect->capacity = capacity;
+            config.window.emplace();
+            config.window->width = 320;
+            config.window->height = 180;
+            config.window->visible = false;
+            config.window->title =
+                "AR heap gpu-driven " + runId + " " + std::to_string(GetCurrentProcessId());
+            config.diagnostics.runId = runId;
+            config.diagnostics.outputRoot = runRoot;
+            return config;
+        };
+
+    if (!supportsHeap) {
+        auto rejected =
+            runtime::RuntimeSession::start(makeConfig(true, "heap-unsupported", true, UINT32_MAX));
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error().endResult.resourcesReleased);
+        CHECK(rejected.error().endResult.residualResources.empty());
+        return;
+    }
+
+    const auto verifyEvents = [&](const std::string& runId, bool heapMode, bool expectRollback) {
+        std::ifstream events(runRoot / runId / "events.jsonl");
+        REQUIRE(events);
+        bool sawValidationEnabled = false;
+        bool sawHeapReady = false;
+        bool sawSetReady = false;
+        std::size_t envReady = 0;
+        std::size_t envRollback = 0;
+        for (std::string line; std::getline(events, line);) {
+            const auto id = Json::parse(line).at("event_id").get<std::string>();
+            CHECK(id != "rhi.validation.error");
+            sawValidationEnabled |= (id == "rhi.validation.enabled");
+            sawHeapReady |= (id == "rhi.binding.heap.ready");
+            sawSetReady |= (id == "rhi.binding.set.ready");
+            envReady += (id == "rhi.environment.ready");
+            envRollback += (id == "rhi.environment.rollback");
+        }
+#ifdef _DEBUG
+        CHECK(sawValidationEnabled);
+#else
+        (void)sawValidationEnabled;
+#endif
+        CHECK(sawHeapReady == heapMode);
+        CHECK(sawSetReady == !heapMode);
+        if (expectRollback) {
+            CHECK(envReady == 2u);
+            CHECK(envRollback == 1u);
+        }
+    };
+
+    struct MainRun {
+        rhi::FrameScreenshot constantInitial;
+        rhi::FrameScreenshot turnedAway;
+        rhi::FrameScreenshot restoredConstant;
+        rhi::FrameScreenshot afterRollbackConstant;
+        rhi::FrameScreenshot directional1;
+        rhi::FrameScreenshot directional2;
+        rhi::FrameScreenshot resized1;
+        rhi::FrameScreenshot resized2;
+    };
+
+    const auto runMain = [&](bool heapMode, const std::string& runId) -> MainRun {
+        const auto config = makeConfig(heapMode, runId, true, UINT32_MAX);
+        auto session = runtime::RuntimeSession::start(config);
+        INFO(describeStart(session));
+        REQUIRE(session.has_value());
+        REQUIRE((*session)->openStaticScene(mainScenePath));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+        REQUIRE((*session)->replaceEnvironment(constantEnv, false));
+
+        const std::wstring title(config.window->title.begin(), config.window->title.end());
+        const HWND window = FindWindowW(nullptr, title.c_str());
+        REQUIRE(window != nullptr);
+
+        const auto capture = [&](rhi::FrameScreenshot& out) {
+            auto status = (*session)->presentFrame(&out);
+            INFO((status ? "" : status.error().message));
+            REQUIRE(status.has_value());
+            REQUIRE(*status == runtime::FrameStatus::Presented);
+            REQUIRE(out.gbuffer.size() == 3);
+            REQUIRE(out.gbuffer[0].hdrColor.has_value());
+            REQUIRE(out.gbuffer[1].hdrColor.has_value());
+            REQUIRE(out.gbuffer[2].hdrColor.has_value());
+            REQUIRE(out.indirect.has_value());
+        };
+
+        MainRun out;
+        capture(out.constantInitial);
+
+        // Turn 180 deg away: zero visible objects, zero re-uploads.
+        REQUIRE((*session)->setCamera(turnedAway));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+        capture(out.turnedAway);
+
+        // Restore initial camera: identical to initial capture.
+        REQUIRE((*session)->setCamera(initialCamera));
+        CHECK((*session)->staticSceneUploadCount() == 1);
+        capture(out.restoredConstant);
+
+        // Live environment rollback must preserve active Constant environment.
+        const auto rolledBack = (*session)->replaceEnvironment(directionalEnv, true);
+        REQUIRE_FALSE(rolledBack.has_value());
+        capture(out.afterRollbackConstant);
+
+        // Live environment replacement Constant -> Directional across both frame slots.
+        REQUIRE((*session)->replaceEnvironment(directionalEnv, false));
+        capture(out.directional1);
+        capture(out.directional2);
+
+        // Window Resize exercises external attachment slot safe-update protocol across both slots.
+        REQUIRE(SetWindowPos(
+            window, nullptr, 0, 0, 460, 280, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE));
+        RECT client{};
+        REQUIRE(GetClientRect(window, &client));
+        capture(out.resized1);
+        capture(out.resized2);
+        CHECK(out.resized1.width == static_cast<std::uint32_t>(client.right));
+        CHECK(out.resized1.height == static_cast<std::uint32_t>(client.bottom));
+        CHECK(out.resized1.width != out.directional1.width);
+        CHECK(out.resized1.height != out.directional1.height);
+        CHECK(out.resized2.width == out.resized1.width);
+        CHECK(out.resized2.height == out.resized1.height);
+        CHECK(out.resized2.rgba == out.resized1.rgba);
+
+        const auto closed = (*session)->close();
+        REQUIRE(closed.result == core::ResultKind::Success);
+        REQUIRE(closed.resourcesReleased);
+        CHECK((*session)->staticSceneUploadCount() == 1);
+        verifyEvents(runId, heapMode, true);
+        return out;
+    };
+
+    const MainRun setMain = runMain(false, "set-main");
+    const MainRun heapMain = runMain(true, "heap-main");
+
+    // Verify scene & environment physics on baseline before asserting Set/Heap parity.
+    const std::vector<std::uint64_t> expectedVisibleIds{1u, 2u, 3u};
+    CHECK(setMain.constantInitial.indirect->visible == 3u);
+    CHECK(setMain.constantInitial.indirect->drawnIds == expectedVisibleIds);
+    CHECK(setMain.turnedAway.indirect->visible == 0u);
+    CHECK(setMain.turnedAway.indirect->drawnIds.empty());
+    CHECK(setMain.turnedAway.gbuffer[0].depth == 0.F);
+    CHECK((*setMain.turnedAway.gbuffer[0].hdrColor)[0] == 0.F);
+    CHECK(setMain.restoredConstant.rgba == setMain.constantInitial.rgba);
+    CHECK(setMain.afterRollbackConstant.rgba == setMain.constantInitial.rgba);
+    CHECK(setMain.directional2.rgba == setMain.directional1.rgba);
+    // Constant vs. Directional must change metallic lower quad HDR color noticeably.
+    const auto hdrDiff = [](const std::array<float, 3>& a, const std::array<float, 3>& b) {
+        return std::abs(a[0] - b[0]) + std::abs(a[1] - b[1]) + std::abs(a[2] - b[2]);
+    };
+    CHECK(
+        hdrDiff(
+            *setMain.constantInitial.gbuffer[1].hdrColor,
+            *setMain.directional1.gbuffer[1].hdrColor) > 0.02F);
+    CHECK((*setMain.directional1.gbuffer[2].hdrColor)[0] == 0.F);
+    CHECK((*setMain.directional1.gbuffer[2].hdrColor)[1] == 0.F);
+    CHECK((*setMain.directional1.gbuffer[2].hdrColor)[2] == 0.F);
+
+    const auto checkParity = [](const rhi::FrameScreenshot& expected,
+                                const rhi::FrameScreenshot& actual) {
+        CHECK(actual.width == expected.width);
+        CHECK(actual.height == expected.height);
+        CHECK(actual.rgba == expected.rgba);
+        REQUIRE(actual.indirect.has_value());
+        REQUIRE(expected.indirect.has_value());
+        CHECK(actual.indirect->visible == expected.indirect->visible);
+        CHECK(actual.indirect->drawnIds == expected.indirect->drawnIds);
+        REQUIRE(actual.gbuffer.size() == expected.gbuffer.size());
+        for (std::size_t i = 0; i < expected.gbuffer.size(); ++i) {
+            const auto& lhs = expected.gbuffer[i];
+            const auto& rhs = actual.gbuffer[i];
+            CHECK(rhs.pixel == lhs.pixel);
+            CHECK(rhs.depth == Catch::Approx(lhs.depth).margin(1e-5F));
+            for (std::size_t c = 0; c < 4; ++c) {
+                CHECK(rhs.baseColor[c] == Catch::Approx(lhs.baseColor[c]).margin(2.F / 255.F));
+            }
+            for (std::size_t c = 0; c < 3; ++c) {
+                CHECK(rhs.normal[c] == Catch::Approx(lhs.normal[c]).margin(1e-4F));
+                CHECK(rhs.viewPosition[c] == Catch::Approx(lhs.viewPosition[c]).margin(1e-3F));
+            }
+            for (std::size_t c = 0; c < 2; ++c) {
+                CHECK(rhs.material[c] == Catch::Approx(lhs.material[c]).margin(2.F / 255.F));
+            }
+            REQUIRE(lhs.hdrColor.has_value());
+            REQUIRE(rhs.hdrColor.has_value());
+            for (std::size_t c = 0; c < 3; ++c) {
+                CHECK((*rhs.hdrColor)[c] == Catch::Approx((*lhs.hdrColor)[c]).margin(2e-3F));
+            }
+        }
+    };
+
+    checkParity(setMain.constantInitial, heapMain.constantInitial);
+    checkParity(setMain.turnedAway, heapMain.turnedAway);
+    checkParity(setMain.restoredConstant, heapMain.restoredConstant);
+    checkParity(setMain.afterRollbackConstant, heapMain.afterRollbackConstant);
+    checkParity(setMain.directional1, heapMain.directional1);
+    checkParity(setMain.directional2, heapMain.directional2);
+    checkParity(setMain.resized1, heapMain.resized1);
+    checkParity(setMain.resized2, heapMain.resized2);
+
+    // Overflow scenario (visible = 4 > capacity = 2) on direct deferred lighting (no IBL):
+    // validate Set and Heap independently per design.md without demanding identical subsets/pixels.
+    const auto runOverflow = [&](bool heapMode, const std::string& runId) {
+        const auto config = makeConfig(heapMode, runId, false, 2u);
+        auto session = runtime::RuntimeSession::start(config);
+        INFO(describeStart(session));
+        REQUIRE(session.has_value());
+        REQUIRE((*session)->openStaticScene(overflowScenePath));
+        rhi::FrameScreenshot frame;
+        auto status = (*session)->presentFrame(&frame);
+        INFO((status ? "" : status.error().message));
+        REQUIRE(status.has_value());
+        REQUIRE(*status == runtime::FrameStatus::Presented);
+        REQUIRE(frame.indirect.has_value());
+        CHECK(frame.indirect->visible == 4u);
+        REQUIRE(frame.indirect->drawnIds.size() == 2u);
+        CHECK(
+            std::ranges::adjacent_find(frame.indirect->drawnIds) == frame.indirect->drawnIds.end());
+        for (const std::uint64_t id : frame.indirect->drawnIds) {
+            CHECK(id >= 1u);
+            CHECK(id <= 4u);
+        }
+        const auto closed = (*session)->close();
+        REQUIRE(closed.result == core::ResultKind::Success);
+        REQUIRE(closed.resourcesReleased);
+        verifyEvents(runId, heapMode, false);
+    };
+
+    runOverflow(false, "set-overflow");
+    runOverflow(true, "heap-overflow");
 }

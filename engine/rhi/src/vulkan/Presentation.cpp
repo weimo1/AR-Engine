@@ -74,10 +74,17 @@ std::expected<void, core::Error> Presentation::open(
     m_lighting = lighting;
     if (m_heapBinding) {
         const auto& plan = m_heapBinding->plan();
-        if (plan.imageStride > (std::numeric_limits<std::uint32_t>::max)() ||
+        if (plan.imageStride == 0 || plan.samplerStride == 0 ||
+            plan.imageRegionSize < kHeapTotalSceneImages * plan.imageStride ||
+            plan.samplerRegionSize < kHeapSceneSamplerCount * plan.samplerStride ||
+            plan.imageStride > (std::numeric_limits<std::uint32_t>::max)() ||
+            plan.imageRegionSize > (std::numeric_limits<std::uint32_t>::max)() ||
             plan.samplerStride > (std::numeric_limits<std::uint32_t>::max)() ||
+            plan.samplerRegionSize > (std::numeric_limits<std::uint32_t>::max)() ||
             plan.bufferBaseOffset > (std::numeric_limits<std::uint32_t>::max)() ||
-            plan.bufferStride > (std::numeric_limits<std::uint32_t>::max)()) {
+            plan.bufferStride > (std::numeric_limits<std::uint32_t>::max)() ||
+            plan.bufferRegionSize >
+                (std::numeric_limits<std::uint32_t>::max)() - plan.bufferBaseOffset) {
             return std::unexpected(
                 core::Error{
                     core::ErrorCategory::QueryFailed,
@@ -120,7 +127,7 @@ std::expected<void, core::Error> Presentation::open(
             return created;
         }
     }
-    if (m_lighting) {
+    if (m_lighting && !m_heapBinding) {
         if (auto created = createLightingLayout(); !created) {
             return created;
         }
@@ -308,8 +315,15 @@ std::expected<bool, core::Error> Presentation::createSwapchain(VkExtent2D frameb
     }
     if (m_shaders) {
         const VkFormat geometryOutput = m_lighting ? VK_FORMAT_UNDEFINED : *format;
+        const PipelineKind geometryKind = (m_staticScene && m_staticScene->indirectEnabled())
+                                              ? PipelineKind::IndirectGeometry
+                                              : PipelineKind::DirectGeometry;
         if (auto created = createGraphicsPipeline(
-                geometryOutput, m_shaders->vertex, m_shaders->fragment, m_swapchain.pipeline);
+                geometryOutput,
+                m_shaders->vertex,
+                m_shaders->fragment,
+                m_swapchain.pipeline,
+                geometryKind);
             !created) {
             return std::unexpected(std::move(created.error()));
         }
@@ -327,7 +341,7 @@ std::expected<bool, core::Error> Presentation::createSwapchain(VkExtent2D frameb
                 m_lighting->vertex,
                 m_lighting->directFragment,
                 m_swapchain.directPipeline,
-                true);
+                PipelineKind::DeferredLighting);
             !created) {
             return std::unexpected(created.error());
         }
@@ -336,7 +350,7 @@ std::expected<bool, core::Error> Presentation::createSwapchain(VkExtent2D frameb
                 m_lighting->vertex,
                 m_lighting->displayFragment,
                 m_swapchain.displayPipeline,
-                true);
+                PipelineKind::Display);
             !created) {
             return std::unexpected(created.error());
         }
@@ -859,9 +873,20 @@ Presentation::publishEnvironment(const EnvironmentUpload& upload, bool verifyRol
         m_staticScene->destroyEnvironment(*candidate);
         return std::unexpected(std::move(*error));
     }
+    if (m_heapBinding) {
+        if (auto written = writeEnvironmentHeapDescriptors(*candidate); !written) {
+            if (m_environmentReady) {
+                static_cast<void>(writeEnvironmentHeapDescriptors(m_environment));
+            } else {
+                resetEnvironmentHeapDescriptors();
+            }
+            m_staticScene->destroyEnvironment(*candidate);
+            return written;
+        }
+    }
     std::swap(m_environment, *candidate);
     m_environmentReady = true;
-    if (m_swapchain.handle) {
+    if (!m_heapBinding && m_swapchain.handle) {
         writeEnvironmentDescriptors();
     }
     m_staticScene->destroyEnvironment(*candidate);
@@ -890,6 +915,9 @@ std::optional<core::Error> Presentation::close() {
         frame = {};
     }
     destroySwapchain();
+    if (m_heapBinding) {
+        resetEnvironmentHeapDescriptors();
+    }
     if (m_staticScene) {
         m_staticScene->destroyEnvironment(m_environment);
     }
@@ -912,6 +940,9 @@ std::optional<core::Error> Presentation::close() {
 }
 
 void Presentation::destroySwapchain() noexcept {
+    if (m_heapBinding) {
+        resetAttachmentHeapDescriptors();
+    }
     if (m_swapchain.lightingPool) {
         vkDestroyDescriptorPool(m_device, m_swapchain.lightingPool, nullptr);
     }
