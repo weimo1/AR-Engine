@@ -70,6 +70,42 @@ Camera readCamera(const Json& value) {
     return camera;
 }
 
+DirectionalLight readDirectionalLight(const Json& value) {
+    if (!value.is_object()) {
+        throw std::invalid_argument("directional_light must be a JSON object");
+    }
+    DirectionalLight light{};
+    light.direction = vector<3>(value.at("direction"));
+    const double lengthSquared =
+        static_cast<double>(light.direction[0]) * light.direction[0] +
+        static_cast<double>(light.direction[1]) * light.direction[1] +
+        static_cast<double>(light.direction[2]) * light.direction[2];
+    if (!std::isfinite(lengthSquared) || lengthSquared <= 1e-12) {
+        throw std::invalid_argument("directional_light direction must be finite and non-zero");
+    }
+    if (const auto it = value.find("color"); it != value.end()) {
+        light.color = vector<3>(*it);
+        for (const float channel : light.color) {
+            if (channel < 0.F) {
+                throw std::invalid_argument("directional_light color components must be non-negative");
+            }
+        }
+    }
+    if (const auto it = value.find("intensity"); it != value.end()) {
+        light.intensity = number(*it);
+        if (light.intensity < 0.F) {
+            throw std::invalid_argument("directional_light intensity must be non-negative");
+        }
+    }
+    if (const auto it = value.find("cast_shadows"); it != value.end()) {
+        if (!it->is_boolean()) {
+            throw std::invalid_argument("directional_light cast_shadows must be a boolean");
+        }
+        light.castShadows = it->get<bool>();
+    }
+    return light;
+}
+
 Instance readInstance(const Json& value) {
     const auto& id = value.at("id");
     if (!id.is_number_unsigned() || id.get<std::uint64_t>() == 0) {
@@ -126,6 +162,7 @@ std::expected<void, FileError> saveFile(const fs::path& destination, const std::
 struct StaticScene::Data {
     entt::registry registry;
     Camera camera;
+    std::optional<DirectionalLight> directionalLight;
 };
 
 StaticScene::StaticScene(std::unique_ptr<Data> data) : m_data(std::move(data)) {}
@@ -163,6 +200,9 @@ std::expected<StaticScene, FileError> StaticScene::load(const fs::path& source) 
         }
         auto data = std::make_unique<Data>();
         data->camera = readCamera(document.at("camera"));
+        if (const auto light = document.find("directional_light"); light != document.end()) {
+            data->directionalLight = readDirectionalLight(*light);
+        }
         std::unordered_set<std::uint64_t> ids;
         for (const auto& object : objects) {
             auto instance = readInstance(object);
@@ -186,6 +226,10 @@ Camera StaticScene::camera() const {
     return m_data->camera;
 }
 
+std::optional<DirectionalLight> StaticScene::directionalLight() const {
+    return m_data->directionalLight;
+}
+
 std::vector<Instance> StaticScene::instances() const {
     std::vector<Instance> result;
     const auto view = std::as_const(m_data->registry).view<const Instance>();
@@ -207,10 +251,17 @@ std::expected<void, FileError> StaticScene::save(const fs::path& destination) co
             {"position", instance.transform.position}, {"rotation", instance.transform.rotation},
             {"scale", instance.transform.scale}});
     }
-    const Json document{
+    Json document{
         {"version", 1}, {"objects", std::move(objects)},
         {"camera", {{"position", view.position}, {"orientation", view.orientation},
                     {"fov_y", view.verticalFovRadians}, {"near", view.nearPlane}, {"far", view.farPlane}}}};
+    if (const auto light = directionalLight()) {
+        document["directional_light"] = {
+            {"direction", light->direction},
+            {"color", light->color},
+            {"intensity", light->intensity},
+            {"cast_shadows", light->castShadows}};
+    }
     auto bytes = document.dump(2) + '\n';
     if (bytes.size() > maxSceneBytes) {
         bytes = document.dump() + '\n';

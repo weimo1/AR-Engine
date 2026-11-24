@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/Error.h"
+#include "platform/WindowInput.h"
 
 namespace ar::platform {
 
@@ -34,6 +35,9 @@ public:
     void pollEvents() const noexcept;
     // The timeout is a positive, finite number of seconds.
     void waitEvents(double seconds) const noexcept;
+    [[nodiscard]] InputState sampleInput() noexcept;
+    void setCursorMode(CursorMode mode) noexcept;
+    [[nodiscard]] CursorMode cursorMode() const noexcept;
     void requestClose() noexcept;
     [[nodiscard]] bool shouldClose() const noexcept;
     [[nodiscard]] FramebufferSize framebufferSize() const noexcept;

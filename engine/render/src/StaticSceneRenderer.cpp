@@ -63,7 +63,8 @@ buildFrameView(const StaticCamera& camera, bool enableGBuffer) {
     }
     const auto clipFromWorld = projection * view;
     const auto inverseProjection = glm::inverse(projection);
-    const auto cameraRotation = glm::mat4_cast(orientation);
+    const auto viewToWorld =
+        glm::translate(glm::mat4(1.F), {px, py, pz}) * glm::mat4_cast(orientation);
 
     rhi::FrameView result{};
     std::copy_n(glm::value_ptr(view), result.view.size(), result.view.begin());
@@ -74,7 +75,7 @@ buildFrameView(const StaticCamera& camera, bool enableGBuffer) {
         result.inverseProjection.size(),
         result.inverseProjection.begin());
     std::copy_n(
-        glm::value_ptr(cameraRotation), result.viewToWorld.size(), result.viewToWorld.begin());
+        glm::value_ptr(viewToWorld), result.viewToWorld.size(), result.viewToWorld.begin());
     if (!allFinite(result.view) || !allFinite(result.clipFromWorld) ||
         !allFinite(result.inverseProjection) || !allFinite(result.viewToWorld)) {
         return std::unexpected(invalidCamera("camera parameters produce non-finite view matrices"));

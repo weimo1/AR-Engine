@@ -22,16 +22,6 @@ mulMat4Vec4(const std::array<float, 16>& matrix, const std::array<float, 4>& vec
 }
 
 std::array<float, 3>
-mulMat3PaddedVec3(const std::array<float, 12>& matrix, const std::array<float, 3>& vector) {
-    std::array<float, 3> out{};
-    for (std::size_t row = 0; row < 3; ++row) {
-        out[row] =
-            matrix[row] * vector[0] + matrix[4 + row] * vector[1] + matrix[8 + row] * vector[2];
-    }
-    return out;
-}
-
-std::array<float, 3>
 mulUpperMat3Vec3(const std::array<float, 16>& matrix, const std::array<float, 3>& vector) {
     std::array<float, 3> out{};
     for (std::size_t row = 0; row < 3; ++row) {
@@ -104,10 +94,24 @@ TEST_CASE(
         CHECK(camInView[3] == Catch::Approx(1.F).margin(1e-5F));
 
         // +90 deg yaw around +Y rotates local -Z to world -X.
-        const auto worldForward = mulMat3PaddedVec3(built->viewToWorld, {0.F, 0.F, -1.F});
+        const auto worldForward = mulUpperMat3Vec3(built->viewToWorld, {0.F, 0.F, -1.F});
         CHECK(worldForward[0] == Catch::Approx(-1.F).margin(1e-5F));
         CHECK(worldForward[1] == Catch::Approx(0.F).margin(1e-5F));
         CHECK(worldForward[2] == Catch::Approx(0.F).margin(1e-5F));
+
+        // 4x4 viewToWorld maps view origin to camera position and satisfies view * viewToWorld == I.
+        const auto worldOrigin = mulMat4Vec4(built->viewToWorld, {0.F, 0.F, 0.F, 1.F});
+        CHECK(worldOrigin[0] == Catch::Approx(2.F).margin(1e-5F));
+        CHECK(worldOrigin[1] == Catch::Approx(-3.F).margin(1e-5F));
+        CHECK(worldOrigin[2] == Catch::Approx(4.F).margin(1e-5F));
+        CHECK(worldOrigin[3] == Catch::Approx(1.F).margin(1e-5F));
+
+        const auto roundTripPoint =
+            mulMat4Vec4(built->viewToWorld, mulMat4Vec4(built->view, {0.F, -3.F, 4.F, 1.F}));
+        CHECK(roundTripPoint[0] == Catch::Approx(0.F).margin(1e-5F));
+        CHECK(roundTripPoint[1] == Catch::Approx(-3.F).margin(1e-5F));
+        CHECK(roundTripPoint[2] == Catch::Approx(4.F).margin(1e-5F));
+        CHECK(roundTripPoint[3] == Catch::Approx(1.F).margin(1e-5F));
 
         // World point 2 units along -X from camera lands at view (0, 0, -2).
         const auto aheadInView = mulMat4Vec4(built->view, {0.F, -3.F, 4.F, 1.F});
@@ -123,7 +127,7 @@ TEST_CASE(
         };
         for (std::size_t axis = 0; axis < axes.size(); ++axis) {
             const auto inView = mulUpperMat3Vec3(built->view, axes[axis]);
-            const auto back = mulMat3PaddedVec3(built->viewToWorld, inView);
+            const auto back = mulUpperMat3Vec3(built->viewToWorld, inView);
             for (std::size_t component = 0; component < 3; ++component) {
                 CHECK(back[component] == Catch::Approx(axes[axis][component]).margin(1e-5F));
             }

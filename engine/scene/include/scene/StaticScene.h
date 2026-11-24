@@ -5,6 +5,7 @@
 #include <expected>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -38,6 +39,15 @@ struct Camera {
     float farPlane;
 };
 
+struct DirectionalLight {
+    std::array<float, 3> direction{-0.4F, -0.85F, -0.35F};
+    std::array<float, 3> color{1.F, 1.F, 1.F};
+    float intensity = 6.0F;
+    bool castShadows = true;
+
+    bool operator==(const DirectionalLight&) const = default;
+};
+
 class StaticScene {
 public:
     static std::expected<StaticScene, FileError> load(const std::filesystem::path& source);
@@ -48,6 +58,7 @@ public:
     StaticScene& operator=(StaticScene&&) noexcept;
 
     Camera camera() const;
+    std::optional<DirectionalLight> directionalLight() const;
     std::vector<Instance> instances() const;
 
 private:

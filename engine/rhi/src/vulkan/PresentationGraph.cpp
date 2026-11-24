@@ -67,7 +67,9 @@ void Presentation::recordGraphBarriers(
         slot.gbuffer[1].image,
         slot.gbuffer[2].image,
         slot.depth.image,
-        slot.hdr.image};
+        slot.hdr.image,
+        VkImage{VK_NULL_HANDLE}};
+    static_assert(images.size() == std::to_underlying(PresentationImage::Count));
     std::array<VkImageMemoryBarrier2, images.size()> barriers{};
     std::uint32_t count = 0;
     for (const auto& access : plan.barriers[std::to_underlying(pass)]) {
@@ -89,9 +91,11 @@ void Presentation::recordGraphBarriers(
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.image = images[std::to_underlying(access.image)];
-        const VkImageAspectFlags aspect = access.image == PresentationImage::Depth
-                                              ? VK_IMAGE_ASPECT_DEPTH_BIT
-                                              : VK_IMAGE_ASPECT_COLOR_BIT;
+        const VkImageAspectFlags aspect =
+            (access.image == PresentationImage::Depth ||
+             access.image == PresentationImage::ShadowDepth)
+                ? VK_IMAGE_ASPECT_DEPTH_BIT
+                : VK_IMAGE_ASPECT_COLOR_BIT;
         barrier.subresourceRange = {aspect, 0, 1, 0, 1};
     }
     if (count != 0) {
@@ -110,7 +114,9 @@ bool Presentation::validGraphPlan(const PresentationGraphPlan& plan, bool captur
         slot.gbuffer[1].image != VK_NULL_HANDLE,
         slot.gbuffer[2].image != VK_NULL_HANDLE,
         slot.depth.image != VK_NULL_HANDLE,
-        slot.hdr.image != VK_NULL_HANDLE};
+        slot.hdr.image != VK_NULL_HANDLE,
+        false};
+    static_assert(bound.size() == std::to_underlying(PresentationImage::Count));
     for (const auto& pass : plan.barriers) {
         std::array<bool, bound.size()> seen{};
         for (const auto& barrier : pass) {

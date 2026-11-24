@@ -190,9 +190,9 @@ set_tests_properties(runtime-system-inspect runtime-system-development PROPERTIE
 set_tests_properties(sample-resize sample-camera-view-update sample-static-scene-heap-gbuffer sample-static-scene-heap-gpu-driven PROPERTIES LABELS gpu TIMEOUT 60
     ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>;VK_VALIDATION_VALIDATE_SYNC=1")
 
-add_executable(ar_platform_tests platform/test_window.cpp)
+add_executable(ar_platform_tests platform/test_window.cpp platform/test_window_input.cpp)
 target_link_libraries(ar_platform_tests PRIVATE ar_platform Catch2::Catch2WithMain)
-foreach(case IN ITEMS platform-window-create platform-window-vulkan-extensions)
+foreach(case IN ITEMS platform-window-create platform-window-vulkan-extensions platform-input-state platform-window-input)
     add_test(NAME ${case} COMMAND ar_platform_tests "[${case}]")
     set_tests_properties(${case} PROPERTIES TIMEOUT 15)
 endforeach()
@@ -350,11 +350,29 @@ set_tests_properties(sample-descriptor-heap-scene-parity PROPERTIES
     LABELS "gpu" TIMEOUT 60
     ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1")
 
-add_executable(ar_render_tests render/test_cull_reference.cpp render/test_environment_lighting.cpp render/test_frame_view.cpp render/test_presentation_spec.cpp render/test_render_graph.cpp render/test_static_scene_draw_data.cpp)
-target_link_libraries(ar_render_tests PRIVATE ar_render ar_assets Catch2::Catch2WithMain)
+add_executable(ar_render_tests
+    render/test_cull_reference.cpp
+    render/test_directional_shadow.cpp
+    render/test_environment_lighting.cpp
+    render/test_frame_view.cpp
+    render/test_free_camera.cpp
+    render/test_presentation_spec.cpp
+    render/test_render_graph.cpp
+    render/test_static_scene_draw_data.cpp
+)
+target_link_libraries(ar_render_tests PRIVATE ar_render ar_assets ar_scene Catch2::Catch2WithMain)
+set_target_properties(ar_render_tests PROPERTIES
+    FOLDER "Tests"
+    VS_DEBUGGER_ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
+)
 add_test(NAME render-culling-reference COMMAND ar_render_tests "[render-culling-reference]")
+add_test(NAME render-directional-shadow COMMAND ar_render_tests "[render-directional-shadow]")
+set_tests_properties(render-directional-shadow PROPERTIES
+    ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
+)
 add_test(NAME render-environment-lighting COMMAND ar_render_tests "[render-environment-lighting]")
 add_test(NAME render-frame-view COMMAND ar_render_tests "[render-frame-view]")
+add_test(NAME render-free-camera COMMAND ar_render_tests "[render-free-camera]")
 add_test(NAME render-presentation-spec COMMAND ar_render_tests "[render-presentation-spec]")
 add_test(NAME render-graph-plan COMMAND ar_render_tests "[render-graph-plan]")
 add_test(NAME render-static-scene-draw-data COMMAND ar_render_tests "[render-static-scene-draw-data]")

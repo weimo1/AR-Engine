@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "objective": "完成 P4b（方向光阴影与相机漫游）：在保持 Vulkan 1.3 Descriptor Set 与 Vulkan 1.4 Descriptor Heap 双路径等价与单向依赖边界的前提下，接入单方向光正交 Shadow Map（含独立于主相机剔除列表的阴影深度 Pass、延迟光照 UBO 化与 PCF 比较采样），并补齐 platform 输入快照与 render 自由相机控制器，支持交互式实时漫游与自动化对照验证。",
+  "non_goals": [
+    "删除或破坏既有 96 项无阴影基线用例及既有 scene.json 兼容性",
+    "本批实现多级联 CSM、点光/聚光阴影、软阴影 PCSS 或 VSM/ESM",
+    "本批接入 ImGui 调试面板、四配置性能基准导出或统一 P6-P7 交付入口",
+    "让阴影 Pass 复用主相机视锥剔除结果导致视锥外遮挡体阴影消失"
+  ],
+  "tags": ["native"],
+  "documents": [],
+  "skills": ["ar-cpp-oop-style", "ar-cpp-hpc-optimization", "ar-e2e-side-effect-safety"],
+  "write_paths": [
+    "TASK.md",
+    "openspec/changes/p4b-shadow-free-camera/**",
+    "engine/platform/**",
+    "engine/scene/**",
+    "engine/render/**",
+    "engine/rhi/**",
+    "engine/runtime/**",
+    "shaders/**",
+    "examples/triangle/**",
+    "tests/**",
+    "workflow/p0-checks.json"
+  ]
+}

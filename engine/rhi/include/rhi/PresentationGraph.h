@@ -35,9 +35,10 @@ enum class PresentationImage : std::uint32_t {
     Material,
     Depth,
     Hdr,
+    ShadowDepth,
     Count
 };
-enum class PresentationPass { Geometry, Lighting, Display, Copy, Present, Count };
+enum class PresentationPass { Shadow, Geometry, Lighting, Display, Copy, Present, Count };
 enum class IndirectBuffer { Commands, Counts };
 enum class IndirectUse { Clear, ComputeWrite, ComputeReadWrite, DrawRead, HostRead };
 enum class IndirectPhase { Cull, Geometry, Readback, Count };
@@ -61,6 +62,7 @@ struct PresentationGraphInput {
     bool capture;
     bool environment;
     bool indirect = false;
+    bool shadows = false;
 };
 
 struct PresentationBarrier {

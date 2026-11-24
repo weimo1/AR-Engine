@@ -10,6 +10,14 @@ namespace ar::render {
 
 std::expected<rhi::PresentationGraphPlan, core::Error>
 planPresentationGraph(const rhi::PresentationGraphInput& input) {
+    if (input.shadows && !input.lighting) {
+        return std::unexpected(
+            core::Error{
+                core::ErrorCategory::InvalidArguments,
+                core::ErrorStage::Validation,
+                "presentation graph shadows require deferred lighting to be enabled",
+                {}});
+    }
     using Image = rhi::PresentationImage;
     using Pass = rhi::PresentationPass;
     constexpr auto color = GraphUsage::ColorWrite;
@@ -25,6 +33,7 @@ planPresentationGraph(const rhi::PresentationGraphInput& input) {
         GraphImage{},
         GraphImage{1, 1, GraphAspect::Depth},
         GraphImage{},
+        GraphImage{1, 1, GraphAspect::Depth},
         GraphImage{1, 6},
         GraphImage{5, 6},
         GraphImage{},
@@ -37,6 +46,9 @@ planPresentationGraph(const rhi::PresentationGraphInput& input) {
         }
     }
 
+    const std::array shadow{
+        access(Image::ShadowDepth, GraphUsage::DepthWrite, true),
+    };
     const std::array geometry{
         access(Image::Albedo, color, true),
         access(Image::Normal, color, true),
@@ -50,6 +62,7 @@ planPresentationGraph(const rhi::PresentationGraphInput& input) {
         access(Image::Material, sample),
         access(Image::Depth, sample),
         access(Image::Hdr, color, true),
+        access(Image::ShadowDepth, sample),
     };
     std::array<GraphAccess, 37> environment{};
     std::size_t environmentCount = 0;
@@ -76,9 +89,12 @@ planPresentationGraph(const rhi::PresentationGraphInput& input) {
     };
     const std::array present{access(Image::Output, GraphUsage::Present)};
     const std::array passes{
+        GraphPass{
+            input.shadows ? std::span<const GraphAccess>(shadow)
+                          : std::span<const GraphAccess>{}},
         GraphPass{std::span(geometry).first(input.lighting ? 4 : 5)},
         GraphPass{
-            input.lighting ? std::span<const GraphAccess>(lighting)
+            input.lighting ? std::span(lighting).first(input.shadows ? 6 : 5)
                            : std::span<const GraphAccess>{},
             input.environment,
             std::span(environment).first(environmentCount)},

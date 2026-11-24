@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace ar::assets {
@@ -27,9 +28,19 @@ struct StaticDraw {
     std::shared_ptr<const assets::StaticMesh> mesh;
 };
 
+struct DirectionalLight {
+    std::array<float, 3> direction{-0.4F, -0.85F, -0.35F};
+    std::array<float, 3> color{1.F, 1.F, 1.F};
+    float intensity = 6.0F;
+    bool castShadows = true;
+
+    bool operator==(const DirectionalLight&) const = default;
+};
+
 struct StaticRenderInput {
     StaticCamera camera;
     std::vector<StaticDraw> draws;
+    std::optional<DirectionalLight> directionalLight{};
 };
 
 } // namespace ar::render

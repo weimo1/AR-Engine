@@ -66,7 +66,7 @@ std::expected<void, core::Error> Presentation::createLightingLayout() {
         VK_SHADER_STAGE_FRAGMENT_BIT,
         0,
         static_cast<std::uint32_t>(
-            sizeof(m_frameView.inverseProjection) + sizeof(m_frameView.viewToWorld))};
+            sizeof(m_frameView.inverseProjection) + sizeof(std::array<float, 12>))};
     VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layout.setLayoutCount = 1;
     layout.pSetLayouts = &m_lightingSetLayout;
@@ -344,6 +344,8 @@ void Presentation::recordLighting(
     auto inverse = m_frameView.inverseProjection;
     inverse[0] *= static_cast<float>(m_swapchain.extent.width) /
                   static_cast<float>(m_swapchain.extent.height);
+    std::array<float, 12> viewToWorld3x4{};
+    std::memcpy(viewToWorld3x4.data(), m_frameView.viewToWorld.data(), sizeof(viewToWorld3x4));
     if (m_heapBinding) {
         struct DirectHeapPush {
             std::array<float, 16> inverseProjection;
@@ -352,13 +354,13 @@ void Presentation::recordLighting(
         };
         static_assert(sizeof(DirectHeapPush) == 116);
         const DirectHeapPush direct{
-            inverse, m_frameView.viewToWorld, static_cast<std::uint32_t>(m_frameIndex)};
+            inverse, viewToWorld3x4, static_cast<std::uint32_t>(m_frameIndex)};
         draw(slot.hdr.view, m_swapchain.directPipeline, VK_NULL_HANDLE, sizeof(direct), &direct);
     } else {
         const struct DirectPush {
             std::array<float, 16> inverseProjection;
             std::array<float, 12> viewToWorld;
-        } direct{inverse, m_frameView.viewToWorld};
+        } direct{inverse, viewToWorld3x4};
         static_assert(sizeof(DirectPush) == 112);
         draw(slot.hdr.view, m_swapchain.directPipeline, slot.directSet, sizeof(direct), &direct);
     }

@@ -68,7 +68,13 @@ std::expected<void, StaticSceneError> StaticSceneSession::open(
     const auto camera = candidate->camera();
     render::StaticRenderInput input{
         {camera.position, camera.orientation, camera.verticalFovRadians, camera.nearPlane,
-         camera.farPlane}, {}};
+         camera.farPlane},
+        {},
+        std::nullopt};
+    if (const auto light = candidate->directionalLight()) {
+        input.directionalLight = render::DirectionalLight{
+            light->direction, light->color, light->intensity, light->castShadows};
+    }
     const auto instances = candidate->instances();
     input.draws.reserve(instances.size());
     // Deduplicate asset resolution within one open() so repeated instances avoid redundant
