@@ -160,7 +160,7 @@
   - 验收：`sample-static-scene-heap-gpu-driven`（标签 `gpu`）验证同一场景下 1.3 Set 与 1.4 Heap 的非溢出可见集合/HDR/IBL 探针/SDR 输出一致、容量截断溢出各自满足合法子集与无越界、交换链 Resize 与运行期环境替换（`Constant`→回滚→`Directional`）无过期描述符、Debug Sync Validation 零错误。
 - [x] T46 `ar_triangle --descriptor-heap` 入口与端到端 Set/Heap 对照脚本：`ar_triangle` 接入 `--descriptor-heap` 与冲突参数拒绝，`sample-descriptor-heap-scene-parity` 端到端验证 Set/Heap 剔除、探针与整帧 PNG 完全一致及回滚不变、Debug Sync Validation 零错误，双配置各 96/96 零警告，DSH 独立评审 4/4 PASS。
   - 验收：`sample-descriptor-heap-scene-parity`（标签 `gpu`）通过 `ar_triangle` 端到端对照 Set 与 `--descriptor-heap`（含 `--static-gpu-driven --hdr-lighting --ibl directional`）的可见性、探针与 PNG，且冲突/不支持组合显式拒绝、不静默回退。
-- [ ] T47 [人工] P5 第二批（同场景 Set vs. Heap 对照）里程碑验收
+- [x] T47 [人工] P5 第二批（同场景 Set vs. Heap 对照）里程碑验收。受用户委托复跑三项真机用例，Set/Heap 及 Heap 环境回滚的 PNG 逐字节一致，可见 ID、探针和资源释放检查通过，Debug Sync Validation 零错误。T46 双配置各 96/96，零编译警告。
   - 用户核对同场景 Set/Heap 画面、探针、剔除与 Resize/Validation 证据后，决定进入 P4b（方向光阴影与相机漫游）。
 
 ## 人工待办（不阻塞队列）
