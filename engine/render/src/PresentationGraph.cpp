@@ -18,6 +18,22 @@ planPresentationGraph(const rhi::PresentationGraphInput& input) {
                 "presentation graph shadows require deferred lighting to be enabled",
                 {}});
     }
+    if (input.debugView != rhi::DebugViewMode::Final && !input.lighting) {
+        return std::unexpected(
+            core::Error{
+                core::ErrorCategory::InvalidArguments,
+                core::ErrorStage::Validation,
+                "debug display views require deferred lighting to be enabled",
+                {}});
+    }
+    if (input.debugView == rhi::DebugViewMode::ShadowDepth && !input.shadows) {
+        return std::unexpected(
+            core::Error{
+                core::ErrorCategory::InvalidArguments,
+                core::ErrorStage::Validation,
+                "shadow depth debug view requires directional shadows to be enabled",
+                {}});
+    }
     using Image = rhi::PresentationImage;
     using Pass = rhi::PresentationPass;
     constexpr auto color = GraphUsage::ColorWrite;
@@ -78,7 +94,23 @@ planPresentationGraph(const rhi::PresentationGraphInput& input) {
             }
         }
     }
-    const std::array display{access(Image::Hdr, sample), access(Image::Output, color, true)};
+    std::array<GraphAccess, 7> display{};
+    std::size_t displayCount = 0;
+    if (input.lighting) {
+        // display_sdr.frag statically binds Hdr + GBuffer + Depth (and ShadowDepth when active) in
+        // a single shader; keep all statically bound descriptors in ShaderRead across all 6 views
+        // so Vulkan VUID-vkCmdDraw-imageLayout-00344 is satisfied on Descriptor Set and Heap alike.
+        display[displayCount++] = access(Image::Hdr, sample);
+        display[displayCount++] = access(Image::Albedo, sample);
+        display[displayCount++] = access(Image::Normal, sample);
+        display[displayCount++] = access(Image::Material, sample);
+        display[displayCount++] = access(Image::Depth, sample);
+        if (input.shadows) {
+            display[displayCount++] = access(Image::ShadowDepth, sample);
+        }
+        display[displayCount++] = access(Image::Output, color, true);
+    }
+    const std::array overlay{access(Image::Output, color, false)};
     const std::array readback{
         access(Image::Output, copy),
         access(Image::Albedo, copy),
@@ -97,9 +129,9 @@ planPresentationGraph(const rhi::PresentationGraphInput& input) {
                            : std::span<const GraphAccess>{},
             input.environment,
             std::span(environment).first(environmentCount)},
+        GraphPass{std::span(display).first(displayCount)},
         GraphPass{
-            input.lighting ? std::span<const GraphAccess>(display)
-                           : std::span<const GraphAccess>{}},
+            input.overlay ? std::span<const GraphAccess>(overlay) : std::span<const GraphAccess>{}},
         GraphPass{std::span(readback).first(input.capture ? (input.lighting ? 6 : 5) : 0)},
         GraphPass{present},
     };
@@ -117,7 +149,7 @@ planPresentationGraph(const rhi::PresentationGraphInput& input) {
                 {}});
     }
     rhi::PresentationGraphPlan result{};
-    if (input.indirect) {
+    if (input.indirectProducer == rhi::IndirectProducer::GpuCompute) {
         using Buffer = rhi::IndirectBuffer;
         using Use = rhi::IndirectUse;
         using Phase = rhi::IndirectPhase;
@@ -130,6 +162,10 @@ planPresentationGraph(const rhi::PresentationGraphInput& input) {
         if (input.capture) {
             result.indirectBarriers[std::to_underlying(Phase::Readback)] = {
                 {Buffer::Commands, Use::ComputeWrite, Use::HostRead},
+                {Buffer::Counts, Use::ComputeReadWrite, Use::HostRead},
+                {Buffer::Counts, Use::Clear, Use::HostRead}};
+        } else if (input.readIndirectCounts) {
+            result.indirectBarriers[std::to_underlying(Phase::Readback)] = {
                 {Buffer::Counts, Use::ComputeReadWrite, Use::HostRead},
                 {Buffer::Counts, Use::Clear, Use::HostRead}};
         }

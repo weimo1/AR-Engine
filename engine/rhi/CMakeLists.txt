@@ -2,6 +2,7 @@ find_package(volk CONFIG REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 
 add_library(ar_rhi STATIC
+    src/vulkan/OverlayDraw.cpp
     src/vulkan/Presentation.cpp
     src/vulkan/PresentationCapture.cpp
     src/vulkan/PresentationGraph.cpp

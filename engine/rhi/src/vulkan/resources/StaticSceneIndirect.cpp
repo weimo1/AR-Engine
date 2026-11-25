@@ -1,6 +1,7 @@
 #include "StaticSceneIndirect.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -27,6 +28,22 @@ static_assert(offsetof(StaticSceneIndirect::Material, metallic) == 16);
 static_assert(offsetof(StaticSceneIndirect::Material, albedo) == 24);
 static_assert(sizeof(VkDrawIndexedIndirectCommand) == 20);
 static_assert(offsetof(VkDrawIndexedIndirectCommand, firstInstance) == 16);
+static_assert(sizeof(IndexedIndirectDrawCommand) == sizeof(VkDrawIndexedIndirectCommand));
+static_assert(
+    offsetof(IndexedIndirectDrawCommand, indexCount) ==
+    offsetof(VkDrawIndexedIndirectCommand, indexCount));
+static_assert(
+    offsetof(IndexedIndirectDrawCommand, instanceCount) ==
+    offsetof(VkDrawIndexedIndirectCommand, instanceCount));
+static_assert(
+    offsetof(IndexedIndirectDrawCommand, firstIndex) ==
+    offsetof(VkDrawIndexedIndirectCommand, firstIndex));
+static_assert(
+    offsetof(IndexedIndirectDrawCommand, vertexOffset) ==
+    offsetof(VkDrawIndexedIndirectCommand, vertexOffset));
+static_assert(
+    offsetof(IndexedIndirectDrawCommand, firstInstance) ==
+    offsetof(VkDrawIndexedIndirectCommand, firstInstance));
 
 std::unexpected<core::Error> failure(const char* operation, VkResult result) {
     return std::unexpected(
@@ -105,6 +122,9 @@ std::expected<void, core::Error> StaticSceneIndirect::open(const StaticIndirectS
     vkGetPhysicalDeviceProperties(m_resources.m_physical, &properties);
     m_limits = properties.limits;
     m_capacity = std::min(shaders.capacity, m_limits.maxDrawIndirectCount);
+    m_cullMode = shaders.cullMode;
+    m_cpuCull = shaders.cpuCull;
+    m_readIndirectCounts = shaders.readIndirectCounts;
     const auto device = m_resources.m_device;
     if (m_heapBindings) {
         m_getBufferDeviceAddress = reinterpret_cast<PFN_vkGetBufferDeviceAddress>(
@@ -134,6 +154,9 @@ std::expected<void, core::Error> StaticSceneIndirect::open(const StaticIndirectS
                     core::ErrorStage::Capability,
                     "Descriptor Heap buffer layout cannot map indirect buffers",
                     std::nullopt});
+        }
+        if (m_cullMode == StaticCullMode::CpuFrustum) {
+            return {};
         }
         const auto bufferBase = static_cast<std::uint32_t>(plan.bufferBaseOffset);
         const auto bufferStride = static_cast<std::uint32_t>(plan.bufferStride);
@@ -240,6 +263,9 @@ std::expected<void, core::Error> StaticSceneIndirect::open(const StaticIndirectS
         code != VK_SUCCESS) {
         return failure("create static indirect descriptor layout", code);
     }
+    if (m_cullMode == StaticCullMode::CpuFrustum) {
+        return {};
+    }
     struct ComputePush {
         std::uint32_t count, capacity;
     };
@@ -312,6 +338,24 @@ StaticSceneIndirect::prepare(
     auto scene = std::make_shared<Scene>(*this);
     scene->objectIds.assign(geometry.objectIds.begin(), geometry.objectIds.end());
     scene->capacity = std::min(m_capacity, static_cast<std::uint32_t>(instances.size()));
+    if (m_cullMode == StaticCullMode::CpuFrustum) {
+        scene->cpuCullInstances.reserve(instances.size());
+        for (std::uint32_t idx = 0u; idx < static_cast<std::uint32_t>(instances.size()); ++idx) {
+            const auto& inst = instances[idx];
+            scene->cpuCullInstances.push_back(
+                CpuCullInstance{
+                    inst.model,
+                    {inst.minimum[0], inst.minimum[1], inst.minimum[2]},
+                    {inst.maximum[0], inst.maximum[1], inst.maximum[2]},
+                    inst.firstIndex,
+                    inst.indexCount,
+                    inst.vertexOffset,
+                    idx});
+        }
+        if (m_cpuScratch.size() < scene->capacity) {
+            m_cpuScratch.resize(scene->capacity);
+        }
+    }
     const auto commandsSize = std::max(1u, scene->capacity) * sizeof(VkDrawIndexedIndirectCommand);
     if (commandsSize > m_limits.maxStorageBufferRange) {
         return invalid("static indirect command buffer exceeds device range");
@@ -542,6 +586,38 @@ std::expected<void, core::Error> StaticSceneIndirect::updateFrameView(
         scene.frames[slot].view.allocation, 0, std::as_bytes(std::span{&gpu, 1}));
 }
 
+std::expected<StaticSceneIndirect::CpuCullTiming, core::Error> StaticSceneIndirect::cullCpu(
+    const Scene& scene, std::size_t slot, const FrameView& view, float inverseAspect) {
+    if (m_cullMode != StaticCullMode::CpuFrustum || !m_cpuCull) {
+        return invalid("CPU frustum culling is not enabled for this static indirect scene");
+    }
+    const auto start = std::chrono::steady_clock::now();
+    if (m_cpuScratch.size() < scene.capacity) {
+        m_cpuScratch.resize(scene.capacity);
+    }
+    const std::span<IndexedIndirectDrawCommand> outSpan =
+        std::span(m_cpuScratch).first(scene.capacity);
+    const CpuCullResult culled =
+        m_cpuCull(scene.cpuCullInstances, view.clipFromWorld, inverseAspect, outSpan);
+    const auto& frame = scene.frames[slot];
+    const std::array<std::uint32_t, 2> counters{culled.visibleCount, culled.drawCount};
+    if (auto written = m_resources.writeAllocation(
+            frame.counts.allocation, 0, std::as_bytes(std::span{counters}));
+        !written) {
+        return std::unexpected(std::move(written.error()));
+    }
+    if (culled.drawCount > 0u) {
+        if (auto written = m_resources.writeAllocation(
+                frame.commands.allocation, 0, std::as_bytes(outSpan.first(culled.drawCount)));
+            !written) {
+            return std::unexpected(std::move(written.error()));
+        }
+    }
+    const auto end = std::chrono::steady_clock::now();
+    const double cullMs = std::chrono::duration<double, std::milli>(end - start).count();
+    return CpuCullTiming{culled.visibleCount, culled.drawCount, scene.capacity, cullMs};
+}
+
 void StaticSceneIndirect::barrier(
     const Scene& scene,
     VkCommandBuffer command,
@@ -734,6 +810,18 @@ StaticSceneIndirect::visibility(const Scene& scene, std::size_t slot) {
     }
     std::ranges::sort(result.drawnIds);
     return result;
+}
+
+std::expected<StaticSceneIndirect::IndirectCountSample, core::Error>
+StaticSceneIndirect::readCounts(const Scene& scene, std::size_t slot) {
+    const auto& frame = scene.frames[slot];
+    std::array<std::uint32_t, 2> values{};
+    if (auto read = m_resources.readAllocation(
+            frame.counts.allocation, 0, std::as_writable_bytes(std::span(values)));
+        !read) {
+        return std::unexpected(read.error());
+    }
+    return IndirectCountSample{values[0], values[1], scene.capacity};
 }
 
 } // namespace ar::rhi::detail

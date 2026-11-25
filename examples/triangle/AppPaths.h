@@ -8,8 +8,6 @@
 #include <string>
 #include <string_view>
 
-#include "render/EnvironmentLighting.h"
-
 namespace ar::app {
 
 struct AppPaths {
@@ -20,32 +18,17 @@ struct AppPaths {
     bool operator==(const AppPaths&) const = default;
 };
 
+// Minimal launch options for ar_engine. Interactive desktop startup requires zero arguments and
+// opens the built-in showroom with full deferred PBR, IBL, directional shadows, and free camera.
 struct LaunchOptions {
-    std::optional<std::uint32_t> frames;
-    bool visible = true;
-    bool showroom = false;
-    bool clearOnly = false;
-    bool gpuDriven = false;
-    bool gpuEmpty = false;
-    bool setBinding = false;
     bool descriptorHeap = false;
-    bool verifyBindingRetirement = false;
-    bool gbuffer = false;
-    bool bindlessMaterials = false;
-    bool staticGpuDriven = false;
-    std::optional<std::uint32_t> indirectCapacity;
-    bool hdrLighting = false;
-    bool shadows = false;
-    std::optional<std::uint32_t> shadowResolution;
-    bool freeCamera = false;
-    bool verifyIblRollback = false;
-    std::optional<ar::render::EnvironmentPreset> ibl;
-    std::optional<float> exposureEV;
-    std::optional<std::filesystem::path> gbufferProbes;
-    std::optional<std::filesystem::path> scene;
-    std::optional<std::filesystem::path> assetRoot;
-    std::optional<std::filesystem::path> sceneCandidate;
+    bool visible = true;
+    std::optional<std::uint32_t> frames;
+    std::filesystem::path scene;
+    std::filesystem::path assetRoot;
     std::optional<std::filesystem::path> screenshot;
+    std::optional<std::filesystem::path> gbufferProbes;
+    std::optional<std::filesystem::path> benchmarkSpec;
     std::filesystem::path output;
 };
 

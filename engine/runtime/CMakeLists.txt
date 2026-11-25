@@ -3,6 +3,7 @@ find_package(glm CONFIG REQUIRED)
 
 add_library(ar_runtime STATIC
     src/CapabilityJson.cpp
+    src/ObservationSettings.cpp
     src/RuntimeSession.cpp
     src/StaticSceneSession.cpp
 )

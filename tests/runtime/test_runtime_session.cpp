@@ -1194,7 +1194,7 @@ TEST_CASE(
     using namespace rhi::detail;
 
     // Scene Heap slot partitions match design.md:
-    // 256 scene + 10 per-frame attachments + 3 IBL + 2 shadow depth = 271 images,
+    // 256 scene + 10 per-frame attachments + 3 IBL + 2 shadow depth + 1 overlay font = 272 images,
     // 8 indirect + 2 LightingFrame UBO = 10 buffers, 4 samplers.
     STATIC_REQUIRE(kHeapSceneImageLimit == 256u);
     STATIC_REQUIRE(kHeapExternalImageBase == 256u);
@@ -1204,7 +1204,8 @@ TEST_CASE(
     STATIC_REQUIRE(kHeapEnvironmentImageCount == 3u);
     STATIC_REQUIRE(kHeapShadowImageBase == 269u);
     STATIC_REQUIRE(kHeapShadowImageCount == 2u);
-    STATIC_REQUIRE(kHeapTotalSceneImages == 271u);
+    STATIC_REQUIRE(kHeapOverlayFontImage == 271u);
+    STATIC_REQUIRE(kHeapTotalSceneImages == 272u);
     STATIC_REQUIRE(kHeapIndirectBufferCount == 8u);
     STATIC_REQUIRE(kHeapLightingBufferBase == 8u);
     STATIC_REQUIRE(kHeapLightingBufferCount == 2u);
@@ -1242,7 +1243,7 @@ TEST_CASE(
     const auto plan = planDescriptorHeaps(limits, sceneCapacity);
     REQUIRE(plan.has_value());
     CHECK(plan->imageStride == 64u);
-    CHECK(plan->imageRegionSize == 271u * 64u);
+    CHECK(plan->imageRegionSize == 272u * 64u);
     CHECK(plan->bufferStride == 32u);
     CHECK(plan->bufferBaseOffset >= plan->imageRegionSize);
     CHECK((plan->bufferBaseOffset % limits.bufferDescriptorAlignment) == 0u);
@@ -1380,11 +1381,12 @@ TEST_CASE(
         auto oversizedHeapDisplayPush = makeBase();
         oversizedHeapDisplayPush.deferredLighting =
             rhi::DeferredLighting{dummySpirv, dummySpirv, dummySpirv, 0.F, false};
-        oversizedHeapDisplayPush.presentationSpec->buildDisplayPush = [](float, bool) noexcept {
-            rhi::DisplayPushData data{};
-            data.size = 12u;
-            return data;
-        };
+        oversizedHeapDisplayPush.presentationSpec->buildDisplayPush =
+            [](const rhi::DisplayPushParams&) noexcept {
+                rhi::DisplayPushData data{};
+                data.size = 24u;
+                return data;
+            };
         opened = rhi::RhiSession::open(oversizedHeapDisplayPush, **diagnostics);
         REQUIRE_FALSE(opened.has_value());
         CHECK(opened.error().error.category == core::ErrorCategory::InvalidArguments);
@@ -3143,8 +3145,9 @@ TEST_CASE(
         checkFrameParity(setRun.pose3Reset, heapRun.pose3Reset);
     }
 
-    // End-to-end ar_triangle CLI verification for --shadows / --shadow-resolution / --free-camera.
-    const auto runTriangleCli = [&](const std::wstring& args) -> DWORD {
+    // End-to-end ar_engine verification: zero mode flags render shadowed showroom (Set vs Heap),
+    // and removed legacy/invalid flags return exit code 2 without creating diagnostics.
+    const auto runEngineCli = [&](const std::wstring& args) -> DWORD {
         std::wstring cmdLine = L"\"" + triangleExe.wstring() + L"\" " + args;
         STARTUPINFOW startup{};
         startup.cb = sizeof(startup);
@@ -3183,9 +3186,9 @@ TEST_CASE(
     const std::filesystem::path cliSetLogs = runRoot / "cli-set-logs";
     const std::filesystem::path cliSetPng = runRoot / "cli-set.png";
     CHECK(
-        runTriangleCli(
-            L"--showroom --shadows --shadow-resolution 1024 --hidden --frames 2 --output \"" +
-            cliSetLogs.wstring() + L"\" --screenshot \"" + cliSetPng.wstring() + L"\"") == 0u);
+        runEngineCli(
+            L"--hidden --frames 2 --output \"" + cliSetLogs.wstring() + L"\" --screenshot \"" +
+            cliSetPng.wstring() + L"\"") == 0u);
     const auto cliSetBytes = readFileBytes(cliSetPng);
     CHECK_FALSE(cliSetBytes.empty());
 
@@ -3193,28 +3196,621 @@ TEST_CASE(
         const std::filesystem::path cliHeapLogs = runRoot / "cli-heap-logs";
         const std::filesystem::path cliHeapPng = runRoot / "cli-heap.png";
         CHECK(
-            runTriangleCli(
-                L"--showroom --shadows --shadow-resolution 1024 --descriptor-heap --hidden "
-                L"--frames 2 --output \"" +
-                cliHeapLogs.wstring() + L"\" --screenshot \"" + cliHeapPng.wstring() + L"\"") ==
-            0u);
+            runEngineCli(
+                L"--descriptor-heap --hidden --frames 2 --output \"" + cliHeapLogs.wstring() +
+                L"\" --screenshot \"" + cliHeapPng.wstring() + L"\"") == 0u);
         const bool cliPngEqual = (readFileBytes(cliHeapPng) == cliSetBytes);
         CHECK(cliPngEqual);
     }
 
-    // Invalid / conflicting CLI combinations must return exit code 2 without creating diagnostics.
+    // Legacy/invalid CLI combinations must return exit code 2 without creating diagnostics.
     const std::filesystem::path cliInvalidLogs = runRoot / "cli-invalid-logs";
     CHECK(
-        runTriangleCli(
-            L"--showroom --free-camera --hidden --frames 2 --output \"" + cliInvalidLogs.wstring() +
-            L"\"") == 2u);
+        runEngineCli(
+            L"--showroom --hidden --frames 2 --output \"" + cliInvalidLogs.wstring() + L"\"") ==
+        2u);
     CHECK(
-        runTriangleCli(
-            L"--showroom --shadow-resolution 1024 --hidden --frames 2 --output \"" +
-            cliInvalidLogs.wstring() + L"\"") == 2u);
-    CHECK(
-        runTriangleCli(
-            L"--showroom --shadows --shadow-resolution 32 --hidden --frames 2 --output \"" +
-            cliInvalidLogs.wstring() + L"\"") == 2u);
+        runEngineCli(
+            L"--shadows --hidden --frames 2 --output \"" + cliInvalidLogs.wstring() + L"\"") == 2u);
+    CHECK(runEngineCli(L"--hidden --output \"" + cliInvalidLogs.wstring() + L"\"") == 2u);
     CHECK_FALSE(std::filesystem::exists(cliInvalidLogs));
+}
+
+TEST_CASE(
+    "6 debug display views, runtime exposure, Set/Heap OverlayDraw, observation presets, and GPU "
+    "timestamps maintain parity and zero validation errors",
+    "[sample-debug-views-and-overlay]") {
+    using namespace ar;
+    using Json = nlohmann::json;
+
+    const auto shader = [](std::string_view name) {
+        const auto path = std::filesystem::path(AR_TEST_SHADER_DIR) / name;
+        std::ifstream input(path, std::ios::binary | std::ios::ate);
+        const auto size = input.tellg();
+        REQUIRE(size >= 20);
+        REQUIRE(size % 4 == 0);
+        std::vector<std::uint32_t> words(static_cast<std::size_t>(size / 4));
+        REQUIRE(input.seekg(0).read(reinterpret_cast<char*>(words.data()), size));
+        return words;
+    };
+
+    const std::filesystem::path runRoot = freshRunDirectory("sample-debug-views-and-overlay");
+    const std::filesystem::path showroomDir(AR_SHOWROOM_DEPLOYED_DIR);
+    const std::filesystem::path scenePath = showroomDir / "scene.json";
+    const std::filesystem::path assetRoot = showroomDir / "assets";
+    REQUIRE(std::filesystem::is_regular_file(scenePath));
+    REQUIRE(std::filesystem::is_directory(assetRoot));
+
+    bool supportsHeap = false;
+    {
+        runtime::RuntimeConfig probe;
+        probe.mode = runtime::QueryMode::Inspect;
+        probe.query.loader = rhi::SystemLoader{};
+        probe.query.requestedApi = rhi::makeApiVersion(1, 3);
+        probe.query.device = rhi::ExplicitDeviceIndex{0};
+        probe.diagnostics.outputRoot = runRoot;
+        probe.diagnostics.runId = "probe";
+        auto probed = runtime::RuntimeSession::start(probe);
+        INFO(describeStart(probed));
+        REQUIRE(probed.has_value());
+        const auto& report = (*probed)->report();
+        supportsHeap = report.loaderApi >= rhi::kApiVersion1_4 &&
+                       report.deviceApi >= rhi::kApiVersion1_4 &&
+                       report.descriptorHeap == rhi::DescriptorHeapStatus::Supported;
+        REQUIRE((*probed)->close().resourcesReleased);
+    }
+
+    const auto directionalPacked = ar::render::packEnvironmentLighting(
+        ar::render::bakeEnvironmentLighting(ar::render::EnvironmentPreset::Directional));
+    const rhi::EnvironmentUpload directionalEnv{
+        directionalPacked.diffuse, directionalPacked.specular, directionalPacked.brdf};
+
+    const rhi::TriangleShaders directShaders{
+        shader("gbuffer.vert.spv"), shader("gbuffer_bindless.frag.spv")};
+    const rhi::StaticIndirectShaders indirectShaders{
+        {shader("static_indirect.vert.spv"), shader("static_indirect.frag.spv")},
+        shader("static_indirect.comp.spv"),
+        UINT32_MAX};
+    const rhi::ShadowMapConfig shadowCfg{
+        shader("shadow_direct.vert.spv"), shader("shadow_indirect.vert.spv"), 1024u};
+    const rhi::DeferredLighting lighting{
+        shader("fullscreen.vert.spv"),
+        shader("deferred_ibl_shadow.frag.spv"),
+        shader("display_sdr.frag.spv"),
+        0.F,
+        true,
+        shadowCfg};
+    const rhi::OverlayShaders overlayShaders{
+        shader("overlay.vert.spv"), shader("overlay.frag.spv")};
+
+    // Build a deterministic 4x4 RGBA8 test font atlas (opaque white) and a green overlay quad in
+    // the top-left corner [10..70, 10..40] with scissor [10..70, 10..40].
+    rhi::OverlayFontAtlas fontAtlas{};
+    fontAtlas.width = 4u;
+    fontAtlas.height = 4u;
+    fontAtlas.rgba.assign(4u * 4u * 4u, 255u);
+
+    const auto makeOverlayQuad = [](float width, float height) -> rhi::OverlayDrawList {
+        rhi::OverlayDrawList list{};
+        list.displayWidth = width;
+        list.displayHeight = height;
+        // ABGR8 = 0xFF20E040 -> R=0x40, G=0xE0, B=0x20, A=0xFF (opaque bright green)
+        constexpr std::uint32_t kGreenAbgr = 0xFF20E040u;
+        list.vertices = {
+            {10.F, 10.F, 0.F, 0.F, kGreenAbgr},
+            {70.F, 10.F, 1.F, 0.F, kGreenAbgr},
+            {70.F, 40.F, 1.F, 1.F, kGreenAbgr},
+            {10.F, 40.F, 0.F, 1.F, kGreenAbgr},
+        };
+        list.indices = {0u, 1u, 2u, 0u, 2u, 3u};
+        list.commands = {{0u, 6u, 0, 10, 10, 60u, 30u}};
+        return list;
+    };
+
+    const auto sampleRgb = [](const rhi::FrameScreenshot& frame, float u, float v) {
+        const auto x = std::clamp(
+            static_cast<std::uint32_t>(u * static_cast<float>(frame.width)), 0u, frame.width - 1u);
+        const auto y = std::clamp(
+            static_cast<std::uint32_t>(v * static_cast<float>(frame.height)),
+            0u,
+            frame.height - 1u);
+        const std::size_t idx = (static_cast<std::size_t>(y) * frame.width + x) * 4u;
+        return std::array<float, 3>{
+            static_cast<float>(frame.rgba[idx]),
+            static_cast<float>(frame.rgba[idx + 1u]),
+            static_cast<float>(frame.rgba[idx + 2u])};
+    };
+
+    struct DebugRun {
+        std::array<rhi::FrameScreenshot, rhi::kDebugViewModeCount> views;
+        rhi::FrameScreenshot brightFinal;
+        rhi::FrameScreenshot withOverlay;
+        rhi::FrameScreenshot afterPresetRestore;
+        std::vector<rhi::GpuFrameTimings> timings;
+    };
+
+    const auto execute = [&](bool heapMode, const std::string& runId) -> DebugRun {
+        runtime::RuntimeConfig config;
+        config.mode =
+            heapMode ? runtime::QueryMode::RequireProduct : runtime::QueryMode::Development;
+        config.query.loader = rhi::SystemLoader{};
+        config.query.device = rhi::ExplicitDeviceIndex{0};
+        config.query.requestedApi = heapMode ? rhi::kApiVersion1_4 : rhi::makeApiVersion(1, 3);
+        config.query.createGraphicsDevice = true;
+        config.query.enableScreenshot = true;
+        config.query.enableSetBinding = !heapMode;
+        config.query.enableDescriptorHeap = heapMode;
+        config.query.enableGBuffer = true;
+        config.staticAssetRoot = assetRoot;
+        config.query.triangleShaders = directShaders;
+        config.query.staticIndirect = indirectShaders;
+        config.query.deferredLighting = lighting;
+        config.query.overlayShaders = overlayShaders;
+        config.window.emplace();
+        config.window->width = 320;
+        config.window->height = 180;
+        config.window->visible = false;
+        config.window->title = "AR debug views " + runId;
+        config.diagnostics.runId = runId;
+        config.diagnostics.outputRoot = runRoot;
+
+        auto session = runtime::RuntimeSession::start(config);
+        INFO(describeStart(session));
+        REQUIRE(session.has_value());
+        REQUIRE((*session)->openStaticScene(scenePath));
+        REQUIRE((*session)->replaceEnvironment(directionalEnv, false));
+        REQUIRE((*session)->uploadOverlayFont(fontAtlas));
+        CHECK((*session)->activeInstanceCount() == 14u);
+        CHECK((*session)->staticSceneUploadCount() == 1u);
+
+        const auto present = [&](rhi::FrameScreenshot& dst,
+                                 const rhi::OverlayDrawList* overlay = nullptr) {
+            auto st = (*session)->presentFrame(&dst, overlay);
+            INFO((st ? "" : st.error().message));
+            REQUIRE(st.has_value());
+            REQUIRE(*st == runtime::FrameStatus::Presented);
+        };
+
+        DebugRun out{};
+        for (std::uint32_t m = 0u; m < rhi::kDebugViewModeCount; ++m) {
+            const auto mode = static_cast<rhi::DebugViewMode>(m);
+            REQUIRE((*session)->setDebugView(mode));
+            CHECK((*session)->activeDebugView() == mode);
+            present(out.views[m]);
+        }
+
+        // Runtime exposure EV update (+2.0 EV brightens Final view without re-uploading scene).
+        REQUIRE((*session)->setDebugView(rhi::DebugViewMode::Final));
+        REQUIRE((*session)->setExposureEV(2.0F));
+        CHECK((*session)->activeExposureEV() == Catch::Approx(2.0F));
+        present(out.brightFinal);
+
+        // Save observation preset at (+2.0 EV, Final), mutate to BaseColor + -2.0 EV, then reload
+        // preset and confirm exact pixel match with brightFinal.
+        const auto presetPath = runRoot / (runId + "_preset.json");
+        auto captured =
+            (*session)->captureObservationSettings("bright-check", "showroom/scene.json");
+        REQUIRE(captured.has_value());
+        REQUIRE(runtime::saveObservationSettings(presetPath, *captured));
+
+        REQUIRE((*session)->setExposureEV(-2.0F));
+        REQUIRE((*session)->setDebugView(rhi::DebugViewMode::BaseColor));
+        const auto reloaded = runtime::loadObservationSettings(presetPath, "showroom/scene.json");
+        REQUIRE(reloaded.has_value());
+        REQUIRE((*session)->applyObservationSettings(*reloaded));
+        present(out.afterPresetRestore);
+        const bool presetRestoredExact = (out.afterPresetRestore.rgba == out.brightFinal.rgba);
+        CHECK(presetRestoredExact);
+
+        // Reset exposure to 0 and render Overlay quad over Final view.
+        REQUIRE((*session)->setExposureEV(0.F));
+        const auto quad = makeOverlayQuad(320.F, 180.F);
+        present(out.withOverlay, &quad);
+
+        // Disabling shadows rejects ShadowDepth view, falls back to Final, and renders cleanly.
+        REQUIRE((*session)->setDebugView(rhi::DebugViewMode::ShadowDepth));
+        auto noShadow = ar::render::defaultDirectionalLight();
+        noShadow.castShadows = false;
+        REQUIRE((*session)->setDirectionalLight(noShadow));
+        CHECK((*session)->activeDebugView() == rhi::DebugViewMode::Final);
+        CHECK_FALSE((*session)->setDebugView(rhi::DebugViewMode::ShadowDepth).has_value());
+        rhi::FrameScreenshot afterNoShadow;
+        present(afterNoShadow);
+        CHECK(afterNoShadow.width == 320u);
+        CHECK((*session)->staticSceneUploadCount() == 1u);
+
+        // Drain and harvest all completed GPU timestamp samples.
+        auto timings = (*session)->drainCompletedGpuTimings();
+        REQUIRE(timings.has_value());
+        out.timings = std::move(*timings);
+
+        const auto closed = (*session)->close();
+        REQUIRE(closed.result == core::ResultKind::Success);
+        REQUIRE(closed.resourcesReleased);
+
+        std::ifstream events(runRoot / runId / "events.jsonl");
+        REQUIRE(events);
+        for (std::string line; std::getline(events, line);) {
+            const auto entry = Json::parse(line);
+            const auto id = entry.at("event_id").get<std::string>();
+            INFO(entry.value("message", std::string{}));
+            CHECK(id != "rhi.validation.error");
+        }
+        return out;
+    };
+
+    const DebugRun setRun = execute(false, "debug-set");
+
+    // 1. All 6 views produce distinct outputs.
+    for (std::uint32_t a = 0u; a < rhi::kDebugViewModeCount; ++a) {
+        for (std::uint32_t b = a + 1u; b < rhi::kDebugViewModeCount; ++b) {
+            const bool distinct = (setRun.views[a].rgba != setRun.views[b].rgba);
+            CHECK(distinct);
+        }
+    }
+
+    // 2. Semantic spot checks on each view channel:
+    // BaseColor: background corner black; copper sphere warm (R > B); pillar cool (B > R).
+    const auto& baseImg = setRun.views[static_cast<std::size_t>(rhi::DebugViewMode::BaseColor)];
+    const auto bgBase = sampleRgb(baseImg, 0.02F, 0.03F);
+    CHECK(bgBase[0] == 0.F);
+    CHECK(bgBase[1] == 0.F);
+    CHECK(bgBase[2] == 0.F);
+    const auto copperBase = sampleRgb(baseImg, 0.286F, 0.710F);
+    const auto pillarBase = sampleRgb(baseImg, 0.251F, 0.382F);
+    CHECK(copperBase[0] > copperBase[2] + 30.F);
+    CHECK(pillarBase[2] > pillarBase[0] + 10.F);
+
+    // MetallicRoughness: m=1.0 copper sphere has much higher R than m=0.0; r=0.90 sphere has higher
+    // G than r=0.10.
+    const auto& mrImg =
+        setRun.views[static_cast<std::size_t>(rhi::DebugViewMode::MetallicRoughness)];
+    const auto dielectricMr = sampleRgb(mrImg, 0.286F, 0.710F);
+    const auto metallicMr = sampleRgb(mrImg, 0.714F, 0.710F);
+    const auto smoothMr = sampleRgb(mrImg, 0.341F, 0.593F);
+    const auto roughMr = sampleRgb(mrImg, 0.659F, 0.593F);
+    CHECK(metallicMr[0] > dielectricMr[0] + 150.F);
+    CHECK(roughMr[1] > smoothMr[1] + 80.F);
+
+    // MainDepth (linearized Reverse-Z): near sphere is brighter than far back wall; background 0.
+    const auto& depthImg = setRun.views[static_cast<std::size_t>(rhi::DebugViewMode::MainDepth)];
+    const auto bgDepth = sampleRgb(depthImg, 0.02F, 0.03F);
+    const auto wallDepth = sampleRgb(depthImg, 0.50F, 0.22F);
+    const auto frontSphereDepth = sampleRgb(depthImg, 0.50F, 0.710F);
+    CHECK(bgDepth[0] == 0.F);
+    CHECK(frontSphereDepth[0] > wallDepth[0] + 10.F);
+
+    // ShadowDepth (1:1 centered): center contains geometry values distinct from dark letterbox.
+    const auto& shadowImg = setRun.views[static_cast<std::size_t>(rhi::DebugViewMode::ShadowDepth)];
+    const auto letterbox = sampleRgb(shadowImg, 0.02F, 0.50F);
+    const auto shadowCenter = sampleRgb(shadowImg, 0.50F, 0.50F);
+    CHECK(shadowCenter[0] > letterbox[0] + 20.F);
+
+    // Exposure +2 EV makes Final brighter than 0 EV on lit center sphere.
+    const auto finalCenter =
+        sampleRgb(setRun.views[static_cast<std::size_t>(rhi::DebugViewMode::Final)], 0.50F, 0.593F);
+    const auto brightCenter = sampleRgb(setRun.brightFinal, 0.50F, 0.593F);
+    CHECK(
+        brightCenter[0] + brightCenter[1] + brightCenter[2] >
+        finalCenter[0] + finalCenter[1] + finalCenter[2] + 30.F);
+
+    // Overlay green quad visibly modifies [10..70, 10..40] while leaving bottom-right untouched.
+    const auto overlayPixel = sampleRgb(setRun.withOverlay, 40.F / 320.F, 25.F / 180.F);
+    const auto baseAtQuad = sampleRgb(
+        setRun.views[static_cast<std::size_t>(rhi::DebugViewMode::Final)],
+        40.F / 320.F,
+        25.F / 180.F);
+    CHECK(overlayPixel[1] > baseAtQuad[1] + 120.F);
+    const auto overlayOutside = sampleRgb(setRun.withOverlay, 0.75F, 0.75F);
+    const auto baseOutside =
+        sampleRgb(setRun.views[static_cast<std::size_t>(rhi::DebugViewMode::Final)], 0.75F, 0.75F);
+    CHECK(overlayOutside == baseOutside);
+
+    // GPU Timestamps harvested for every submitted frame with monotonic frame numbers.
+    REQUIRE(setRun.timings.size() >= 8u);
+    for (std::size_t i = 0; i < setRun.timings.size(); ++i) {
+        if (i > 0) {
+            CHECK(setRun.timings[i].frameNumber > setRun.timings[i - 1].frameNumber);
+        }
+        if (setRun.timings[i].available) {
+            REQUIRE(setRun.timings[i].totalGpuMs.has_value());
+            CHECK(*setRun.timings[i].totalGpuMs >= 0.0);
+            CHECK(setRun.timings[i].geometryMs.has_value());
+            CHECK(setRun.timings[i].lightingMs.has_value());
+            CHECK(setRun.timings[i].displayMs.has_value());
+        } else {
+            CHECK_FALSE(setRun.timings[i].unavailableReason.empty());
+        }
+    }
+
+    // 3. Full Set vs Heap parity across all 6 debug views AND OverlayDraw!
+    if (supportsHeap) {
+        const DebugRun heapRun = execute(true, "debug-heap");
+        for (std::uint32_t m = 0u; m < rhi::kDebugViewModeCount; ++m) {
+            const bool viewEqual = (heapRun.views[m].rgba == setRun.views[m].rgba);
+            CHECK(viewEqual);
+        }
+        const bool overlayEqual = (heapRun.withOverlay.rgba == setRun.withOverlay.rgba);
+        CHECK(overlayEqual);
+        const bool brightEqual = (heapRun.brightFinal.rgba == setRun.brightFinal.rgba);
+        CHECK(brightEqual);
+        CHECK(heapRun.timings.size() == setRun.timings.size());
+    }
+}
+
+TEST_CASE(
+    "four benchmark configurations (Set/Heap x CPU/GPU cull) produce identical visibility, "
+    "zero-visible draws, overflow semantics, pixels, and frame-joined timings",
+    "[sample-four-config-benchmark-parity]") {
+    using namespace ar;
+    using Json = nlohmann::json;
+
+    const auto shader = [](std::string_view name) {
+        const auto path = std::filesystem::path(AR_TEST_SHADER_DIR) / name;
+        std::ifstream input(path, std::ios::binary | std::ios::ate);
+        const auto size = input.tellg();
+        REQUIRE(size >= 20);
+        REQUIRE(size % 4 == 0);
+        std::vector<std::uint32_t> words(static_cast<std::size_t>(size / 4));
+        REQUIRE(input.seekg(0).read(reinterpret_cast<char*>(words.data()), size));
+        return words;
+    };
+
+    const std::filesystem::path runRoot = freshRunDirectory("sample-four-config-benchmark-parity");
+    const std::filesystem::path showroomDir(AR_SHOWROOM_DEPLOYED_DIR);
+    const std::filesystem::path scenePath = showroomDir / "scene.json";
+    const std::filesystem::path assetRoot = showroomDir / "assets";
+    REQUIRE(std::filesystem::is_regular_file(scenePath));
+    REQUIRE(std::filesystem::is_directory(assetRoot));
+
+    bool supportsHeap = false;
+    {
+        runtime::RuntimeConfig probe;
+        probe.mode = runtime::QueryMode::Inspect;
+        probe.query.loader = rhi::SystemLoader{};
+        probe.query.requestedApi = rhi::makeApiVersion(1, 3);
+        probe.query.device = rhi::ExplicitDeviceIndex{0};
+        probe.diagnostics.outputRoot = runRoot;
+        probe.diagnostics.runId = "probe";
+        auto probed = runtime::RuntimeSession::start(probe);
+        INFO(describeStart(probed));
+        REQUIRE(probed.has_value());
+        const auto& report = (*probed)->report();
+        supportsHeap = report.loaderApi >= rhi::kApiVersion1_4 &&
+                       report.deviceApi >= rhi::kApiVersion1_4 &&
+                       report.descriptorHeap == rhi::DescriptorHeapStatus::Supported;
+        REQUIRE((*probed)->close().resourcesReleased);
+    }
+
+    const auto directionalPacked = ar::render::packEnvironmentLighting(
+        ar::render::bakeEnvironmentLighting(ar::render::EnvironmentPreset::Directional));
+    const rhi::EnvironmentUpload directionalEnv{
+        directionalPacked.diffuse, directionalPacked.specular, directionalPacked.brdf};
+
+    const rhi::TriangleShaders directShaders{
+        shader("gbuffer.vert.spv"), shader("gbuffer_bindless.frag.spv")};
+    const rhi::TriangleShaders indirectGraphics{
+        shader("static_indirect.vert.spv"), shader("static_indirect.frag.spv")};
+    const std::vector<std::uint32_t> indirectCompute = shader("static_indirect.comp.spv");
+    const rhi::ShadowMapConfig shadowCfg{
+        shader("shadow_direct.vert.spv"), shader("shadow_indirect.vert.spv"), 1024u};
+    const rhi::DeferredLighting lighting{
+        shader("fullscreen.vert.spv"),
+        shader("deferred_ibl_shadow.frag.spv"),
+        shader("display_sdr.frag.spv"),
+        0.F,
+        true,
+        shadowCfg};
+
+    struct ParityRun {
+        rhi::FrameScreenshot fullView;
+        rhi::FrameScreenshot partialView;
+        rhi::FrameScreenshot zeroView;
+        std::vector<rhi::CpuFrameTimings> cpuSamples;
+        std::vector<rhi::GpuFrameTimings> gpuSamples;
+        rhi::PresentMode actualPresentMode = rhi::PresentMode::Fifo;
+    };
+
+    const auto executeConfig = [&](bool useHeap,
+                                   rhi::StaticCullMode cullMode,
+                                   std::uint32_t capacity,
+                                   std::string runId) -> ParityRun {
+        runtime::RuntimeConfig config;
+        config.mode =
+            useHeap ? runtime::QueryMode::RequireProduct : runtime::QueryMode::Development;
+        config.query.loader = rhi::SystemLoader{};
+        config.query.requestedApi = useHeap ? rhi::kApiVersion1_4 : rhi::makeApiVersion(1, 3);
+        config.query.device = rhi::ExplicitDeviceIndex{0};
+        config.query.createGraphicsDevice = true;
+        config.query.enableDescriptorHeap = useHeap;
+        config.query.enableSetBinding = !useHeap;
+        config.query.enableGBuffer = true;
+        config.query.enableScreenshot = true;
+        config.query.triangleShaders = directShaders;
+        config.query.staticIndirect = rhi::StaticIndirectShaders{
+            indirectGraphics,
+            cullMode == rhi::StaticCullMode::GpuCompute ? indirectCompute
+                                                        : std::vector<std::uint32_t>{},
+            capacity,
+            cullMode,
+            nullptr,
+            true};
+        config.query.deferredLighting = lighting;
+        config.staticAssetRoot = assetRoot;
+        config.presentMode = rhi::PresentMode::Immediate;
+        config.window.emplace();
+        config.window->title = "AR Four-Config Parity";
+        config.window->width = 320;
+        config.window->height = 180;
+        config.window->visible = false;
+        config.diagnostics.outputRoot = runRoot;
+        config.diagnostics.runId = runId;
+
+        auto session = runtime::RuntimeSession::start(config);
+        INFO(describeStart(session));
+        REQUIRE(session.has_value());
+        REQUIRE((*session)->openStaticScene(scenePath));
+        REQUIRE((*session)->replaceEnvironment(directionalEnv, false));
+
+        ParityRun out{};
+        out.actualPresentMode = (*session)->activePresentMode();
+
+        const auto presentFrame = [&](rhi::FrameScreenshot* shot) {
+            for (int attempt = 0; attempt < 8; ++attempt) {
+                auto status = (*session)->presentFrame(shot);
+                REQUIRE(status.has_value());
+                if (*status == runtime::FrameStatus::Presented) {
+                    out.cpuSamples.push_back((*session)->lastCpuTimings());
+                    auto harvested = (*session)->takeCompletedGpuTimings();
+                    out.gpuSamples.insert(out.gpuSamples.end(), harvested.begin(), harvested.end());
+                    return;
+                }
+            }
+            FAIL("frame did not present");
+        };
+
+        // 1. Initial Showroom camera: all 14 objects visible.
+        const auto initialCamera = (*session)->activeCamera();
+        REQUIRE(initialCamera.has_value());
+        presentFrame(&out.fullView);
+
+        // 2. Partial view: pan camera right so left pillar & spheres leave frustum.
+        render::StaticCamera partialCam = *initialCamera;
+        partialCam.position = {3.2F, 1.8F, 2.0F};
+        // Rotate yaw -35 deg around Y (looking right).
+        constexpr float partialYaw = -0.610865F;
+        partialCam.orientation = {
+            0.F, std::sin(partialYaw * 0.5F), 0.F, std::cos(partialYaw * 0.5F)};
+        REQUIRE((*session)->setCamera(partialCam));
+        presentFrame(&out.partialView);
+
+        // 3. Zero-visible view: turn 180 degrees away from all Showroom geometry.
+        render::StaticCamera zeroCam = *initialCamera;
+        zeroCam.position = {0.F, 2.2F, 8.0F};
+        zeroCam.orientation = {0.F, 1.F, 0.F, 0.F}; // 180 deg around Y (looking +Z)
+        REQUIRE((*session)->setCamera(zeroCam));
+        presentFrame(&out.zeroView);
+
+        // 4. Non-capture timing frames (verifies async count readback + frameNumber join).
+        REQUIRE((*session)->setCamera(*initialCamera));
+        for (int i = 0; i < 3; ++i) {
+            presentFrame(nullptr);
+        }
+
+        auto drained = (*session)->drainCompletedGpuTimings();
+        REQUIRE(drained.has_value());
+        out.gpuSamples.insert(out.gpuSamples.end(), drained->begin(), drained->end());
+
+        const auto closed = (*session)->close();
+        REQUIRE(closed.result == core::ResultKind::Success);
+        REQUIRE(closed.resourcesReleased);
+
+        std::ifstream events(runRoot / runId / "events.jsonl");
+        REQUIRE(events);
+        for (std::string line; std::getline(events, line);) {
+            const auto entry = Json::parse(line);
+            const auto id = entry.at("event_id").get<std::string>();
+            INFO(entry.value("message", std::string{}));
+            CHECK(id != "rhi.validation.error");
+        }
+        return out;
+    };
+
+    const ParityRun setCpu =
+        executeConfig(false, rhi::StaticCullMode::CpuFrustum, UINT32_MAX, "set-cpu");
+    const ParityRun setGpu =
+        executeConfig(false, rhi::StaticCullMode::GpuCompute, UINT32_MAX, "set-gpu");
+
+    const auto checkRunBasics = [](const ParityRun& run, rhi::StaticCullMode mode) {
+        REQUIRE(run.fullView.indirect.has_value());
+        REQUIRE(run.partialView.indirect.has_value());
+        REQUIRE(run.zeroView.indirect.has_value());
+        CHECK(run.fullView.indirect->visible == 14u);
+        CHECK(run.fullView.indirect->drawnIds.size() == 14u);
+        CHECK(run.partialView.indirect->visible > 0u);
+        CHECK(run.partialView.indirect->visible < 14u);
+        CHECK(run.partialView.indirect->drawnIds.size() == run.partialView.indirect->visible);
+        CHECK(run.zeroView.indirect->visible == 0u);
+        CHECK(run.zeroView.indirect->drawnIds.empty());
+
+        REQUIRE(run.cpuSamples.size() == 6u);
+        REQUIRE(run.gpuSamples.size() == 6u);
+        for (std::size_t i = 0; i < 6u; ++i) {
+            CHECK(run.cpuSamples[i].frameNumber == i + 1u);
+            CHECK(run.gpuSamples[i].frameNumber == i + 1u);
+            CHECK(run.cpuSamples[i].recordSubmitMs >= 0.0);
+            CHECK(run.cpuSamples[i].totalCpuMs >= run.cpuSamples[i].recordSubmitMs);
+            if (mode == rhi::StaticCullMode::CpuFrustum) {
+                REQUIRE(run.cpuSamples[i].cullMs.has_value());
+                CHECK(*run.cpuSamples[i].cullMs >= 0.0);
+                CHECK(run.cpuSamples[i].visibleCount.has_value());
+                CHECK_FALSE(run.gpuSamples[i].cullMs.has_value());
+            } else {
+                CHECK_FALSE(run.cpuSamples[i].cullMs.has_value());
+                REQUIRE(run.gpuSamples[i].visibleCount.has_value());
+                if (run.gpuSamples[i].available) {
+                    REQUIRE(run.gpuSamples[i].cullMs.has_value());
+                    CHECK(*run.gpuSamples[i].cullMs >= 0.0);
+                }
+            }
+        }
+        // Frame 3 was zero-visible; verify reported count matches 0!
+        if (mode == rhi::StaticCullMode::CpuFrustum) {
+            CHECK(run.cpuSamples[2].visibleCount == 0u);
+            CHECK(run.cpuSamples[2].drawCount == 0u);
+            CHECK(run.cpuSamples[0].visibleCount == 14u);
+        } else {
+            CHECK(run.gpuSamples[2].visibleCount == 0u);
+            CHECK(run.gpuSamples[2].drawCount == 0u);
+            CHECK(run.gpuSamples[0].visibleCount == 14u);
+        }
+    };
+
+    checkRunBasics(setCpu, rhi::StaticCullMode::CpuFrustum);
+    checkRunBasics(setGpu, rhi::StaticCullMode::GpuCompute);
+
+    // Exact Set+CPU vs Set+GPU parity (visibility + pixel-for-pixel identical output).
+    CHECK(setCpu.fullView.indirect->drawnIds == setGpu.fullView.indirect->drawnIds);
+    CHECK(setCpu.partialView.indirect->drawnIds == setGpu.partialView.indirect->drawnIds);
+    CHECK(setCpu.zeroView.indirect->drawnIds == setGpu.zeroView.indirect->drawnIds);
+    CHECK(setCpu.fullView.rgba == setGpu.fullView.rgba);
+    CHECK(setCpu.partialView.rgba == setGpu.partialView.rgba);
+    CHECK(setCpu.zeroView.rgba == setGpu.zeroView.rgba);
+
+    // Capacity overflow parity: both CPU and GPU report visible=14, drawCount=5, overflowed=true.
+    const ParityRun capCpu =
+        executeConfig(false, rhi::StaticCullMode::CpuFrustum, 5u, "cap-set-cpu");
+    const ParityRun capGpu =
+        executeConfig(false, rhi::StaticCullMode::GpuCompute, 5u, "cap-set-gpu");
+    REQUIRE(capCpu.fullView.indirect.has_value());
+    REQUIRE(capGpu.fullView.indirect.has_value());
+    CHECK(capCpu.fullView.indirect->visible == 14u);
+    CHECK(capCpu.fullView.indirect->drawnIds.size() == 5u);
+    CHECK(capCpu.cpuSamples[0].overflowed);
+    CHECK(capGpu.fullView.indirect->visible == 14u);
+    CHECK(capGpu.fullView.indirect->drawnIds.size() == 5u);
+    CHECK(capGpu.gpuSamples[0].overflowed);
+
+    if (supportsHeap) {
+        const ParityRun heapCpu =
+            executeConfig(true, rhi::StaticCullMode::CpuFrustum, UINT32_MAX, "heap-cpu");
+        const ParityRun heapGpu =
+            executeConfig(true, rhi::StaticCullMode::GpuCompute, UINT32_MAX, "heap-gpu");
+        checkRunBasics(heapCpu, rhi::StaticCullMode::CpuFrustum);
+        checkRunBasics(heapGpu, rhi::StaticCullMode::GpuCompute);
+
+        CHECK(heapCpu.fullView.indirect->drawnIds == setGpu.fullView.indirect->drawnIds);
+        CHECK(heapCpu.partialView.indirect->drawnIds == setGpu.partialView.indirect->drawnIds);
+        CHECK(heapCpu.zeroView.indirect->drawnIds == setGpu.zeroView.indirect->drawnIds);
+        CHECK(heapGpu.fullView.indirect->drawnIds == setGpu.fullView.indirect->drawnIds);
+        CHECK(heapGpu.partialView.indirect->drawnIds == setGpu.partialView.indirect->drawnIds);
+        CHECK(heapGpu.zeroView.indirect->drawnIds == setGpu.zeroView.indirect->drawnIds);
+
+        CHECK(heapCpu.fullView.rgba == setGpu.fullView.rgba);
+        CHECK(heapCpu.partialView.rgba == setGpu.partialView.rgba);
+        CHECK(heapCpu.zeroView.rgba == setGpu.zeroView.rgba);
+        CHECK(heapGpu.fullView.rgba == setGpu.fullView.rgba);
+        CHECK(heapGpu.partialView.rgba == setGpu.partialView.rgba);
+        CHECK(heapGpu.zeroView.rgba == setGpu.zeroView.rgba);
+    }
 }

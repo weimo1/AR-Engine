@@ -47,8 +47,22 @@ public:
         std::array<Frame, 2> frames;
         VkDescriptorPool pool = VK_NULL_HANDLE;
         std::vector<std::uint64_t> objectIds;
+        std::vector<CpuCullInstance> cpuCullInstances;
         std::uint32_t capacity = 0;
         std::uint32_t shadowInstanceCount = 0;
+    };
+
+    struct CpuCullTiming {
+        std::uint32_t visibleCount = 0;
+        std::uint32_t drawCount = 0;
+        std::uint32_t capacity = 0;
+        double cullMs = 0.0;
+    };
+
+    struct IndirectCountSample {
+        std::uint32_t visibleCount = 0;
+        std::uint32_t drawCount = 0;
+        std::uint32_t capacity = 0;
     };
 
     explicit StaticSceneIndirect(
@@ -57,6 +71,12 @@ public:
     ~StaticSceneIndirect();
     StaticSceneIndirect(const StaticSceneIndirect&) = delete;
     std::expected<void, core::Error> open(const StaticIndirectShaders& shaders);
+    [[nodiscard]] StaticCullMode cullMode() const noexcept {
+        return m_cullMode;
+    }
+    [[nodiscard]] bool readIndirectCountsEnabled() const noexcept {
+        return m_readIndirectCounts;
+    }
     std::expected<std::shared_ptr<Scene>, core::Error> prepare(
         const StaticIndirectGeometry& geometry,
         std::span<const Instance> instances,
@@ -64,6 +84,8 @@ public:
     std::expected<void, core::Error> publishHeapBuffers(const Scene& scene);
     std::expected<void, core::Error> updateFrameView(
         const Scene& scene, std::size_t slot, const FrameView& view, float inverseAspect);
+    std::expected<CpuCullTiming, core::Error>
+    cullCpu(const Scene& scene, std::size_t slot, const FrameView& view, float inverseAspect);
     VkDescriptorSetLayout layout() const noexcept {
         return m_setLayout;
     }
@@ -92,6 +114,8 @@ public:
         IndirectPhase phase) const;
     std::expected<FrameScreenshot::IndirectVisibility, core::Error>
     visibility(const Scene& scene, std::size_t slot);
+    std::expected<IndirectCountSample, core::Error>
+    readCounts(const Scene& scene, std::size_t slot);
     void abandon() noexcept {
         m_abandoned = true;
     }
@@ -105,6 +129,10 @@ private:
     VkPipeline m_pipeline = VK_NULL_HANDLE;
     VkPhysicalDeviceLimits m_limits{};
     std::uint32_t m_capacity = 0;
+    StaticCullMode m_cullMode = StaticCullMode::GpuCompute;
+    CpuFrustumCullFn m_cpuCull = nullptr;
+    bool m_readIndirectCounts = false;
+    std::vector<IndexedIndirectDrawCommand> m_cpuScratch;
     bool m_abandoned = false;
 };
 

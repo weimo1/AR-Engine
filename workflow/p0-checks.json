@@ -247,6 +247,7 @@
         "render-presentation-spec",
         "render-graph-plan",
         "render-static-scene-draw-data",
+        "render-static-scene-visibility",
         "assets-static-gltf",
         "assets-opaque-material",
         "scene-static-roundtrip",
@@ -312,6 +313,7 @@
         "runtime-cleanup-empty",
         "runtime-cleanup-failure",
         "runtime-destructor",
+        "runtime-observation-settings",
         "runtime-device-index-invalid",
         "runtime-device-none",
         "runtime-diagnostic-create-failure",
@@ -329,13 +331,17 @@
         "sample-static-scene-heap-gpu-driven",
         "sample-directional-shadow-parity",
         "sample-free-camera-shadows",
+        "sample-debug-views-and-overlay",
+        "sample-four-config-benchmark-parity",
         "runtime-system-inspect",
         "platform-window-create",
         "platform-window-vulkan-extensions",
         "platform-input-state",
         "platform-window-input",
         "app-paths-and-showroom-cli",
-        "sample-showroom-launch"
+        "app-benchmark-run",
+        "sample-showroom-launch",
+        "sample-four-config-benchmark-export"
       ],
       "gpu_cases": [
         "rhi-device-create",
@@ -362,6 +368,7 @@
         "sample-ibl-probes",
         "sample-descriptor-heap-scene-parity",
         "sample-showroom-launch",
+        "sample-four-config-benchmark-export",
         "platform-window-vulkan-extensions",
         "runtime-system-development",
         "sample-resize",
@@ -370,6 +377,8 @@
         "sample-static-scene-heap-gpu-driven",
         "sample-directional-shadow-parity",
         "sample-free-camera-shadows",
+        "sample-debug-views-and-overlay",
+        "sample-four-config-benchmark-parity",
         "runtime-system-inspect"
       ]
     },
@@ -590,6 +599,7 @@
         "render-presentation-spec",
         "render-graph-plan",
         "render-static-scene-draw-data",
+        "render-static-scene-visibility",
         "assets-static-gltf",
         "assets-opaque-material",
         "scene-static-roundtrip",
@@ -655,6 +665,7 @@
         "runtime-cleanup-empty",
         "runtime-cleanup-failure",
         "runtime-destructor",
+        "runtime-observation-settings",
         "runtime-device-index-invalid",
         "runtime-device-none",
         "runtime-diagnostic-create-failure",
@@ -672,13 +683,17 @@
         "sample-static-scene-heap-gpu-driven",
         "sample-directional-shadow-parity",
         "sample-free-camera-shadows",
+        "sample-debug-views-and-overlay",
+        "sample-four-config-benchmark-parity",
         "runtime-system-inspect",
         "platform-window-create",
         "platform-window-vulkan-extensions",
         "platform-input-state",
         "platform-window-input",
         "app-paths-and-showroom-cli",
-        "sample-showroom-launch"
+        "app-benchmark-run",
+        "sample-showroom-launch",
+        "sample-four-config-benchmark-export"
       ],
       "gpu_cases": [
         "rhi-device-create",
@@ -705,6 +720,7 @@
         "sample-ibl-probes",
         "sample-descriptor-heap-scene-parity",
         "sample-showroom-launch",
+        "sample-four-config-benchmark-export",
         "platform-window-vulkan-extensions",
         "runtime-system-development",
         "sample-resize",
@@ -713,6 +729,8 @@
         "sample-static-scene-heap-gpu-driven",
         "sample-directional-shadow-parity",
         "sample-free-camera-shadows",
+        "sample-debug-views-and-overlay",
+        "sample-four-config-benchmark-parity",
         "runtime-system-inspect"
       ]
     },

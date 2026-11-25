@@ -3,8 +3,8 @@
 // A public header must compile on its own without pulling in Vulkan headers.
 namespace {
 
-ar::rhi::DisplayPushData dummyDisplayPush(float, bool) noexcept {
-    return ar::rhi::DisplayPushData{{}, 8u};
+ar::rhi::DisplayPushData dummyDisplayPush(const ar::rhi::DisplayPushParams&) noexcept {
+    return ar::rhi::DisplayPushData{{}, 20u};
 }
 
 ar::rhi::PresentationSpec makeSpec() {

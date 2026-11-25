@@ -38,22 +38,40 @@ TEST_CASE(
     CHECK(spec.displayExposureEV == Catch::Approx(1.5F));
     REQUIRE(spec.buildDisplayPush != nullptr);
 
-    // Swapchain UNORM -> encodeSrgb = 1; Swapchain SRGB -> encodeSrgb = 0.
-    const auto unormPush = spec.buildDisplayPush(spec.displayExposureEV, false);
-    REQUIRE(unormPush.size == 8u);
+    // Swapchain UNORM -> encodeSrgb = 1; Swapchain SRGB -> encodeSrgb = 0; carries viewMode & clip.
+    const auto unormPush = spec.buildDisplayPush(
+        ar::rhi::DisplayPushParams{
+            spec.displayExposureEV, false, ar::rhi::DebugViewMode::Final, 0.1F, 50.F});
+    REQUIRE(unormPush.size == 20u);
     float exposure = 0.F;
     std::uint32_t encodeSrgb = 0u;
+    std::uint32_t viewMode = 99u;
+    float camNear = 0.F;
+    float camFar = 0.F;
     std::memcpy(&exposure, unormPush.bytes.data(), sizeof(exposure));
     std::memcpy(&encodeSrgb, unormPush.bytes.data() + 4, sizeof(encodeSrgb));
+    std::memcpy(&viewMode, unormPush.bytes.data() + 8, sizeof(viewMode));
+    std::memcpy(&camNear, unormPush.bytes.data() + 12, sizeof(camNear));
+    std::memcpy(&camFar, unormPush.bytes.data() + 16, sizeof(camFar));
     CHECK(exposure == Catch::Approx(1.5F));
     CHECK(encodeSrgb == 1u);
+    CHECK(viewMode == 0u);
+    CHECK(camNear == Catch::Approx(0.1F));
+    CHECK(camFar == Catch::Approx(50.F));
 
-    const auto srgbPush = spec.buildDisplayPush(-2.25F, true);
-    REQUIRE(srgbPush.size == 8u);
+    const auto srgbPush = spec.buildDisplayPush(
+        ar::rhi::DisplayPushParams{-2.25F, true, ar::rhi::DebugViewMode::MainDepth, 0.25F, 120.F});
+    REQUIRE(srgbPush.size == 20u);
     std::memcpy(&exposure, srgbPush.bytes.data(), sizeof(exposure));
     std::memcpy(&encodeSrgb, srgbPush.bytes.data() + 4, sizeof(encodeSrgb));
+    std::memcpy(&viewMode, srgbPush.bytes.data() + 8, sizeof(viewMode));
+    std::memcpy(&camNear, srgbPush.bytes.data() + 12, sizeof(camNear));
+    std::memcpy(&camFar, srgbPush.bytes.data() + 16, sizeof(camFar));
     CHECK(exposure == Catch::Approx(-2.25F));
     CHECK(encodeSrgb == 0u);
+    CHECK(viewMode == 4u);
+    CHECK(camNear == Catch::Approx(0.25F));
+    CHECK(camFar == Catch::Approx(120.F));
 
     const auto layout = ar::render::defaultGBufferProbeLayout();
     CHECK(spec.probes.sampleStrideBytes == 32u);

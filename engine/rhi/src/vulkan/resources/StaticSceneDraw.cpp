@@ -14,14 +14,18 @@
 namespace ar::rhi::detail {
 namespace {
 std::unexpected<core::Error> failed(const char* operation, VkResult result) {
-    return std::unexpected(core::Error{
-        core::ErrorCategory::InitializationFailed, core::ErrorStage::Capability,
-        operation, core::ErrorOrigin{"vulkan", result}});
+    return std::unexpected(
+        core::Error{
+            core::ErrorCategory::InitializationFailed,
+            core::ErrorStage::Capability,
+            operation,
+            core::ErrorOrigin{"vulkan", result}});
 }
 
 std::unexpected<core::Error> invalid(const char* message) {
-    return std::unexpected(core::Error{
-        core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation, message, {}});
+    return std::unexpected(
+        core::Error{
+            core::ErrorCategory::InvalidArguments, core::ErrorStage::Validation, message, {}});
 }
 
 std::array<float, 16>
@@ -148,7 +152,11 @@ std::expected<void, core::Error> StaticSceneDraw::open(const StaticIndirectShade
         VkDescriptorSetLayoutBinding{
             0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{
-            1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
+            1,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            1,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            nullptr}};
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layout.bindingCount = m_enableGBuffer ? 2 : 1;
     layout.pBindings = bindings.data();
@@ -164,7 +172,8 @@ std::expected<void, core::Error> StaticSceneDraw::open(const StaticIndirectShade
     sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    if (auto result = vkCreateSampler(device, &sampler, nullptr, &m_sampler); result != VK_SUCCESS) {
+    if (auto result = vkCreateSampler(device, &sampler, nullptr, &m_sampler);
+        result != VK_SUCCESS) {
         return failed("create static mesh sampler", result);
     }
     return {};
@@ -223,8 +232,12 @@ std::expected<StaticSceneDraw::Attachment, core::Error> StaticSceneDraw::createA
     VmaAllocationCreateInfo allocation{};
     allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     if (auto result = vmaCreateImage(
-            m_resources.m_allocator, &image, &allocation,
-            &attachment.image, &attachment.allocation, nullptr);
+            m_resources.m_allocator,
+            &image,
+            &allocation,
+            &attachment.image,
+            &attachment.allocation,
+            nullptr);
         result != VK_SUCCESS) {
         return failed("allocate static scene attachment", result);
     }
@@ -430,7 +443,8 @@ StaticSceneDraw::upload(const StaticMeshUpload& input) {
     if (auto ready = m_resources.ensureAllocator(); !ready) {
         return std::unexpected(ready.error());
     }
-    const auto fill = [&](DeviceResources::BufferSlot& slot, std::span<const std::byte> data,
+    const auto fill = [&](DeviceResources::BufferSlot& slot,
+                          std::span<const std::byte> data,
                           VkBufferUsageFlags usage) -> std::expected<void, core::Error> {
         auto buffer = m_resources.allocateBuffer({data.size(), BufferMemory::HostVisible}, usage);
         if (!buffer) {
@@ -506,13 +520,15 @@ StaticSceneDraw::upload(const StaticMeshUpload& input) {
     allocate.descriptorPool = mesh->pool;
     allocate.descriptorSetCount = 1;
     allocate.pSetLayouts = &m_layout;
-    if (auto result = vkAllocateDescriptorSets(device, &allocate, &mesh->set); result != VK_SUCCESS) {
+    if (auto result = vkAllocateDescriptorSets(device, &allocate, &mesh->set);
+        result != VK_SUCCESS) {
         return failed("allocate static mesh descriptor", result);
     }
     std::array<VkDescriptorImageInfo, 2> textures{};
     std::array<VkWriteDescriptorSet, 2> writes{};
     for (std::uint32_t i = 0; i < textureCount; ++i) {
-        textures[i] = {m_sampler, mesh->textures[i].sampled, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        textures[i] = {
+            m_sampler, mesh->textures[i].sampled, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         auto& write = writes[i];
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.dstSet = mesh->set;
@@ -526,7 +542,8 @@ StaticSceneDraw::upload(const StaticMeshUpload& input) {
 }
 
 std::expected<std::vector<StaticSceneDraw::Draw>, core::Error> StaticSceneDraw::prepare(
-    std::span<const StaticMeshUpload> meshes, std::span<const StaticInstanceDraw> draws,
+    std::span<const StaticMeshUpload> meshes,
+    std::span<const StaticInstanceDraw> draws,
     bool verifyRollback) {
     if (std::ranges::any_of(draws, [&](const auto& draw) {
             const auto finite = [](float value) { return std::isfinite(value); };
@@ -641,14 +658,22 @@ StaticSceneDraw::updateFrameView(std::size_t frame, const FrameView& view, float
 
 void StaticSceneDraw::cull(
     VkCommandBuffer commands, std::size_t frame, const PresentationGraphPlan& graph) const {
-    if (m_indirectScene) {
+    if (m_indirectScene && gpuCullEnabled()) {
         m_indirect->cull(*m_indirectScene, commands, frame, graph);
     }
 }
 
+std::expected<StaticSceneIndirect::CpuCullTiming, core::Error>
+StaticSceneDraw::cullCpu(std::size_t frame, const FrameView& view, float inverseAspect) {
+    if (!m_indirectScene || !cpuCullEnabled()) {
+        return StaticSceneIndirect::CpuCullTiming{};
+    }
+    return m_indirect->cullCpu(*m_indirectScene, frame, view, inverseAspect);
+}
+
 void StaticSceneDraw::indirectReadback(
     VkCommandBuffer commands, std::size_t frame, const PresentationGraphPlan& graph) const {
-    if (m_indirectScene) {
+    if (m_indirectScene && gpuCullEnabled()) {
         m_indirect->barrier(*m_indirectScene, commands, frame, graph, IndirectPhase::Readback);
     }
 }
@@ -663,6 +688,14 @@ StaticSceneDraw::readVisibility(std::size_t frame, FrameScreenshot& data) {
         data.indirect = std::move(*visibility);
     }
     return {};
+}
+
+std::expected<StaticSceneIndirect::IndirectCountSample, core::Error>
+StaticSceneDraw::readIndirectCounts(std::size_t frame) {
+    if (!m_indirectScene || !m_indirect) {
+        return StaticSceneIndirect::IndirectCountSample{};
+    }
+    return m_indirect->readCounts(*m_indirectScene, frame);
 }
 
 void StaticSceneDraw::abandon() noexcept {
@@ -741,7 +774,8 @@ void StaticSceneDraw::record(
                     draw.instance.baseColorFactor.data());
             }
         } else {
-            vkCmdPushConstants(commands, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(matrix), matrix.data());
+            vkCmdPushConstants(
+                commands, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(matrix), matrix.data());
         }
         vkCmdBindVertexBuffers(commands, 0, 1, &draw.mesh->vertices.buffer, &offset);
         vkCmdBindIndexBuffer(commands, draw.mesh->indices.buffer, 0, VK_INDEX_TYPE_UINT32);

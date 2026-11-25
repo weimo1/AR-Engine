@@ -14,13 +14,21 @@ rhi::AttachmentProbeLayout defaultGBufferProbeLayout() {
     };
 }
 
-rhi::DisplayPushData packDisplayPushConstants(float exposureEV, bool swapchainIsSrgb) noexcept {
+rhi::DisplayPushData packDisplayPushConstants(const rhi::DisplayPushParams& params) noexcept {
     struct DisplayPush {
         float exposureEV;
         std::uint32_t encodeSrgb;
+        std::uint32_t viewMode;
+        float cameraNear;
+        float cameraFar;
     };
-    static_assert(sizeof(DisplayPush) == 8);
-    const DisplayPush payload{exposureEV, swapchainIsSrgb ? 0u : 1u};
+    static_assert(sizeof(DisplayPush) == 20u);
+    const DisplayPush payload{
+        params.exposureEV,
+        params.swapchainIsSrgb ? 0u : 1u,
+        static_cast<std::uint32_t>(params.viewMode),
+        params.cameraNear,
+        params.cameraFar};
     rhi::DisplayPushData result{};
     result.size = sizeof(DisplayPush);
     std::memcpy(result.bytes.data(), &payload, sizeof(payload));

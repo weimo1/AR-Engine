@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/Error.h"
+#include "rhi/PresentationSpec.h"
 
 namespace ar::rhi {
 
@@ -38,7 +39,8 @@ enum class PresentationImage : std::uint32_t {
     ShadowDepth,
     Count
 };
-enum class PresentationPass { Shadow, Geometry, Lighting, Display, Copy, Present, Count };
+enum class PresentationPass { Shadow, Geometry, Lighting, Display, Overlay, Copy, Present, Count };
+enum class IndirectProducer { None, Cpu, GpuCompute };
 enum class IndirectBuffer { Commands, Counts };
 enum class IndirectUse { Clear, ComputeWrite, ComputeReadWrite, DrawRead, HostRead };
 enum class IndirectPhase { Cull, Geometry, Readback, Count };
@@ -61,8 +63,11 @@ struct PresentationGraphInput {
     bool lighting;
     bool capture;
     bool environment;
-    bool indirect = false;
+    IndirectProducer indirectProducer = IndirectProducer::None;
     bool shadows = false;
+    DebugViewMode debugView = DebugViewMode::Final;
+    bool overlay = false;
+    bool readIndirectCounts = false;
 };
 
 struct PresentationBarrier {

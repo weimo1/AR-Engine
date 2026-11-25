@@ -20,7 +20,10 @@ inline constexpr std::uint32_t kHeapEnvironmentImageCount = 3;
 inline constexpr std::uint32_t kHeapShadowImageBase =
     kHeapEnvironmentImageBase + kHeapEnvironmentImageCount;
 inline constexpr std::uint32_t kHeapShadowImageCount = kHeapFrameSlotCount;
-inline constexpr std::uint32_t kHeapTotalSceneImages = kHeapShadowImageBase + kHeapShadowImageCount;
+inline constexpr std::uint32_t kHeapOverlayFontImage = kHeapShadowImageBase + kHeapShadowImageCount;
+inline constexpr std::uint32_t kHeapOverlayImageCount = 1;
+inline constexpr std::uint32_t kHeapTotalSceneImages =
+    kHeapOverlayFontImage + kHeapOverlayImageCount;
 inline constexpr std::uint32_t kHeapIndirectBufferCount = 8;
 inline constexpr std::uint32_t kHeapLightingBufferBase = kHeapIndirectBufferCount;
 inline constexpr std::uint32_t kHeapLightingBufferCount = kHeapFrameSlotCount;

@@ -86,6 +86,12 @@ void Presentation::recordGraphBarriers(
         barrier.srcAccessMask = source.access;
         barrier.dstStageMask = destination.stages;
         barrier.dstAccessMask = destination.access;
+        if (!access.discard &&
+            (access.destination & std::to_underlying(GraphUsage::ColorWrite)) != 0u) {
+            // Preserving prior color contents (e.g. blended overlay pass with LOAD_OP_LOAD) reads
+            // the color attachment before blending/writing it.
+            barrier.dstAccessMask |= VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
+        }
         barrier.oldLayout = access.discard ? VK_IMAGE_LAYOUT_UNDEFINED : vkLayout(access.before);
         barrier.newLayout = vkLayout(access.after);
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -126,13 +132,15 @@ bool Presentation::validGraphPlan(const PresentationGraphPlan& plan, bool captur
             seen[image] = true;
         }
     }
-    const bool indirect = m_staticScene && m_staticScene->indirectEnabled();
+    const bool gpuIndirect = m_staticScene && m_staticScene->gpuCullEnabled();
+    const bool readCounts = m_staticScene && m_staticScene->readIndirectCountsEnabled();
     using Use = IndirectUse;
     constexpr std::array destinations{Use::ComputeReadWrite, Use::DrawRead, Use::HostRead};
     for (std::size_t index = 0; index < plan.indirectBarriers.size(); ++index) {
         const auto& barriers = plan.indirectBarriers[index];
         const bool expected =
-            indirect && (index != std::to_underlying(IndirectPhase::Readback) || capture);
+            gpuIndirect &&
+            (index != std::to_underlying(IndirectPhase::Readback) || capture || readCounts);
         if (expected == barriers.empty()) {
             return false;
         }

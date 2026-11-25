@@ -1,14 +1,10 @@
 #include "AppPaths.h"
 
-#include "render/DirectionalShadow.h"
-
 #include <cerrno>
-#include <cmath>
 #include <cwchar>
 #include <limits>
 #include <string>
 #include <system_error>
-#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -114,48 +110,16 @@ parseLaunchOptions(std::span<const std::wstring_view> args, const AppPaths& path
     LaunchOptions options;
     options.output = paths.output;
     bool explicitOutput = false;
+    std::optional<fs::path> explicitScene;
+    std::optional<fs::path> explicitAssetRoot;
 
     for (std::size_t index = 0; index < args.size(); ++index) {
         const std::wstring_view arg = args[index];
-        if (arg == L"--hidden") {
-            options.visible = false;
-        } else if (arg == L"--showroom") {
-            options.showroom = true;
-        } else if (arg == L"--set-binding-retirement") {
-            options.setBinding = true;
-            options.verifyBindingRetirement = true;
-        } else if (arg == L"--gpu-driven" || arg == L"--gpu-driven-empty") {
-            options.gpuDriven = true;
-            options.gpuEmpty = arg == L"--gpu-driven-empty";
-        } else if (arg == L"--set-binding") {
-            options.setBinding = true;
-        } else if (arg == L"--descriptor-heap") {
+        if (arg == L"--descriptor-heap") {
             options.descriptorHeap = true;
-            options.gbuffer = true;
-        } else if (arg == L"--clear-only") {
-            options.clearOnly = true;
-        } else if (arg == L"--ibl" && !options.ibl && index + 1 < args.size()) {
-            const std::wstring_view preset = args[++index];
-            if (preset == L"constant") {
-                options.ibl = ar::render::EnvironmentPreset::Constant;
-            } else if (preset == L"directional") {
-                options.ibl = ar::render::EnvironmentPreset::Directional;
-            } else {
-                return std::nullopt;
-            }
-            options.hdrLighting = true;
-            options.gbuffer = true;
-        } else if (arg == L"--verify-ibl-rollback") {
-            options.verifyIblRollback = true;
-        } else if (arg == L"--hdr-lighting") {
-            options.hdrLighting = true;
-            options.gbuffer = true;
-        } else if (arg == L"--shadows") {
-            options.shadows = true;
-        } else if (arg == L"--free-camera") {
-            options.freeCamera = true;
-        } else if (
-            arg == L"--shadow-resolution" && !options.shadowResolution && index + 1 < args.size()) {
+        } else if (arg == L"--hidden") {
+            options.visible = false;
+        } else if (arg == L"--frames" && !options.frames && index + 1 < args.size()) {
             const std::wstring_view value = args[++index];
             if (value.empty() || value.find_first_not_of(L"0123456789") != value.npos) {
                 return std::nullopt;
@@ -163,62 +127,35 @@ parseLaunchOptions(std::span<const std::wstring_view> args, const AppPaths& path
             const std::wstring text(value);
             errno = 0;
             const unsigned long long parsed = std::wcstoull(text.c_str(), nullptr, 10);
-            if (errno == ERANGE || parsed < ar::render::kMinShadowResolution ||
-                parsed > ar::render::kMaxShadowResolution) {
+            if (errno == ERANGE || parsed == 0 ||
+                parsed > std::numeric_limits<std::uint32_t>::max()) {
                 return std::nullopt;
             }
-            options.shadowResolution = static_cast<std::uint32_t>(parsed);
-        } else if (arg == L"--exposure-ev" && !options.exposureEV && index + 1 < args.size()) {
-            const std::wstring text(args[++index]);
-            wchar_t* end = nullptr;
-            errno = 0;
-            const float exposure = std::wcstof(text.c_str(), &end);
-            if (end == text.c_str() || *end != L'\0' || errno == ERANGE ||
-                !std::isfinite(exposure) || std::abs(exposure) > 16.F) {
+            options.frames = static_cast<std::uint32_t>(parsed);
+        } else if (arg == L"--scene" && !explicitScene && index + 1 < args.size()) {
+            explicitScene = fs::path(args[++index]);
+            if (explicitScene->empty()) {
                 return std::nullopt;
             }
-            options.exposureEV = exposure;
-        } else if (arg == L"--static-gpu-driven") {
-            options.staticGpuDriven = true;
-            options.bindlessMaterials = true;
-            options.gbuffer = true;
-        } else if (arg == L"--bindless-materials") {
-            options.bindlessMaterials = true;
-            options.gbuffer = true;
-        } else if (arg == L"--gbuffer") {
-            options.gbuffer = true;
-        } else if (
-            arg == L"--gbuffer-probes" && !options.gbufferProbes && index + 1 < args.size()) {
-            options.gbuffer = true;
-            options.gbufferProbes = fs::path(args[++index]);
-        } else if (arg == L"--static-scene" && !options.scene && index + 1 < args.size()) {
-            options.scene = fs::path(args[++index]);
-        } else if (arg == L"--asset-root" && !options.assetRoot && index + 1 < args.size()) {
-            options.assetRoot = fs::path(args[++index]);
-        } else if (
-            arg == L"--static-scene-test" && !options.sceneCandidate && index + 1 < args.size()) {
-            options.sceneCandidate = fs::path(args[++index]);
-        } else if (
-            (arg == L"--frames" || arg == L"--indirect-capacity") && index + 1 < args.size()) {
-            auto& target = arg == L"--frames" ? options.frames : options.indirectCapacity;
-            if (target) {
+        } else if (arg == L"--asset-root" && !explicitAssetRoot && index + 1 < args.size()) {
+            explicitAssetRoot = fs::path(args[++index]);
+            if (explicitAssetRoot->empty()) {
                 return std::nullopt;
             }
-            const std::wstring_view value = args[++index];
-            if (value.empty() || value.find_first_not_of(L"0123456789") != value.npos) {
-                return std::nullopt;
-            }
-            const std::wstring text(value);
-            errno = 0;
-            const unsigned long long parsed = std::wcstoull(text.c_str(), nullptr, 10);
-            if (errno == ERANGE || parsed > std::numeric_limits<std::uint32_t>::max() ||
-                (arg == L"--frames" && parsed == 0)) {
-                return std::nullopt;
-            }
-            target = static_cast<std::uint32_t>(parsed);
         } else if (arg == L"--screenshot" && !options.screenshot && index + 1 < args.size()) {
             options.screenshot = fs::path(args[++index]);
             if (options.screenshot->empty()) {
+                return std::nullopt;
+            }
+        } else if (
+            arg == L"--gbuffer-probes" && !options.gbufferProbes && index + 1 < args.size()) {
+            options.gbufferProbes = fs::path(args[++index]);
+            if (options.gbufferProbes->empty()) {
+                return std::nullopt;
+            }
+        } else if (arg == L"--benchmark" && !options.benchmarkSpec && index + 1 < args.size()) {
+            options.benchmarkSpec = fs::path(args[++index]);
+            if (options.benchmarkSpec->empty()) {
                 return std::nullopt;
             }
         } else if (arg == L"--output" && index + 1 < args.size()) {
@@ -232,64 +169,39 @@ parseLaunchOptions(std::span<const std::wstring_view> args, const AppPaths& path
         }
     }
 
-    if (options.showroom) {
-        if (options.scene || options.assetRoot || options.sceneCandidate || options.clearOnly ||
-            options.setBinding || options.verifyBindingRetirement || options.gpuDriven ||
-            paths.content.empty()) {
+    if (options.benchmarkSpec) {
+        if (options.descriptorHeap || !options.visible || options.frames || explicitScene ||
+            explicitAssetRoot || options.screenshot || options.gbufferProbes || explicitOutput) {
+            return std::nullopt;
+        }
+        return options;
+    }
+
+    if (explicitScene.has_value() != explicitAssetRoot.has_value()) {
+        return std::nullopt;
+    }
+    if (explicitScene) {
+        options.scene = std::move(*explicitScene);
+        options.assetRoot = std::move(*explicitAssetRoot);
+    } else {
+        if (paths.content.empty()) {
             return std::nullopt;
         }
         options.scene = paths.content / "showroom" / "scene.json";
         options.assetRoot = paths.content / "showroom" / "assets";
-        options.gbuffer = true;
-        options.bindlessMaterials = true;
-        options.staticGpuDriven = true;
-        options.hdrLighting = true;
-        if (!options.ibl) {
-            options.ibl = ar::render::EnvironmentPreset::Directional;
-        }
     }
 
     if ((!explicitOutput && options.output.empty()) ||
         ((!options.visible || options.screenshot || options.gbufferProbes) && !options.frames)) {
         return std::nullopt;
     }
-    if (options.verifyBindingRetirement && (options.frames != 3 || options.screenshot)) {
-        return std::nullopt;
-    }
-    if (options.clearOnly && options.setBinding) {
-        return std::nullopt;
-    }
-    if (options.gpuDriven && (options.clearOnly || options.setBinding)) {
-        return std::nullopt;
-    }
-    if (options.descriptorHeap && (options.setBinding || options.clearOnly || options.gpuDriven)) {
-        return std::nullopt;
-    }
-    if ((options.indirectCapacity && !options.staticGpuDriven) ||
-        (options.verifyIblRollback && (!options.ibl || !options.frames || *options.frames < 2)) ||
-        (options.exposureEV && !options.hdrLighting) ||
-        (options.shadowResolution && !options.shadows) ||
-        (options.shadows && (!options.hdrLighting || !options.scene)) ||
-        (options.freeCamera && (!options.visible || !options.scene)) ||
-        (options.gbuffer && !options.scene) ||
-        (options.gbufferProbes && options.gbufferProbes->empty()) ||
-        options.scene.has_value() != options.assetRoot.has_value() ||
-        (options.scene && (options.scene->empty() || options.assetRoot->empty() ||
-                           options.gpuDriven || options.clearOnly || options.setBinding)) ||
-        (options.sceneCandidate &&
-         (!options.scene || !options.screenshot || options.frames != 4))) {
-        return std::nullopt;
-    }
     return options;
 }
 
 std::string_view launchUsageText() noexcept {
-    return "usage: ar_triangle [--showroom] [--frames N] [--hidden] [--clear-only] "
-           "[--set-binding] [--descriptor-heap] [--static-scene JSON --asset-root DIRECTORY] "
-           "[--static-gpu-driven [--indirect-capacity N]] "
-           "[--gbuffer [--gbuffer-probes PATH]] [--bindless-materials] [--hdr-lighting "
-           "[--exposure-ev EV]] [--shadows [--shadow-resolution N]] [--free-camera] "
-           "[--ibl constant|directional] [--screenshot PATH] [--output DIRECTORY]\n";
+    return "usage: ar_engine [--descriptor-heap] [--scene JSON --asset-root DIRECTORY] "
+           "[--hidden] [--frames N] [--screenshot PATH] [--gbuffer-probes PATH] "
+           "[--output DIRECTORY] | ar_engine --benchmark SPEC_JSON\n";
 }
 
 } // namespace ar::app

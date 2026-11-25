@@ -16,6 +16,7 @@
 #include "render/PresentationGraph.h"
 #include "render/PresentationSpec.h"
 #include "render/StaticSceneRenderer.h"
+#include "render/StaticSceneVisibility.h"
 #include "runtime/RuntimeConfig.h"
 #include "runtime/StaticSceneSession.h"
 
@@ -116,6 +117,9 @@ struct RuntimeSession::Impl {
     std::optional<render::StaticCamera> activeCamera;
     std::optional<render::SceneWorldBounds> activeSceneBounds;
     std::optional<render::EffectiveDirectionalLight> activeDirectionalLight;
+    float activeExposureEV = 0.F;
+    rhi::DebugViewMode activeDebugView = rhi::DebugViewMode::Final;
+    std::uint32_t activeInstanceCount = 0u;
     std::uint64_t staticSceneUploadCount = 0;
 
     std::expected<rhi::DirectionalLightingState, core::Error> buildLightingState(
@@ -188,7 +192,8 @@ struct RuntimeSession::Impl {
             window->nativeWin32Handle(),
             std::move(extensions),
             static_cast<std::uint32_t>(size.width),
-            static_cast<std::uint32_t>(size.height)};
+            static_cast<std::uint32_t>(size.height),
+            config.presentMode};
         return {};
     }
 
@@ -249,10 +254,17 @@ RuntimeSession::start(const RuntimeConfig& config) {
             query.presentationSpec = render::buildDeferredPresentationSpec(exposureEV);
         }
     }
+    session->activeExposureEV = query.presentationSpec   ? query.presentationSpec->displayExposureEV
+                                : query.deferredLighting ? query.deferredLighting->exposureEV
+                                                         : 0.F;
+    if (query.staticIndirect && query.staticIndirect->cullMode == rhi::StaticCullMode::CpuFrustum &&
+        !query.staticIndirect->cpuCull) {
+        query.staticIndirect->cpuCull = render::cullStaticSceneCpu;
+    }
     if (config.staticAssetRoot) {
         query.enableStaticScene = true;
-        session->staticScene = std::make_unique<StaticSceneSession>(
-            *config.staticAssetRoot, query.enableGBuffer);
+        session->staticScene =
+            std::make_unique<StaticSceneSession>(*config.staticAssetRoot, query.enableGBuffer);
     }
     auto rhi = [&]() -> std::expected<std::unique_ptr<rhi::RhiSession>, rhi::QueryFailure> {
         if (auto opened = session->openWindow(query); !opened) {
@@ -332,8 +344,8 @@ const rhi::CapabilityReport& RuntimeSession::report() const noexcept {
     return m_impl->report;
 }
 
-std::expected<FrameStatus, core::Error>
-RuntimeSession::presentFrame(rhi::FrameScreenshot* screenshot) {
+std::expected<FrameStatus, core::Error> RuntimeSession::presentFrame(
+    rhi::FrameScreenshot* screenshot, const rhi::OverlayDrawList* overlay, bool pollEvents) {
     if (m_impl->closed || !m_impl->window) {
         return std::unexpected(makeError(
             core::ErrorCategory::InvalidState,
@@ -344,7 +356,9 @@ RuntimeSession::presentFrame(rhi::FrameScreenshot* screenshot) {
         return std::unexpected(*m_impl->frameError);
     }
     auto& window = *m_impl->window;
-    window.pollEvents();
+    if (pollEvents) {
+        window.pollEvents();
+    }
     if (window.shouldClose()) {
         return FrameStatus::Closed;
     }
@@ -356,7 +370,8 @@ RuntimeSession::presentFrame(rhi::FrameScreenshot* screenshot) {
     const auto presented = m_impl->rhi->presentFrame(
         static_cast<std::uint32_t>(size.width),
         static_cast<std::uint32_t>(size.height),
-        screenshot);
+        screenshot,
+        overlay);
     if (!presented) {
         m_impl->frameError = std::move(presented.error());
         return std::unexpected(*m_impl->frameError);
@@ -384,8 +399,10 @@ RuntimeSession::presentFrame(rhi::FrameScreenshot* screenshot) {
 std::expected<void, core::Error>
 RuntimeSession::openStaticScene(const std::filesystem::path& source, bool verifyRollback) {
     if (m_impl->closed || !m_impl->staticScene) {
-        return std::unexpected(makeError(core::ErrorCategory::InvalidState,
-            core::ErrorStage::Capability, "no active static scene session"));
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "no active static scene session"));
     }
     std::optional<core::Error> gpuError;
     std::optional<render::SceneWorldBounds> pendingBounds;
@@ -439,12 +456,14 @@ RuntimeSession::openStaticScene(const std::filesystem::path& source, bool verify
             return std::unexpected(std::move(*gpuError));
         }
         const auto path = opened.error().source.u8string();
-        return std::unexpected(makeError(core::ErrorCategory::InvalidArguments,
-            core::ErrorStage::Validation, std::string(path.begin(), path.end()) +
-                ": " + opened.error().message));
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            std::string(path.begin(), path.end()) + ": " + opened.error().message));
     }
     if (const auto input = m_impl->staticScene->input()) {
         m_impl->activeCamera = input->camera;
+        m_impl->activeInstanceCount = static_cast<std::uint32_t>(input->draws.size());
     }
     m_impl->activeSceneBounds = pendingBounds;
     m_impl->activeDirectionalLight = pendingLight;
@@ -476,6 +495,52 @@ std::optional<render::StaticCamera> RuntimeSession::activeCamera() const noexcep
     return m_impl->activeCamera;
 }
 
+std::expected<FrameInputSnapshot, core::Error> RuntimeSession::pollFrameInput() {
+    if (m_impl->closed || !m_impl->window) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "this runtime session has no active window"));
+    }
+    auto& window = *m_impl->window;
+    window.pollEvents();
+    FrameInputSnapshot snapshot{};
+    snapshot.windowSize = window.windowSize();
+    snapshot.framebufferSize = window.framebufferSize();
+    snapshot.uiEvents = window.takeUiEvents();
+    snapshot.minimized = window.isMinimized();
+    snapshot.closeRequested = window.shouldClose();
+    snapshot.focused = true;
+    for (const auto& event : snapshot.uiEvents) {
+        if (event.kind == platform::UiInputEvent::Kind::Focus) {
+            snapshot.focused = event.pressed;
+        }
+    }
+    return snapshot;
+}
+
+std::expected<void, core::Error>
+RuntimeSession::setUiCapture(bool captureKeyboard, bool captureMouse) {
+    if (m_impl->closed || !m_impl->window) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "this runtime session has no active window"));
+    }
+    m_impl->window->setUiCapture(captureKeyboard, captureMouse);
+    return {};
+}
+
+std::expected<platform::InputState, core::Error> RuntimeSession::sampleCameraInput() {
+    if (m_impl->closed || !m_impl->window) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "this runtime session has no active window"));
+    }
+    return m_impl->window->sampleInput(false);
+}
+
 std::expected<platform::InputState, core::Error> RuntimeSession::sampleWindowInput() {
     if (m_impl->closed || !m_impl->window) {
         return std::unexpected(makeError(
@@ -483,7 +548,7 @@ std::expected<platform::InputState, core::Error> RuntimeSession::sampleWindowInp
             core::ErrorStage::Capability,
             "this runtime session has no active window"));
     }
-    return m_impl->window->sampleInput();
+    return m_impl->window->sampleInput(true);
 }
 
 std::expected<void, core::Error> RuntimeSession::setCursorMode(platform::CursorMode mode) {
@@ -493,8 +558,7 @@ std::expected<void, core::Error> RuntimeSession::setCursorMode(platform::CursorM
             core::ErrorStage::Capability,
             "this runtime session has no active window"));
     }
-    if (mode == platform::CursorMode::Disabled &&
-        (!m_impl->config.window || !m_impl->config.window->visible)) {
+    if (mode == platform::CursorMode::Disabled && !m_impl->window->isVisible()) {
         return std::unexpected(makeError(
             core::ErrorCategory::InvalidState,
             core::ErrorStage::Capability,
@@ -544,7 +608,208 @@ RuntimeSession::setDirectionalLight(const render::DirectionalLight& light) {
         return applied;
     }
     m_impl->activeDirectionalLight = *effective;
+    if (!effective->castShadows && m_impl->activeDebugView == rhi::DebugViewMode::ShadowDepth) {
+        static_cast<void>(m_impl->rhi->setDebugView(rhi::DebugViewMode::Final));
+        m_impl->activeDebugView = rhi::DebugViewMode::Final;
+    }
     return {};
+}
+
+std::optional<render::DirectionalLight> RuntimeSession::activeDirectionalLight() const noexcept {
+    if (m_impl->closed || !m_impl->activeDirectionalLight) {
+        return std::nullopt;
+    }
+    const auto& eff = *m_impl->activeDirectionalLight;
+    return render::DirectionalLight{eff.directionWorld, eff.color, eff.intensity, eff.castShadows};
+}
+
+bool RuntimeSession::shadowsAvailable() const noexcept {
+    return !m_impl->closed && m_impl->rhi && m_impl->rhi->shadowMappingEnabled() &&
+           m_impl->activeDirectionalLight && m_impl->activeDirectionalLight->castShadows;
+}
+
+std::expected<void, core::Error> RuntimeSession::setExposureEV(float exposureEV) {
+    if (m_impl->closed || !m_impl->rhi) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "no active render session"));
+    }
+    if (auto applied = m_impl->rhi->setExposureEV(exposureEV); !applied) {
+        return applied;
+    }
+    m_impl->activeExposureEV = exposureEV;
+    return {};
+}
+
+float RuntimeSession::activeExposureEV() const noexcept {
+    return m_impl->activeExposureEV;
+}
+
+std::expected<void, core::Error> RuntimeSession::setDebugView(rhi::DebugViewMode mode) {
+    if (m_impl->closed || !m_impl->rhi) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "no active render session"));
+    }
+    if (mode == rhi::DebugViewMode::ShadowDepth && !shadowsAvailable()) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "shadow depth view is unavailable while directional shadows are disabled"));
+    }
+    if (auto applied = m_impl->rhi->setDebugView(mode); !applied) {
+        return applied;
+    }
+    m_impl->activeDebugView = mode;
+    return {};
+}
+
+rhi::DebugViewMode RuntimeSession::activeDebugView() const noexcept {
+    return m_impl->activeDebugView;
+}
+
+std::expected<void, core::Error>
+RuntimeSession::applyObservationSettings(const ObservationSettings& settings) {
+    if (auto valid = validateObservationSettings(settings); !valid) {
+        return valid;
+    }
+    if (m_impl->closed || !m_impl->rhi || !m_impl->staticScene ||
+        !m_impl->config.query.deferredLighting) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "observation settings require an active deferred static scene session"));
+    }
+    const bool shadowPipelineEnabled = m_impl->rhi->shadowMappingEnabled();
+    if (!shadowPipelineEnabled && settings.directionalLight.castShadows) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "preset enables shadows but this session started without directional shadows"));
+    }
+    if (settings.viewMode == rhi::DebugViewMode::ShadowDepth &&
+        !settings.directionalLight.castShadows) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "preset selects shadow_depth view while shadows are disabled"));
+    }
+
+    // Build and validate all derived GPU inputs upfront before mutating live session state.
+    auto frameView = render::buildFrameView(settings.camera, m_impl->config.query.enableGBuffer);
+    if (!frameView) {
+        return std::unexpected(std::move(frameView.error()));
+    }
+    auto effective =
+        render::resolveDirectionalLight(settings.directionalLight, shadowPipelineEnabled);
+    if (!effective) {
+        return std::unexpected(std::move(effective.error()));
+    }
+    const render::SceneWorldBounds bounds =
+        m_impl->activeSceneBounds.value_or(render::SceneWorldBounds{});
+    auto lightingState = m_impl->buildLightingState(*effective, bounds);
+    if (!lightingState) {
+        return std::unexpected(std::move(lightingState.error()));
+    }
+
+    if (auto ok = m_impl->rhi->setFrameView(*frameView); !ok) {
+        return ok;
+    }
+    if (auto ok = m_impl->rhi->setDirectionalLighting(*lightingState); !ok) {
+        return ok;
+    }
+    if (auto ok = m_impl->rhi->setExposureEV(settings.exposureEV); !ok) {
+        return ok;
+    }
+    if (auto ok = m_impl->rhi->setDebugView(settings.viewMode); !ok) {
+        return ok;
+    }
+    m_impl->activeCamera = settings.camera;
+    m_impl->activeDirectionalLight = *effective;
+    m_impl->activeExposureEV = settings.exposureEV;
+    m_impl->activeDebugView = settings.viewMode;
+    return {};
+}
+
+std::expected<ObservationSettings, core::Error>
+RuntimeSession::captureObservationSettings(std::string name, std::string sceneRef) const {
+    if (m_impl->closed || !m_impl->activeCamera) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "no active observation state to capture"));
+    }
+    ObservationSettings settings{};
+    settings.version = kObservationSettingsVersion;
+    settings.name = std::move(name);
+    settings.sceneRef = std::move(sceneRef);
+    settings.camera = *m_impl->activeCamera;
+    settings.exposureEV = m_impl->activeExposureEV;
+    settings.directionalLight =
+        activeDirectionalLight().value_or(render::defaultDirectionalLight());
+    settings.viewMode = m_impl->activeDebugView;
+    if (auto valid = validateObservationSettings(settings); !valid) {
+        return std::unexpected(std::move(valid.error()));
+    }
+    return settings;
+}
+
+std::expected<void, core::Error>
+RuntimeSession::uploadOverlayFont(const rhi::OverlayFontAtlas& atlas) {
+    if (m_impl->closed || !m_impl->rhi) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "no active render session"));
+    }
+    return m_impl->rhi->uploadOverlayFont(atlas);
+}
+
+rhi::PresentMode RuntimeSession::activePresentMode() const noexcept {
+    if (m_impl->closed || !m_impl->rhi) {
+        return rhi::PresentMode::Fifo;
+    }
+    return m_impl->rhi->activePresentMode();
+}
+
+rhi::CpuFrameTimings RuntimeSession::lastCpuTimings() const noexcept {
+    if (m_impl->closed || !m_impl->rhi) {
+        return rhi::CpuFrameTimings{};
+    }
+    return m_impl->rhi->lastCpuTimings();
+}
+
+rhi::GpuFrameTimings RuntimeSession::latestGpuTimings() const noexcept {
+    if (m_impl->closed || !m_impl->rhi) {
+        rhi::GpuFrameTimings unavailable{};
+        unavailable.unavailableReason = "no active render session";
+        return unavailable;
+    }
+    return m_impl->rhi->latestGpuTimings();
+}
+
+std::vector<rhi::GpuFrameTimings> RuntimeSession::takeCompletedGpuTimings() {
+    if (m_impl->closed || !m_impl->rhi) {
+        return {};
+    }
+    return m_impl->rhi->takeCompletedGpuTimings();
+}
+
+std::expected<std::vector<rhi::GpuFrameTimings>, core::Error>
+RuntimeSession::drainCompletedGpuTimings() {
+    if (m_impl->closed || !m_impl->rhi) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "no active render session"));
+    }
+    return m_impl->rhi->drainCompletedGpuTimings();
+}
+
+std::uint32_t RuntimeSession::activeInstanceCount() const noexcept {
+    return m_impl->closed ? 0u : m_impl->activeInstanceCount;
 }
 
 std::uint64_t RuntimeSession::staticSceneUploadCount() const noexcept {
@@ -567,12 +832,14 @@ RuntimeSession::replaceEnvironment(const rhi::EnvironmentUpload& upload, bool ve
 std::expected<void, core::Error>
 RuntimeSession::saveStaticScene(const std::filesystem::path& destination) const {
     if (m_impl->closed || !m_impl->staticScene) {
-        return std::unexpected(makeError(core::ErrorCategory::InvalidState,
-            core::ErrorStage::Capability, "no active static scene session"));
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "no active static scene session"));
     }
     if (auto saved = m_impl->staticScene->save(destination); !saved) {
-        return std::unexpected(makeError(core::ErrorCategory::OutputFailed,
-            core::ErrorStage::Output, saved.error().message));
+        return std::unexpected(makeError(
+            core::ErrorCategory::OutputFailed, core::ErrorStage::Output, saved.error().message));
     }
     return {};
 }

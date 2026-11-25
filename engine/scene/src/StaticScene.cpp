@@ -19,8 +19,8 @@ namespace {
 namespace fs = std::filesystem;
 using Json = nlohmann::json;
 
-constexpr std::size_t maxSceneBytes = 4 * 1024 * 1024;
-constexpr std::size_t maxInstances = 10000;
+constexpr std::size_t maxSceneBytes = 32 * 1024 * 1024;
+constexpr std::size_t maxInstances = 65536;
 
 std::unexpected<FileError> fail(FileStage stage, const fs::path& source, std::string message) {
     return std::unexpected(FileError{stage, source, std::move(message)});
@@ -37,8 +37,7 @@ float number(const Json& value) {
     return result;
 }
 
-template <std::size_t N>
-std::array<float, N> vector(const Json& value) {
+template <std::size_t N> std::array<float, N> vector(const Json& value) {
     if (!value.is_array() || value.size() != N) {
         throw std::invalid_argument("invalid vector length");
     }
@@ -61,8 +60,11 @@ std::array<float, 4> quaternion(const Json& value) {
 
 Camera readCamera(const Json& value) {
     Camera camera{
-        vector<3>(value.at("position")), quaternion(value.at("orientation")),
-        number(value.at("fov_y")), number(value.at("near")), number(value.at("far"))};
+        vector<3>(value.at("position")),
+        quaternion(value.at("orientation")),
+        number(value.at("fov_y")),
+        number(value.at("near")),
+        number(value.at("far"))};
     if (camera.verticalFovRadians <= 0 || camera.verticalFovRadians >= std::numbers::pi_v<float> ||
         camera.nearPlane <= 0 || camera.nearPlane >= camera.farPlane) {
         throw std::invalid_argument("invalid camera field of view or clip planes");
@@ -123,16 +125,19 @@ Instance readInstance(const Json& value) {
         throw std::invalid_argument("invalid relative glTF asset path");
     }
     return {
-        id.get<std::uint64_t>(), std::move(asset),
-        {vector<3>(value.at("position")), quaternion(value.at("rotation")),
+        id.get<std::uint64_t>(),
+        std::move(asset),
+        {vector<3>(value.at("position")),
+         quaternion(value.at("rotation")),
          vector<3>(value.at("scale"))}};
 }
 
 std::expected<void, FileError> saveFile(const fs::path& destination, const std::string& bytes) {
     static std::atomic<std::uint64_t> sequence{0};
     auto temp = destination;
-    temp += ".ar-scene-" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) +
-            "-" + std::to_string(sequence.fetch_add(1, std::memory_order_relaxed)) + ".tmp";
+    temp += ".ar-scene-" +
+            std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) + "-" +
+            std::to_string(sequence.fetch_add(1, std::memory_order_relaxed)) + ".tmp";
     std::FILE* file = nullptr;
 #ifdef _WIN32
     if (_wfopen_s(&file, temp.c_str(), L"wbx") != 0) {
@@ -178,7 +183,8 @@ std::expected<StaticScene, FileError> StaticScene::load(const fs::path& source) 
     std::ifstream stream(source, std::ios::binary | std::ios::ate);
     const auto size = stream.tellg();
     if (size < 0 || static_cast<std::uintmax_t>(size) > maxSceneBytes) {
-        return fail(FileStage::Read, source, "could not read scene size or scene exceeds byte limit");
+        return fail(
+            FileStage::Read, source, "could not read scene size or scene exceeds byte limit");
     }
     std::string bytes(static_cast<std::size_t>(size), '\0');
     stream.seekg(0);
@@ -207,7 +213,10 @@ std::expected<StaticScene, FileError> StaticScene::load(const fs::path& source) 
         for (const auto& object : objects) {
             auto instance = readInstance(object);
             if (!ids.insert(instance.id).second) {
-                return fail(FileStage::Validate, source, "duplicate object ID " + std::to_string(instance.id));
+                return fail(
+                    FileStage::Validate,
+                    source,
+                    "duplicate object ID " + std::to_string(instance.id));
             }
             const auto entity = data->registry.create();
             data->registry.emplace<Instance>(entity, std::move(instance));
@@ -246,10 +255,12 @@ std::expected<void, FileError> StaticScene::save(const fs::path& destination) co
     Json objects = Json::array();
     for (const auto& instance : instances()) {
         const auto key = instance.asset.generic_u8string();
-        objects.push_back({
-            {"id", instance.id}, {"asset", std::string(key.begin(), key.end())},
-            {"position", instance.transform.position}, {"rotation", instance.transform.rotation},
-            {"scale", instance.transform.scale}});
+        objects.push_back(
+            {{"id", instance.id},
+             {"asset", std::string(key.begin(), key.end())},
+             {"position", instance.transform.position},
+             {"rotation", instance.transform.rotation},
+             {"scale", instance.transform.scale}});
     }
     Json document{
         {"version", 1},

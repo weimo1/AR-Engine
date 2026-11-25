@@ -152,6 +152,7 @@ set(AR_REQUIRED_RUNTIME_CASES
     runtime-summary-output-failure
     runtime-capability-encode-failure
     runtime-destructor
+    runtime-observation-settings
     rhi-descriptor-heap-scene-layout
     sample-resize
     sample-camera-view-update
@@ -159,10 +160,13 @@ set(AR_REQUIRED_RUNTIME_CASES
     sample-static-scene-heap-gpu-driven
     sample-directional-shadow-parity
     sample-free-camera-shadows
+    sample-debug-views-and-overlay
+    sample-four-config-benchmark-parity
 )
 
 add_executable(ar_runtime_tests
     runtime/test_runtime_session.cpp
+    runtime/test_observation_settings.cpp
 )
 target_link_libraries(ar_runtime_tests
     PRIVATE
@@ -177,10 +181,10 @@ target_include_directories(ar_runtime_tests
 target_compile_definitions(ar_runtime_tests PRIVATE
     AR_ENABLE_TEST_HOOKS=1
     AR_TEST_SHADER_DIR=u8"${CMAKE_BINARY_DIR}/shaders"
-    AR_SHOWROOM_DEPLOYED_DIR=u8"$<TARGET_FILE_DIR:ar_triangle>/content/showroom"
-    AR_TRIANGLE_EXECUTABLE=u8"$<TARGET_FILE:ar_triangle>"
+    AR_SHOWROOM_DEPLOYED_DIR=u8"$<TARGET_FILE_DIR:ar_engine>/content/showroom"
+    AR_TRIANGLE_EXECUTABLE=u8"$<TARGET_FILE:ar_engine>"
 )
-add_dependencies(ar_runtime_tests ar_rhi_fixture ar_triangle_shaders ar_triangle)
+add_dependencies(ar_runtime_tests ar_rhi_fixture ar_triangle_shaders ar_engine)
 foreach(case IN LISTS AR_REQUIRED_RUNTIME_CASES)
     add_test(NAME ${case} COMMAND ar_runtime_tests "[${case}]")
     set_tests_properties(${case} PROPERTIES
@@ -191,7 +195,7 @@ endforeach()
 # hosted CI runner) leave them out with `ctest -LE gpu`; keep it in step with gpu_cases in
 # workflow/p0-checks.json.
 set_tests_properties(runtime-system-inspect runtime-system-development PROPERTIES LABELS gpu)
-set_tests_properties(sample-resize sample-camera-view-update sample-static-scene-heap-gbuffer sample-static-scene-heap-gpu-driven sample-directional-shadow-parity sample-free-camera-shadows PROPERTIES LABELS gpu TIMEOUT 90
+set_tests_properties(sample-resize sample-camera-view-update sample-static-scene-heap-gbuffer sample-static-scene-heap-gpu-driven sample-directional-shadow-parity sample-free-camera-shadows sample-debug-views-and-overlay sample-four-config-benchmark-parity PROPERTIES LABELS gpu TIMEOUT 90
     ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>;VK_VALIDATION_VALIDATE_SYNC=1")
 
 add_executable(ar_platform_tests platform/test_window.cpp platform/test_window_input.cpp)
@@ -202,36 +206,47 @@ foreach(case IN ITEMS platform-window-create platform-window-vulkan-extensions p
 endforeach()
 set_tests_properties(platform-window-vulkan-extensions PROPERTIES LABELS gpu)
 
+find_package(Stb REQUIRED)
+add_executable(ar_sample_harness triangle/sample_harness.cpp)
+target_include_directories(ar_sample_harness SYSTEM PRIVATE "${Stb_INCLUDE_DIR}")
+add_dependencies(ar_sample_harness ar_triangle_shaders ar_engine_content)
+target_link_libraries(ar_sample_harness PRIVATE ar_runtime ar_render)
+target_compile_definitions(ar_sample_harness PRIVATE
+    AR_SAMPLE_HARNESS_SHADER_DIR=u8"${CMAKE_BINARY_DIR}/shaders"
+    AR_SAMPLE_HARNESS_CONTENT_DIR=u8"$<TARGET_FILE_DIR:ar_engine>/content"
+    AR_SAMPLE_HARNESS_OUTPUT_ROOT=u8"${CMAKE_BINARY_DIR}/sample-output/$<CONFIG>"
+)
+set_target_properties(ar_sample_harness PROPERTIES FOLDER "TestSupport")
+
 add_test(NAME sample-clear-frames
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_clear_frames.py"
-        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" clear
+        "$<TARGET_FILE:ar_sample_harness>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" clear
 )
 add_test(NAME sample-triangle-frames
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_clear_frames.py"
-        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" triangle
+        "$<TARGET_FILE:ar_sample_harness>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" triangle
 )
-find_package(Stb REQUIRED)
 add_executable(ar_verify_screenshot triangle/verify_screenshot.cpp)
 target_include_directories(ar_verify_screenshot SYSTEM PRIVATE "${Stb_INCLUDE_DIR}")
 target_link_libraries(ar_verify_screenshot PRIVATE ar_cxx23 ar_cxx_flags)
 set_target_properties(ar_verify_screenshot PROPERTIES FOLDER "TestSupport")
 add_test(NAME sample-triangle-screenshot
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_clear_frames.py"
-        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" screenshot
+        "$<TARGET_FILE:ar_sample_harness>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" screenshot
         "$<TARGET_FILE:ar_verify_screenshot>"
 )
 add_test(NAME sample-set-binding-pixels
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_clear_frames.py"
-        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" set-binding
+        "$<TARGET_FILE:ar_sample_harness>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" set-binding
         "$<TARGET_FILE:ar_verify_screenshot>"
 )
 add_test(NAME sample-set-binding-retirement
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_clear_frames.py"
-        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" set-binding-retirement
+        "$<TARGET_FILE:ar_sample_harness>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" set-binding-retirement
 )
 add_test(NAME sample-gpu-driven-pixels
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_clear_frames.py"
-        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" gpu-driven
+        "$<TARGET_FILE:ar_sample_harness>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>" gpu-driven
         "$<TARGET_FILE:ar_verify_screenshot>"
 )
 add_test(NAME shader-build COMMAND ${CMAKE_COMMAND}
@@ -257,15 +272,19 @@ add_library(ar_public_header_probe OBJECT
     public_headers/header_rhi_loader_source.cpp
     public_headers/header_rhi_capabilities.cpp
     public_headers/header_rhi_buffer.cpp
+    public_headers/header_rhi_frame_timings.cpp
     public_headers/header_rhi_image.cpp
+    public_headers/header_rhi_overlay.cpp
     public_headers/header_rhi_presentation_spec.cpp
     public_headers/header_rhi_session.cpp
     public_headers/header_rhi_verification.cpp
     public_headers/header_runtime_config.cpp
+    public_headers/header_runtime_observation_settings.cpp
     public_headers/header_runtime_session.cpp
+    public_headers/header_render_static_scene_visibility.cpp
     public_headers/header_platform_window.cpp
 )
-target_link_libraries(ar_public_header_probe PRIVATE ar_core ar_rhi ar_runtime ar_platform)
+target_link_libraries(ar_public_header_probe PRIVATE ar_core ar_rhi ar_render ar_runtime ar_platform)
 add_test(NAME public-headers
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/check_public_headers.py"
         --search-root "${CMAKE_CURRENT_BINARY_DIR}"
@@ -305,7 +324,7 @@ set_target_properties(ar_rhi_fixture ar_identity_probe ar_public_header_probe
 
 add_test(NAME sample-static-scene-pixels
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_static_scene.py"
-        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>"
+        "$<TARGET_FILE:ar_sample_harness>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>"
         "$<TARGET_FILE:ar_verify_screenshot>")
 set_tests_properties(sample-static-scene-pixels PROPERTIES
     LABELS "gpu"
@@ -313,14 +332,14 @@ set_tests_properties(sample-static-scene-pixels PROPERTIES
 
 add_test(NAME sample-gbuffer-probes
     COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_gbuffer.py"
-        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>")
+        "$<TARGET_FILE:ar_sample_harness>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>")
 set_tests_properties(sample-gbuffer-probes PROPERTIES
     LABELS "gpu"
     ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1")
 
 add_test(NAME sample-bindless-material-probes
     COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_gbuffer.py"
-        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>"
+        "$<TARGET_FILE:ar_sample_harness>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>"
         --bindless-materials)
 set_tests_properties(sample-bindless-material-probes PROPERTIES
     LABELS "gpu"
@@ -328,28 +347,28 @@ set_tests_properties(sample-bindless-material-probes PROPERTIES
 
 add_test(NAME sample-static-scene-gpu-driven
     COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_static_scene_gpu_driven.py"
-        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>")
+        "$<TARGET_FILE:ar_sample_harness>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>")
 set_tests_properties(sample-static-scene-gpu-driven PROPERTIES
     LABELS "gpu"
     ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1")
 
 add_test(NAME sample-hdr-lighting-probes
     COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_hdr_lighting.py"
-        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>")
+        "$<TARGET_FILE:ar_sample_harness>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>")
 set_tests_properties(sample-hdr-lighting-probes PROPERTIES
     LABELS "gpu"
     ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1")
 
 add_test(NAME sample-ibl-probes
     COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_ibl.py"
-        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>")
+        "$<TARGET_FILE:ar_sample_harness>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>")
 set_tests_properties(sample-ibl-probes PROPERTIES
     LABELS "gpu"
     ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1")
 
 add_test(NAME sample-descriptor-heap-scene-parity
     COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_descriptor_heap_scene.py"
-        "$<TARGET_FILE:ar_triangle>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>")
+        "$<TARGET_FILE:ar_sample_harness>" "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>" "$<CONFIG>")
 set_tests_properties(sample-descriptor-heap-scene-parity PROPERTIES
     LABELS "gpu" TIMEOUT 60
     ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1")
@@ -363,6 +382,7 @@ add_executable(ar_render_tests
     render/test_presentation_spec.cpp
     render/test_render_graph.cpp
     render/test_static_scene_draw_data.cpp
+    render/test_static_scene_visibility.cpp
 )
 target_link_libraries(ar_render_tests PRIVATE ar_render ar_assets ar_scene Catch2::Catch2WithMain)
 set_target_properties(ar_render_tests PROPERTIES
@@ -380,9 +400,14 @@ add_test(NAME render-free-camera COMMAND ar_render_tests "[render-free-camera]")
 add_test(NAME render-presentation-spec COMMAND ar_render_tests "[render-presentation-spec]")
 add_test(NAME render-graph-plan COMMAND ar_render_tests "[render-graph-plan]")
 add_test(NAME render-static-scene-draw-data COMMAND ar_render_tests "[render-static-scene-draw-data]")
+add_test(NAME render-static-scene-visibility COMMAND ar_render_tests "[render-static-scene-visibility]")
 
 add_executable(ar_assets_tests assets/test_static_asset.cpp)
 target_link_libraries(ar_assets_tests PRIVATE ar_assets ar_runtime Catch2::Catch2WithMain)
+# Direct Visual Studio launches need the same output root as CTest.
+set_target_properties(ar_assets_tests PROPERTIES
+    VS_DEBUGGER_ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
+)
 add_test(NAME assets-static-gltf COMMAND ar_assets_tests "[assets-static-gltf]")
 add_test(NAME assets-opaque-material COMMAND ar_assets_tests "[assets-opaque-material]")
 set_tests_properties(assets-static-gltf assets-opaque-material PROPERTIES
@@ -399,33 +424,46 @@ target_compile_definitions(ar_rhi_tests PRIVATE
 
 add_executable(ar_app_tests
     triangle/test_app_paths.cpp
+    triangle/test_benchmark_run.cpp
     "${PROJECT_SOURCE_DIR}/examples/triangle/AppPaths.cpp"
+    "${PROJECT_SOURCE_DIR}/examples/triangle/BenchmarkRun.cpp"
 )
 target_include_directories(ar_app_tests PRIVATE "${PROJECT_SOURCE_DIR}/examples/triangle")
-target_link_libraries(ar_app_tests PRIVATE ar_assets ar_render ar_runtime Catch2::Catch2WithMain)
-add_dependencies(ar_app_tests ar_triangle_shaders ar_triangle_content)
+target_link_libraries(ar_app_tests PRIVATE ar_assets ar_render ar_runtime nlohmann_json::nlohmann_json Catch2::Catch2WithMain)
+add_dependencies(ar_app_tests ar_triangle_shaders ar_engine_content)
 target_compile_definitions(ar_app_tests PRIVATE
     AR_SHOWROOM_SOURCE_DIR=u8"${PROJECT_SOURCE_DIR}/examples/triangle/content/showroom"
-    AR_SHOWROOM_DEPLOYED_DIR=u8"$<TARGET_FILE_DIR:ar_triangle>/content/showroom"
-    AR_TRIANGLE_DEPLOYED_SHADER_DIR=u8"$<TARGET_FILE_DIR:ar_triangle>/shaders"
+    AR_SHOWROOM_DEPLOYED_DIR=u8"$<TARGET_FILE_DIR:ar_engine>/content/showroom"
+    AR_TRIANGLE_DEPLOYED_SHADER_DIR=u8"$<TARGET_FILE_DIR:ar_engine>/shaders"
 )
 set_target_properties(ar_app_tests PROPERTIES
     FOLDER "Tests"
     VS_DEBUGGER_ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
 )
 add_test(NAME app-paths-and-showroom-cli COMMAND ar_app_tests "[app-paths-and-showroom-cli]")
-set_tests_properties(app-paths-and-showroom-cli PROPERTIES
+add_test(NAME app-benchmark-run COMMAND ar_app_tests "[app-benchmark-run]")
+set_tests_properties(app-paths-and-showroom-cli app-benchmark-run PROPERTIES
     ENVIRONMENT "AR_TEST_OUTPUT_ROOT=${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
 )
 
 add_test(NAME sample-showroom-launch
     COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_showroom_launch.py"
-        "$<TARGET_FILE:ar_triangle>"
+        "$<TARGET_FILE:ar_engine>"
         "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
         "$<CONFIG>"
         "${PROJECT_SOURCE_DIR}/examples/triangle/content/showroom"
 )
 set_tests_properties(sample-showroom-launch PROPERTIES
     LABELS "gpu" TIMEOUT 90
+    ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1"
+)
+
+add_test(NAME sample-four-config-benchmark-export
+    COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_four_config_benchmark.py"
+        "$<TARGET_FILE:ar_engine>"
+        "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
+)
+set_tests_properties(sample-four-config-benchmark-export PROPERTIES
+    LABELS "gpu" TIMEOUT 120
     ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1"
 )

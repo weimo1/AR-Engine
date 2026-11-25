@@ -14,6 +14,7 @@
     "vulkan-memory-allocator",
     "fastgltf",
     "entt",
-    "glm"
+    "glm",
+    "imgui"
   ]
 }

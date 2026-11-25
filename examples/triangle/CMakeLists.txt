@@ -15,7 +15,7 @@ if(NOT image_constant OR NOT sampler_constant)
     message(FATAL_ERROR "Descriptor set capacities are missing")
 endif()
 
-foreach(shader IN ITEMS triangle.vert triangle.frag set_binding.vert set_binding.frag gpu_cull.comp heap_probe.comp gpu_draw.vert gpu_draw.frag static_scene.vert static_scene.frag gbuffer.vert gbuffer.frag gbuffer_bindless.frag static_indirect.vert static_indirect.comp static_indirect.frag shadow_direct.vert shadow_indirect.vert fullscreen.vert deferred_direct.frag deferred_ibl.frag deferred_shadow.frag deferred_ibl_shadow.frag display_sdr.frag)
+foreach(shader IN ITEMS triangle.vert triangle.frag set_binding.vert set_binding.frag gpu_cull.comp heap_probe.comp gpu_draw.vert gpu_draw.frag static_scene.vert static_scene.frag gbuffer.vert gbuffer.frag gbuffer_bindless.frag static_indirect.vert static_indirect.comp static_indirect.frag shadow_direct.vert shadow_indirect.vert fullscreen.vert deferred_direct.frag deferred_ibl.frag deferred_shadow.frag deferred_ibl_shadow.frag display_sdr.frag overlay.vert overlay.frag)
     set(source "${PROJECT_SOURCE_DIR}/shaders/${shader}")
     set(output "${shader_dir}/${shader}.spv")
     set(shader_target_env "vulkan1.3")
@@ -110,19 +110,20 @@ add_custom_command(OUTPUT ${triangle_showroom_generated_assets}
     DEPENDS "${triangle_showroom_generator}"
     VERBATIM)
 list(APPEND triangle_showroom_outputs ${triangle_showroom_generated_assets})
-add_custom_target(ar_triangle_content DEPENDS ${triangle_showroom_outputs})
-set_target_properties(ar_triangle_content PROPERTIES FOLDER "Examples")
+add_custom_target(ar_engine_content DEPENDS ${triangle_showroom_outputs})
+set_target_properties(ar_engine_content PROPERTIES FOLDER "App")
 
-add_executable(ar_triangle main.cpp AppPaths.cpp)
+add_executable(ar_engine main.cpp AppPaths.cpp BenchmarkRun.cpp DebugPanel.cpp)
 find_package(Stb REQUIRED)
-target_include_directories(ar_triangle SYSTEM PRIVATE "${Stb_INCLUDE_DIR}")
-add_dependencies(ar_triangle ar_triangle_shaders ar_triangle_content)
-target_link_libraries(ar_triangle PRIVATE ar_runtime ar_render)
-target_compile_definitions(ar_triangle PRIVATE
-    AR_TRIANGLE_OUTPUT_ROOT=u8"${CMAKE_BINARY_DIR}/sample-output/$<CONFIG>"
+find_package(imgui CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+target_include_directories(ar_engine SYSTEM PRIVATE "${Stb_INCLUDE_DIR}")
+add_dependencies(ar_engine ar_triangle_shaders ar_engine_content)
+target_link_libraries(ar_engine PRIVATE ar_runtime ar_render imgui::imgui nlohmann_json::nlohmann_json)
+target_compile_definitions(ar_engine PRIVATE
+    AR_ENGINE_OUTPUT_ROOT=u8"${CMAKE_BINARY_DIR}/engine-output/$<CONFIG>"
 )
-set_target_properties(ar_triangle PROPERTIES
-    FOLDER "Examples"
+set_target_properties(ar_engine PROPERTIES
+    FOLDER "App"
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    VS_DEBUGGER_COMMAND_ARGUMENTS "--showroom --shadows --free-camera"
 )

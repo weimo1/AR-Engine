@@ -14,13 +14,15 @@
 
 #include "core/Diagnostics.h"
 #include "core/Error.h"
+#include "rhi/Buffer.h"
 #include "rhi/Capabilities.h"
 #include "rhi/EnvironmentUpload.h"
+#include "rhi/FrameTimings.h"
+#include "rhi/Image.h"
+#include "rhi/LoaderSource.h"
+#include "rhi/Overlay.h"
 #include "rhi/PresentationGraph.h"
 #include "rhi/PresentationSpec.h"
-#include "rhi/Image.h"
-#include "rhi/Buffer.h"
-#include "rhi/LoaderSource.h"
 #include "rhi/StaticSceneDraw.h"
 
 namespace ar::rhi {
@@ -59,6 +61,9 @@ struct StaticIndirectShaders {
     TriangleShaders graphics;
     std::vector<std::uint32_t> compute;
     std::uint32_t capacity = UINT32_MAX;
+    StaticCullMode cullMode = StaticCullMode::GpuCompute;
+    CpuFrustumCullFn cpuCull = nullptr;
+    bool readIndirectCounts = false;
 };
 
 struct ShadowMapConfig {
@@ -105,6 +110,8 @@ struct FrameScreenshot {
 
 enum class PresentStatus { Presented, Retry };
 
+enum class PresentMode { Fifo, Mailbox, Immediate };
+
 struct Win32Presentation {
     // Borrowed HWND. Keep the window alive through close, or until process exit if
     // close reports a retained Presentation.
@@ -112,6 +119,7 @@ struct Win32Presentation {
     std::vector<std::string> instanceExtensions;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
+    PresentMode presentMode = PresentMode::Fifo;
 };
 
 // Everything open needs. Query mode (inspect / require-product / development) is runtime policy
@@ -146,6 +154,7 @@ struct QueryConfig {
     std::optional<PresentationSpec> presentationSpec;
     PlanPresentationGraph planPresentation = nullptr;
     std::optional<StaticIndirectShaders> staticIndirect;
+    std::optional<OverlayShaders> overlayShaders;
 };
 
 struct DescriptorHeapLimits {
@@ -209,8 +218,11 @@ public:
     // Presented counts one accepted presentation, including VK_SUBOPTIMAL_KHR.
     // Retry requests another call with the latest framebuffer size and does not update screenshot.
     // A failed frame stops further submissions until the session is closed.
-    [[nodiscard]] std::expected<PresentStatus, core::Error>
-    presentFrame(std::uint32_t width, std::uint32_t height, FrameScreenshot* screenshot = nullptr);
+    [[nodiscard]] std::expected<PresentStatus, core::Error> presentFrame(
+        std::uint32_t width,
+        std::uint32_t height,
+        FrameScreenshot* screenshot = nullptr,
+        const OverlayDrawList* overlay = nullptr);
 
     [[nodiscard]] std::expected<void, core::Error> replaceStaticScene(
         std::span<const StaticMeshUpload> meshes,
@@ -220,6 +232,15 @@ public:
     [[nodiscard]] std::expected<void, core::Error> setFrameView(const FrameView& view);
     [[nodiscard]] std::expected<void, core::Error>
     setDirectionalLighting(const DirectionalLightingState& state);
+    [[nodiscard]] std::expected<void, core::Error> setExposureEV(float exposureEV);
+    [[nodiscard]] std::expected<void, core::Error> setDebugView(DebugViewMode mode);
+    [[nodiscard]] std::expected<void, core::Error> uploadOverlayFont(const OverlayFontAtlas& atlas);
+    [[nodiscard]] PresentMode activePresentMode() const noexcept;
+    [[nodiscard]] CpuFrameTimings lastCpuTimings() const noexcept;
+    [[nodiscard]] GpuFrameTimings latestGpuTimings() const noexcept;
+    [[nodiscard]] std::vector<GpuFrameTimings> takeCompletedGpuTimings();
+    [[nodiscard]] std::expected<std::vector<GpuFrameTimings>, core::Error>
+    drainCompletedGpuTimings();
     [[nodiscard]] bool shadowMappingEnabled() const noexcept;
     [[nodiscard]] std::uint64_t staticSceneUploadCount() const noexcept;
     [[nodiscard]] bool staticIndirectEnabled() const noexcept;

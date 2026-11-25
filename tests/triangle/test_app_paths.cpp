@@ -125,38 +125,31 @@ TEST_CASE(
         CHECK_FALSE(ar::app::requireReadableDirectory({}, "asset root").has_value());
     }
 
-    SECTION("parseLaunchOptions expands showroom defaults and enforces conflict matrix") {
+    SECTION("parseLaunchOptions defaults zero-arg launch to showroom and rejects legacy flags") {
         const ar::app::AppPaths paths{
             fs::path(u8"C:/ar-app/shaders"),
             fs::path(u8"C:/ar-app/content"),
             fs::path(u8"C:/ar-app/output"),
         };
 
-        const auto showroom = parseArgs({L"--showroom"}, paths);
-        REQUIRE(showroom.has_value());
-        CHECK(showroom->showroom);
-        CHECK(showroom->visible);
-        CHECK_FALSE(showroom->frames.has_value());
-        CHECK(showroom->scene == paths.content / "showroom" / "scene.json");
-        CHECK(showroom->assetRoot == paths.content / "showroom" / "assets");
-        CHECK(showroom->gbuffer);
-        CHECK(showroom->bindlessMaterials);
-        CHECK(showroom->staticGpuDriven);
-        CHECK(showroom->hdrLighting);
-        CHECK(showroom->ibl == ar::render::EnvironmentPreset::Directional);
-        CHECK_FALSE(showroom->descriptorHeap);
-        CHECK(showroom->output == paths.output);
+        // Zero-arg launch opens the built-in showroom interactively with zero CLI flags.
+        const auto zeroArg = parseArgs({}, paths);
+        REQUIRE(zeroArg.has_value());
+        CHECK(zeroArg->visible);
+        CHECK_FALSE(zeroArg->descriptorHeap);
+        CHECK_FALSE(zeroArg->frames.has_value());
+        CHECK(zeroArg->scene == paths.content / "showroom" / "scene.json");
+        CHECK(zeroArg->assetRoot == paths.content / "showroom" / "assets");
+        CHECK_FALSE(zeroArg->screenshot.has_value());
+        CHECK_FALSE(zeroArg->gbufferProbes.has_value());
+        CHECK(zeroArg->output == paths.output);
 
-        const auto showroomHeap = parseArgs(
-            {L"--showroom",
-             L"--descriptor-heap",
+        // Minimal automation / parity overrides
+        const auto heapCapture = parseArgs(
+            {L"--descriptor-heap",
              L"--hidden",
              L"--frames",
              L"2",
-             L"--exposure-ev",
-             L"-0.5",
-             L"--indirect-capacity",
-             L"32",
              L"--screenshot",
              L"out/frame.png",
              L"--gbuffer-probes",
@@ -164,176 +157,82 @@ TEST_CASE(
              L"--output",
              L"custom_out"},
             paths);
-        REQUIRE(showroomHeap.has_value());
-        CHECK(showroomHeap->showroom);
-        CHECK(showroomHeap->descriptorHeap);
-        CHECK_FALSE(showroomHeap->visible);
-        CHECK(showroomHeap->frames == 2u);
-        REQUIRE(showroomHeap->exposureEV.has_value());
-        CHECK(*showroomHeap->exposureEV == Catch::Approx(-0.5F));
-        CHECK(showroomHeap->indirectCapacity == 32u);
-        CHECK(showroomHeap->ibl == ar::render::EnvironmentPreset::Directional);
-        CHECK(showroomHeap->screenshot == fs::path(L"out/frame.png"));
-        CHECK(showroomHeap->gbufferProbes == fs::path(L"out/probes.json"));
-        CHECK(showroomHeap->output == fs::path(L"custom_out"));
+        REQUIRE(heapCapture.has_value());
+        CHECK(heapCapture->descriptorHeap);
+        CHECK_FALSE(heapCapture->visible);
+        CHECK(heapCapture->frames == 2u);
+        CHECK(heapCapture->scene == paths.content / "showroom" / "scene.json");
+        CHECK(heapCapture->assetRoot == paths.content / "showroom" / "assets");
+        CHECK(heapCapture->screenshot == fs::path(L"out/frame.png"));
+        CHECK(heapCapture->gbufferProbes == fs::path(L"out/probes.json"));
+        CHECK(heapCapture->output == fs::path(L"custom_out"));
 
-        const auto showroomConstantIbl = parseArgs({L"--showroom", L"--ibl", L"constant"}, paths);
-        REQUIRE(showroomConstantIbl.has_value());
-        CHECK(showroomConstantIbl->ibl == ar::render::EnvironmentPreset::Constant);
-
-        // P4b shadow & free-camera switches
-        const auto showroomShadowsFree =
-            parseArgs({L"--showroom", L"--shadows", L"--free-camera"}, paths);
-        REQUIRE(showroomShadowsFree.has_value());
-        CHECK(showroomShadowsFree->shadows);
-        CHECK_FALSE(showroomShadowsFree->shadowResolution.has_value());
-        CHECK(showroomShadowsFree->freeCamera);
-        CHECK(showroomShadowsFree->visible);
-
-        const auto showroomShadowsHeap = parseArgs(
-            {L"--showroom",
-             L"--shadows",
-             L"--shadow-resolution",
-             L"1024",
+        // Explicit custom scene + asset root override
+        const auto customScene = parseArgs(
+            {L"--scene",
+             L"custom.json",
+             L"--asset-root",
+             L"custom_assets",
              L"--descriptor-heap",
              L"--hidden",
              L"--frames",
              L"2"},
             paths);
-        REQUIRE(showroomShadowsHeap.has_value());
-        CHECK(showroomShadowsHeap->shadows);
-        CHECK(showroomShadowsHeap->shadowResolution == 1024u);
-        CHECK(showroomShadowsHeap->descriptorHeap);
-        CHECK_FALSE(showroomShadowsHeap->freeCamera);
+        REQUIRE(customScene.has_value());
+        CHECK(customScene->descriptorHeap);
+        CHECK(customScene->scene == fs::path(L"custom.json"));
+        CHECK(customScene->assetRoot == fs::path(L"custom_assets"));
 
-        const auto explicitShadows = parseArgs(
-            {L"--static-scene",
-             L"custom.json",
-             L"--asset-root",
-             L"custom_assets",
-             L"--hdr-lighting",
-             L"--shadows",
-             L"--shadow-resolution",
-             L"512",
-             L"--hidden",
-             L"--frames",
-             L"2"},
-            paths);
-        REQUIRE(explicitShadows.has_value());
-        CHECK(explicitShadows->shadows);
-        CHECK(explicitShadows->shadowResolution == 512u);
-
-        CHECK_FALSE(
-            parseArgs({L"--showroom", L"--free-camera", L"--hidden", L"--frames", L"2"}, paths));
-        CHECK_FALSE(parseArgs({L"--free-camera"}, paths));
+        // Legacy P1-P5 mode flags are removed from ar_engine and rejected with exit 2.
+        CHECK_FALSE(parseArgs({L"--showroom"}, paths));
         CHECK_FALSE(parseArgs({L"--shadows"}, paths));
-        CHECK_FALSE(parseArgs(
-            {L"--static-scene",
-             L"s.json",
-             L"--asset-root",
-             L"a",
-             L"--gbuffer",
-             L"--shadows",
-             L"--hidden",
-             L"--frames",
-             L"2"},
-            paths));
-        CHECK_FALSE(parseArgs({L"--showroom", L"--shadow-resolution", L"1024"}, paths));
-        CHECK_FALSE(parseArgs({L"--showroom", L"--shadows", L"--shadow-resolution", L"32"}, paths));
-        CHECK_FALSE(
-            parseArgs({L"--showroom", L"--shadows", L"--shadow-resolution", L"8192"}, paths));
-        CHECK_FALSE(
-            parseArgs({L"--showroom", L"--shadows", L"--shadow-resolution", L"abc"}, paths));
-        CHECK_FALSE(parseArgs(
-            {L"--showroom",
-             L"--shadows",
-             L"--shadow-resolution",
-             L"512",
-             L"--shadow-resolution",
-             L"1024"},
-            paths));
+        CHECK_FALSE(parseArgs({L"--free-camera"}, paths));
+        CHECK_FALSE(parseArgs({L"--shadow-resolution", L"1024"}, paths));
+        CHECK_FALSE(parseArgs({L"--clear-only"}, paths));
+        CHECK_FALSE(parseArgs({L"--set-binding"}, paths));
+        CHECK_FALSE(parseArgs({L"--gpu-driven"}, paths));
+        CHECK_FALSE(parseArgs({L"--gbuffer"}, paths));
+        CHECK_FALSE(parseArgs({L"--hdr-lighting"}, paths));
+        CHECK_FALSE(parseArgs({L"--ibl", L"directional"}, paths));
+        CHECK_FALSE(parseArgs({L"--static-scene", L"s.json", L"--asset-root", L"assets"}, paths));
 
-        // Strict conflict matrix with --showroom
-        CHECK_FALSE(parseArgs(
-            {L"--showroom", L"--static-scene", L"s.json", L"--asset-root", L"assets"}, paths));
-        CHECK_FALSE(parseArgs({L"--showroom", L"--static-scene", L"s.json"}, paths));
-        CHECK_FALSE(parseArgs({L"--showroom", L"--asset-root", L"assets"}, paths));
-        CHECK_FALSE(parseArgs(
-            {L"--showroom",
-             L"--static-scene-test",
-             L"alt.json",
-             L"--screenshot",
-             L"a.png",
-             L"--frames",
-             L"4"},
-            paths));
-        CHECK_FALSE(parseArgs({L"--showroom", L"--clear-only"}, paths));
-        CHECK_FALSE(parseArgs({L"--showroom", L"--set-binding"}, paths));
-        CHECK_FALSE(
-            parseArgs({L"--showroom", L"--set-binding-retirement", L"--frames", L"3"}, paths));
-        CHECK_FALSE(parseArgs({L"--showroom", L"--gpu-driven"}, paths));
-        CHECK_FALSE(parseArgs({L"--showroom", L"--gpu-driven-empty"}, paths));
-        CHECK_FALSE(parseArgs({L"--showroom", L"--hidden"}, paths));
-        CHECK_FALSE(parseArgs({L"--showroom", L"--screenshot", L"out.png"}, paths));
-        CHECK_FALSE(parseArgs({L"--showroom", L"--output", L""}, paths));
-        CHECK_FALSE(parseArgs({L"--showroom", L"--frames", L"0"}, paths));
-        CHECK_FALSE(parseArgs({L"--showroom", L"--frames", L"99999999999999999999"}, paths));
+        // Validation rules on remaining minimal flags
+        CHECK_FALSE(parseArgs({L"--scene", L"s.json"}, paths));
+        CHECK_FALSE(parseArgs({L"--asset-root", L"assets"}, paths));
+        CHECK_FALSE(parseArgs({L"--scene", L"", L"--asset-root", L"assets"}, paths));
+        CHECK_FALSE(parseArgs({L"--scene", L"s.json", L"--asset-root", L""}, paths));
+        CHECK_FALSE(parseArgs({L"--hidden"}, paths));
+        CHECK_FALSE(parseArgs({L"--screenshot", L"out.png"}, paths));
+        CHECK_FALSE(parseArgs({L"--gbuffer-probes", L"out.json"}, paths));
+        CHECK_FALSE(parseArgs({L"--output", L""}, paths));
+        CHECK_FALSE(parseArgs({L"--frames", L"0"}, paths));
+        CHECK_FALSE(parseArgs({L"--frames", L"99999999999999999999"}, paths));
+        CHECK_FALSE(parseArgs({L"--frames", L"abc"}, paths));
+        CHECK_FALSE(parseArgs({L"--frames", L"2", L"--frames", L"3"}, paths));
 
         ar::app::AppPaths emptyContent = paths;
         emptyContent.content.clear();
-        CHECK_FALSE(parseArgs({L"--showroom"}, emptyContent));
+        CHECK_FALSE(parseArgs({}, emptyContent));
+        // Custom scene override does not depend on built-in showroom content path.
+        CHECK(parseArgs({L"--scene", L"s.json", L"--asset-root", L"assets"}, emptyContent)
+                  .has_value());
 
         ar::app::AppPaths emptyOutput = paths;
         emptyOutput.output.clear();
-        CHECK_FALSE(parseArgs({L"--showroom"}, emptyOutput));
+        CHECK_FALSE(parseArgs({}, emptyOutput));
 
-        // Legacy invocation compatibility
-        const auto bare = parseArgs({}, paths);
-        REQUIRE(bare.has_value());
-        CHECK_FALSE(bare->showroom);
-        CHECK(bare->visible);
-        CHECK_FALSE(bare->scene.has_value());
-        CHECK(bare->output == paths.output);
+        // Benchmark automation entry: standalone --benchmark SPEC_JSON only.
+        const auto bench = parseArgs({L"--benchmark", L"bench/spec.json"}, paths);
+        REQUIRE(bench.has_value());
+        CHECK(bench->benchmarkSpec == fs::path(L"bench/spec.json"));
+        CHECK_FALSE(parseArgs({L"--benchmark", L""}, paths));
+        CHECK_FALSE(parseArgs({L"--benchmark", L"s.json", L"--descriptor-heap"}, paths));
+        CHECK_FALSE(parseArgs({L"--benchmark", L"s.json", L"--hidden", L"--frames", L"2"}, paths));
 
-        const auto clear = parseArgs({L"--clear-only", L"--hidden", L"--frames", L"2"}, paths);
-        REQUIRE(clear.has_value());
-        CHECK(clear->clearOnly);
-        CHECK_FALSE(clear->showroom);
-
-        const auto setBinding =
-            parseArgs({L"--set-binding", L"--hidden", L"--frames", L"2"}, paths);
-        REQUIRE(setBinding.has_value());
-        CHECK(setBinding->setBinding);
-
-        const auto gpuDriven = parseArgs({L"--gpu-driven", L"--hidden", L"--frames", L"2"}, paths);
-        REQUIRE(gpuDriven.has_value());
-        CHECK(gpuDriven->gpuDriven);
-        CHECK_FALSE(gpuDriven->gpuEmpty);
-
-        const auto explicitScene = parseArgs(
-            {L"--static-scene",
-             L"custom.json",
-             L"--asset-root",
-             L"custom_assets",
-             L"--descriptor-heap",
-             L"--hdr-lighting",
-             L"--ibl",
-             L"directional",
-             L"--hidden",
-             L"--frames",
-             L"2"},
-            paths);
-        REQUIRE(explicitScene.has_value());
-        CHECK_FALSE(explicitScene->showroom);
-        CHECK(explicitScene->descriptorHeap);
-        CHECK(explicitScene->scene == fs::path(L"custom.json"));
-        CHECK(explicitScene->assetRoot == fs::path(L"custom_assets"));
-
-        CHECK_FALSE(parseArgs({L"--static-scene", L"custom.json"}, paths));
-        CHECK(ar::app::launchUsageText().find("--showroom") != std::string_view::npos);
-        CHECK(ar::app::launchUsageText().find("--shadows") != std::string_view::npos);
-        CHECK(ar::app::launchUsageText().find("--shadow-resolution") != std::string_view::npos);
-        CHECK(ar::app::launchUsageText().find("--free-camera") != std::string_view::npos);
+        CHECK(ar::app::launchUsageText().find("ar_engine") != std::string_view::npos);
+        CHECK(ar::app::launchUsageText().find("--descriptor-heap") != std::string_view::npos);
+        CHECK(ar::app::launchUsageText().find("--benchmark") != std::string_view::npos);
+        CHECK(ar::app::launchUsageText().find("--showroom") == std::string_view::npos);
     }
 
     SECTION("Showroom scene deploys cleanly and passes full asset and render packing checks") {

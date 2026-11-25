@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 
 #include "render/RenderGraph.h"
@@ -26,7 +27,7 @@ constexpr GraphAccess discardWrite{0, 0, 0, GraphUsage::ColorWrite, true};
 TEST_CASE("presentation graph orders indirect buffer consumers", "[render-graph-plan]") {
     using namespace ar::rhi;
     PresentationGraphInput input{};
-    input.indirect = true;
+    input.indirectProducer = IndirectProducer::GpuCompute;
     auto plan = ar::render::planPresentationGraph(input);
     REQUIRE(plan);
     const auto& cull = plan->indirectBarriers[static_cast<std::size_t>(IndirectPhase::Cull)];
@@ -43,11 +44,31 @@ TEST_CASE("presentation graph orders indirect buffer consumers", "[render-graph-
     CHECK(draw[2].source == IndirectUse::Clear);
     constexpr auto readback = static_cast<std::size_t>(IndirectPhase::Readback);
     CHECK(plan->indirectBarriers[readback].empty());
+
+    // Async count readback without full screenshot capture only synchronizes Counts.
+    input.readIndirectCounts = true;
+    plan = ar::render::planPresentationGraph(input);
+    REQUIRE(plan);
+    REQUIRE(plan->indirectBarriers[readback].size() == 2);
+    CHECK(plan->indirectBarriers[readback][0].resource == IndirectBuffer::Counts);
+    CHECK(plan->indirectBarriers[readback][0].destination == IndirectUse::HostRead);
+
     input.capture = true;
     plan = ar::render::planPresentationGraph(input);
     REQUIRE(plan);
     REQUIRE(plan->indirectBarriers[readback].size() == 3);
     CHECK(plan->indirectBarriers[readback][0].destination == IndirectUse::HostRead);
+
+    // CPU host indirect producer writes directly to fence-retired host-visible buffers before
+    // submit; compute/clear barriers are omitted cleanly.
+    PresentationGraphInput cpuInput{};
+    cpuInput.indirectProducer = IndirectProducer::Cpu;
+    cpuInput.capture = true;
+    const auto cpuPlan = ar::render::planPresentationGraph(cpuInput);
+    REQUIRE(cpuPlan);
+    CHECK(cpuPlan->indirectBarriers[static_cast<std::size_t>(IndirectPhase::Cull)].empty());
+    CHECK(cpuPlan->indirectBarriers[static_cast<std::size_t>(IndirectPhase::Geometry)].empty());
+    CHECK(cpuPlan->indirectBarriers[readback].empty());
 }
 
 TEST_CASE("graph preserves both compatible readers before another write", "[render-graph-plan]") {
@@ -205,4 +226,62 @@ TEST_CASE("graph rejects duplicate and incompatible imports", "[render-graph-pla
     CHECK(result.error().code == GraphErrorCode::UninitializedRead);
     CHECK(result.error().mip == 0);
     CHECK(result.error().layer == 0);
+}
+
+TEST_CASE(
+    "presentation graph declares on-demand debug views and overlay pass dependencies",
+    "[render-graph-plan]") {
+    using namespace ar::rhi;
+    using ar::render::planPresentationGraph;
+
+    PresentationGraphInput base{};
+    base.lighting = true;
+    base.shadows = true;
+
+    // All 6 debug views plan cleanly and transition Hdr to ShaderRead (display_sdr.frag statically
+    // binds all display descriptors across every switch branch).
+    for (const auto view :
+         {DebugViewMode::Final,
+          DebugViewMode::BaseColor,
+          DebugViewMode::ViewNormal,
+          DebugViewMode::MetallicRoughness,
+          DebugViewMode::MainDepth,
+          DebugViewMode::ShadowDepth}) {
+        PresentationGraphInput input = base;
+        input.debugView = view;
+        const auto plan = planPresentationGraph(input);
+        REQUIRE(plan.has_value());
+        CHECK(plan->barriers[static_cast<std::size_t>(PresentationPass::Overlay)].empty());
+        const auto& displayBarriers =
+            plan->barriers[static_cast<std::size_t>(PresentationPass::Display)];
+        const bool transitionsHdr = std::ranges::any_of(displayBarriers, [](const auto& b) {
+            return b.image == PresentationImage::Hdr && b.before == GraphLayout::ColorAttachment &&
+                   b.after == GraphLayout::ShaderRead;
+        });
+        CHECK(transitionsHdr);
+    }
+
+    // ShadowDepth debug view is explicitly rejected when shadows are disabled.
+    PresentationGraphInput noShadows = base;
+    noShadows.shadows = false;
+    noShadows.debugView = DebugViewMode::ShadowDepth;
+    const auto rejected = planPresentationGraph(noShadows);
+    REQUIRE_FALSE(rejected.has_value());
+    CHECK(rejected.error().category == ar::core::ErrorCategory::InvalidArguments);
+
+    // Overlay pass preserves prior Output color contents (discard == false) before Copy/Present.
+    for (const bool capture : {false, true}) {
+        PresentationGraphInput withOverlay = base;
+        withOverlay.overlay = true;
+        withOverlay.capture = capture;
+        const auto plan = planPresentationGraph(withOverlay);
+        REQUIRE(plan.has_value());
+        const auto& overlayBarriers =
+            plan->barriers[static_cast<std::size_t>(PresentationPass::Overlay)];
+        REQUIRE(overlayBarriers.size() == 1u);
+        CHECK(overlayBarriers[0].image == PresentationImage::Output);
+        CHECK(overlayBarriers[0].before == GraphLayout::ColorAttachment);
+        CHECK(overlayBarriers[0].after == GraphLayout::ColorAttachment);
+        CHECK_FALSE(overlayBarriers[0].discard);
+    }
 }

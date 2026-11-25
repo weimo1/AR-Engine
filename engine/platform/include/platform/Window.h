@@ -35,12 +35,16 @@ public:
     void pollEvents() const noexcept;
     // The timeout is a positive, finite number of seconds.
     void waitEvents(double seconds) const noexcept;
-    [[nodiscard]] InputState sampleInput() noexcept;
+    [[nodiscard]] std::vector<UiInputEvent> takeUiEvents() noexcept;
+    void setUiCapture(bool captureKeyboard, bool captureMouse) noexcept;
+    [[nodiscard]] InputState sampleInput(bool poll = true) noexcept;
     void setCursorMode(CursorMode mode) noexcept;
     [[nodiscard]] CursorMode cursorMode() const noexcept;
     void requestClose() noexcept;
     [[nodiscard]] bool shouldClose() const noexcept;
+    [[nodiscard]] FramebufferSize windowSize() const noexcept;
     [[nodiscard]] FramebufferSize framebufferSize() const noexcept;
+    [[nodiscard]] bool isVisible() const noexcept;
     [[nodiscard]] bool isMinimized() const noexcept;
     // Borrowed HWND, valid only while this window is alive on the main thread.
     [[nodiscard]] void* nativeWin32Handle() const noexcept;

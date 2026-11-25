@@ -1,10 +1,20 @@
 #version 460
 
 layout(set = 0, binding = 0) uniform sampler2D hdrAttachment;
+layout(set = 0, binding = 1) uniform sampler2D baseColorAttachment;
+layout(set = 0, binding = 2) uniform sampler2D normalAttachment;
+layout(set = 0, binding = 3) uniform sampler2D materialAttachment;
+layout(set = 0, binding = 4) uniform sampler2D depthAttachment;
+layout(set = 0, binding = 5) uniform sampler2D shadowDepthAttachment;
+
 layout(push_constant) uniform DisplayPush {
     float exposureEV;
     uint encodeSrgb;
+    uint viewMode;
+    float cameraNear;
+    float cameraFar;
 } pc;
+
 layout(location = 0) out vec4 displayColor;
 
 // Rows of the color transforms are passed as GLSL columns for row-vector multiplication.
@@ -85,17 +95,78 @@ vec3 filmAces(vec3 rec709)
     return clamp(max(tone, vec3(0.0)) * ap1ToRec709, 0.0, 1.0);
 }
 
+vec3 encodeOutput(vec3 linearRgb)
+{
+    vec3 clamped = clamp(linearRgb, 0.0, 1.0);
+    if (pc.encodeSrgb != 0u) {
+        return mix(1.055 * pow(clamped, vec3(1.0 / 2.4)) - 0.055, 12.92 * clamped,
+                   lessThanEqual(clamped, vec3(0.0031308)));
+    }
+    return clamped;
+}
+
 void main()
 {
-    vec3 linearScene = texelFetch(hdrAttachment, ivec2(gl_FragCoord.xy), 0).rgb;
+    ivec2 pixel = ivec2(gl_FragCoord.xy);
     displayColor = vec4(0.0, 0.0, 0.0, 1.0);
-    if (all(equal(linearScene, vec3(0.0))))
+
+    if (pc.viewMode == 0u) {
+        vec3 linearScene = texelFetch(hdrAttachment, pixel, 0).rgb;
+        if (all(equal(linearScene, vec3(0.0))))
+            return;
+        vec3 rgb = filmAces(linearScene * exp2(pc.exposureEV));
+        displayColor.rgb = encodeOutput(rgb);
+        return;
+    }
+
+    if (pc.viewMode == 5u) {
+        vec2 outputSize = vec2(textureSize(hdrAttachment, 0));
+        float side = min(outputSize.x, outputSize.y);
+        vec2 origin = 0.5 * (outputSize - vec2(side));
+        vec2 uv = (gl_FragCoord.xy - origin) / max(side, 1.0);
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+            displayColor.rgb = encodeOutput(vec3(0.015));
+            return;
+        }
+        float sd = texture(shadowDepthAttachment, uv).r;
+        float vis = sd >= 0.9999 ? 0.04 : clamp(1.0 - sd, 0.0, 1.0);
+        displayColor.rgb = encodeOutput(vec3(vis));
+        return;
+    }
+
+    float depth = texelFetch(depthAttachment, pixel, 0).r;
+    if (depth == 0.0)
         return;
 
-    vec3 rgb = filmAces(linearScene * exp2(pc.exposureEV));
-    if (pc.encodeSrgb != 0) {
-        rgb = mix(1.055 * pow(rgb, vec3(1.0 / 2.4)) - 0.055, 12.92 * rgb,
-                  lessThanEqual(rgb, vec3(0.0031308)));
+    if (pc.viewMode == 1u) {
+        vec3 baseColor = texelFetch(baseColorAttachment, pixel, 0).rgb;
+        displayColor.rgb = encodeOutput(baseColor);
+        return;
     }
-    displayColor.rgb = rgb;
+
+    if (pc.viewMode == 2u) {
+        vec3 storedNormal = texelFetch(normalAttachment, pixel, 0).xyz;
+        float lenSq = dot(storedNormal, storedNormal);
+        if (lenSq <= 1e-8)
+            return;
+        vec3 n = storedNormal * inversesqrt(lenSq);
+        displayColor.rgb = encodeOutput(n * 0.5 + 0.5);
+        return;
+    }
+
+    if (pc.viewMode == 3u) {
+        vec2 mat = texelFetch(materialAttachment, pixel, 0).rg;
+        displayColor.rgb = encodeOutput(vec3(mat.r, mat.g, 0.0));
+        return;
+    }
+
+    if (pc.viewMode == 4u) {
+        float nearP = max(pc.cameraNear, 1e-4);
+        float farP = max(pc.cameraFar, nearP + 1e-3);
+        float linearZ = (nearP * farP) / (nearP + depth * (farP - nearP));
+        float t = clamp((linearZ - nearP) / (farP - nearP), 0.0, 1.0);
+        float vis = 1.0 - pow(t, 0.35);
+        displayColor.rgb = encodeOutput(vec3(vis));
+        return;
+    }
 }

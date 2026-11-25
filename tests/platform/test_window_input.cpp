@@ -137,6 +137,58 @@ TEST_CASE(
         CHECK(immune.cursorDeltaY == 0.0);
         CHECK(immune.scrollDeltaY == 0.0);
     }
+
+    SECTION("UI capture gates roaming input and returning to viewport drops first-frame jump") {
+        tracker.updateCursorPosition(100.0, 100.0);
+        static_cast<void>(tracker.consume());
+
+        // UI captures mouse and keyboard while dragging a slider or editing a text field.
+        tracker.setUiCapture(true, true);
+        CHECK(tracker.uiCaptureKeyboard());
+        CHECK(tracker.uiCaptureMouse());
+        tracker.updateKeys(KeyInput{true, false, true, false, true, false, true, true});
+        tracker.updateLookButton(true);
+        tracker.updateCursorPosition(420.0, 260.0);
+        tracker.addScroll(2.0);
+        const auto captured = tracker.consume();
+        CHECK(captured.focused);
+        CHECK_FALSE(captured.moveForward);
+        CHECK_FALSE(captured.moveLeft);
+        CHECK_FALSE(captured.moveUp);
+        CHECK_FALSE(captured.sprint);
+        CHECK_FALSE(captured.escapePressed);
+        CHECK_FALSE(captured.lookHeld);
+        CHECK(captured.cursorDeltaX == 0.0);
+        CHECK(captured.cursorDeltaY == 0.0);
+        CHECK(captured.scrollDeltaY == 0.0);
+
+        // Returning focus from UI to 3D viewport drops the first cursor sample (no warp/jump).
+        tracker.setUiCapture(false, false);
+        CHECK_FALSE(tracker.uiCaptureKeyboard());
+        CHECK_FALSE(tracker.uiCaptureMouse());
+        tracker.updateCursorPosition(600.0, 340.0);
+        const auto firstViewportFrame = tracker.consume();
+        CHECK(firstViewportFrame.cursorDeltaX == 0.0);
+        CHECK(firstViewportFrame.cursorDeltaY == 0.0);
+
+        // Subsequent viewport motion accumulates cleanly from the new baseline.
+        tracker.updateCursorPosition(614.0, 332.0);
+        tracker.addScroll(-1.0);
+        const auto nextViewportFrame = tracker.consume();
+        CHECK(nextViewportFrame.cursorDeltaX == Catch::Approx(14.0));
+        CHECK(nextViewportFrame.cursorDeltaY == Catch::Approx(-8.0));
+        CHECK(nextViewportFrame.scrollDeltaY == Catch::Approx(-1.0));
+
+        // Keyboard-only capture leaves mouse roaming active.
+        tracker.setUiCapture(true, false);
+        tracker.updateKeys(KeyInput{true, false, false, false, false, false, false, true});
+        tracker.updateLookButton(true);
+        tracker.updateCursorPosition(620.0, 330.0);
+        const auto kbOnly = tracker.consume();
+        CHECK_FALSE(kbOnly.moveForward);
+        CHECK_FALSE(kbOnly.escapePressed);
+        CHECK(kbOnly.lookHeld);
+    }
 }
 
 TEST_CASE(

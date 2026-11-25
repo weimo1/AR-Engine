@@ -1,3 +1,12 @@
+#include "AppPaths.h"
+#include "BenchmarkRun.h"
+#include "DebugPanel.h"
+#include "render/DirectionalShadow.h"
+#include "render/EnvironmentLighting.h"
+#include "render/FreeCameraController.h"
+#include "runtime/ObservationSettings.h"
+#include "runtime/RuntimeSession.h"
+
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -8,20 +17,17 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
-
-#include "AppPaths.h"
-#include "render/CullReference.h"
-#include "render/EnvironmentLighting.h"
-#include "render/FreeCameraController.h"
-#include "runtime/RuntimeSession.h"
 
 #define STBI_WRITE_NO_STDIO
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
 namespace {
+
+constexpr std::uint32_t kDefaultShadowResolution = 2048u;
 
 bool writeGBufferProbes(const std::filesystem::path& path, const ar::rhi::FrameScreenshot& frame) {
     constexpr std::array names{"overlap", "far-only", "background"};
@@ -69,9 +75,11 @@ bool writeGBufferProbes(const std::filesystem::path& path, const ar::rhi::FrameS
             out << ",\"sdr_rgb\":";
             const auto offset =
                 (static_cast<std::size_t>(probe.pixel[1]) * frame.width + probe.pixel[0]) * 4;
-            array(std::array{static_cast<unsigned>(frame.rgba[offset]),
-                             static_cast<unsigned>(frame.rgba[offset + 1]),
-                             static_cast<unsigned>(frame.rgba[offset + 2])});
+            array(
+                std::array{
+                    static_cast<unsigned>(frame.rgba[offset]),
+                    static_cast<unsigned>(frame.rgba[offset + 1]),
+                    static_cast<unsigned>(frame.rgba[offset + 2])});
         }
         out << '}';
     }
@@ -149,6 +157,21 @@ std::string pathToUtf8(const std::filesystem::path& path) {
     return std::string(text.begin(), text.end());
 }
 
+std::string
+sceneReferenceFor(const std::filesystem::path& sceneFile, const std::filesystem::path& contentDir) {
+    std::error_code error;
+    const auto relative = std::filesystem::relative(sceneFile, contentDir, error);
+    if (!error && !relative.empty()) {
+        const auto generic = relative.generic_u8string();
+        std::string text(generic.begin(), generic.end());
+        if (!text.starts_with("..")) {
+            return text;
+        }
+    }
+    const auto filename = sceneFile.filename().generic_u8string();
+    return std::string(filename.begin(), filename.end());
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -158,7 +181,7 @@ int wmain(int argc, wchar_t** argv) {
         return 1;
     }
     const auto paths = ar::app::resolveAppPaths(
-        *exeDir, std::nullopt, std::filesystem::path(AR_TRIANGLE_OUTPUT_ROOT));
+        *exeDir, std::nullopt, std::filesystem::path(AR_ENGINE_OUTPUT_ROOT));
     if (!paths) {
         std::fprintf(stderr, "%s\n", paths.error().c_str());
         return 1;
@@ -178,21 +201,57 @@ int wmain(int argc, wchar_t** argv) {
         return 2;
     }
 
-    std::optional<std::filesystem::path> sceneFile;
-    std::optional<std::filesystem::path> assetDir;
-    if (options->scene) {
-        auto checkedScene = ar::app::requireReadableFile(*options->scene, "scene file");
-        if (!checkedScene) {
-            std::fprintf(stderr, "%s\n", checkedScene.error().c_str());
+    if (options->benchmarkSpec) {
+        const auto benchConfig = ar::app::loadBenchmarkConfig(*options->benchmarkSpec, *paths);
+        if (!benchConfig) {
+            std::fprintf(stderr, "%s\n", benchConfig.error().c_str());
+            return 2;
+        }
+        return ar::app::runBenchmark(*benchConfig, *paths);
+    }
+
+    const auto sceneFile = ar::app::requireReadableFile(options->scene, "scene file");
+    if (!sceneFile) {
+        std::fprintf(stderr, "%s\n", sceneFile.error().c_str());
+        return 1;
+    }
+    const auto assetDir = ar::app::requireReadableDirectory(options->assetRoot, "asset root");
+    if (!assetDir) {
+        std::fprintf(stderr, "%s\n", assetDir.error().c_str());
+        return 1;
+    }
+    const auto shaderDir = ar::app::requireReadableDirectory(paths->shaders, "shader directory");
+    if (!shaderDir) {
+        std::fprintf(stderr, "%s\n", shaderDir.error().c_str());
+        return 1;
+    }
+
+    const bool interactive = options->visible;
+    auto gbufferVert = readShader(*shaderDir / "gbuffer.vert.spv");
+    auto gbufferFrag = readShader(*shaderDir / "gbuffer_bindless.frag.spv");
+    auto indirectVert = readShader(*shaderDir / "static_indirect.vert.spv");
+    auto indirectFrag = readShader(*shaderDir / "static_indirect.frag.spv");
+    auto indirectComp = readShader(*shaderDir / "static_indirect.comp.spv");
+    auto fullscreenVert = readShader(*shaderDir / "fullscreen.vert.spv");
+    auto lightingFrag = readShader(*shaderDir / "deferred_ibl_shadow.frag.spv");
+    auto displayFrag = readShader(*shaderDir / "display_sdr.frag.spv");
+    auto shadowDirectVert = readShader(*shaderDir / "shadow_direct.vert.spv");
+    auto shadowIndirectVert = readShader(*shaderDir / "shadow_indirect.vert.spv");
+    if (!gbufferVert || !gbufferFrag || !indirectVert || !indirectFrag || !indirectComp ||
+        !fullscreenVert || !lightingFrag || !displayFrag || !shadowDirectVert ||
+        !shadowIndirectVert) {
+        return 1;
+    }
+
+    std::optional<ar::rhi::OverlayShaders> overlayShaders;
+    if (interactive) {
+        auto overlayVert = readShader(*shaderDir / "overlay.vert.spv");
+        auto overlayFrag = readShader(*shaderDir / "overlay.frag.spv");
+        if (!overlayVert || !overlayFrag) {
             return 1;
         }
-        auto checkedAssets = ar::app::requireReadableDirectory(*options->assetRoot, "asset root");
-        if (!checkedAssets) {
-            std::fprintf(stderr, "%s\n", checkedAssets.error().c_str());
-            return 1;
-        }
-        sceneFile = std::move(*checkedScene);
-        assetDir = std::move(*checkedAssets);
+        overlayShaders.emplace(
+            ar::rhi::OverlayShaders{std::move(*overlayVert), std::move(*overlayFrag)});
     }
 
     ar::runtime::RuntimeConfig config;
@@ -201,296 +260,273 @@ int wmain(int argc, wchar_t** argv) {
     config.query.requestedApi =
         options->descriptorHeap ? ar::rhi::kApiVersion1_4 : ar::rhi::makeApiVersion(1, 3);
     config.query.createGraphicsDevice = true;
-    config.query.enableScreenshot =
-        options->screenshot.has_value() || options->gbufferProbes.has_value() ||
-        options->verifyBindingRetirement;
     config.query.enableDescriptorHeap = options->descriptorHeap;
-    config.query.enableSetBinding =
-        !options->descriptorHeap && (options->setBinding || options->bindlessMaterials);
-    config.query.enableSetBindingSample = options->setBinding;
-    config.query.verifyBindingRetirement = options->verifyBindingRetirement;
-    config.query.enableGBuffer = options->gbuffer;
-    config.staticAssetRoot = assetDir;
-    if (options->verifyBindingRetirement) {
-        config.diagnostics.minLevel = ar::core::LogLevel::Debug;
-    }
-    if (!options->clearOnly) {
-        const auto checkedShaderDir =
-            ar::app::requireReadableDirectory(paths->shaders, "shader directory");
-        if (!checkedShaderDir) {
-            std::fprintf(stderr, "%s\n", checkedShaderDir.error().c_str());
-            return 1;
-        }
-        const std::filesystem::path& shaderDir = *checkedShaderDir;
-        auto vertex = readShader(
-            shaderDir / (options->gbuffer      ? "gbuffer.vert.spv"
-                         : options->scene      ? "static_scene.vert.spv"
-                         : options->gpuDriven  ? "gpu_draw.vert.spv"
-                         : options->setBinding ? "set_binding.vert.spv"
-                                               : "triangle.vert.spv"));
-        auto fragment = readShader(
-            shaderDir / ((options->bindlessMaterials || options->descriptorHeap)
-                             ? "gbuffer_bindless.frag.spv"
-                         : options->gbuffer    ? "gbuffer.frag.spv"
-                         : options->scene      ? "static_scene.frag.spv"
-                         : options->gpuDriven  ? "gpu_draw.frag.spv"
-                         : options->setBinding ? "set_binding.frag.spv"
-                                               : "triangle.frag.spv"));
-        if (options->hdrLighting) {
-            auto fullscreen = readShader(shaderDir / "fullscreen.vert.spv");
-            const char* directShaderName =
-                options->ibl
-                    ? (options->shadows ? "deferred_ibl_shadow.frag.spv" : "deferred_ibl.frag.spv")
-                    : (options->shadows ? "deferred_shadow.frag.spv" : "deferred_direct.frag.spv");
-            auto direct = readShader(shaderDir / directShaderName);
-            auto display = readShader(shaderDir / "display_sdr.frag.spv");
-            if (!fullscreen || !direct || !display) {
-                return 1;
-            }
-            std::optional<ar::rhi::ShadowMapConfig> shadowConfig;
-            if (options->shadows) {
-                auto shadowDirect = readShader(shaderDir / "shadow_direct.vert.spv");
-                if (!shadowDirect) {
-                    return 1;
-                }
-                std::vector<std::uint32_t> shadowIndirectWords;
-                if (options->staticGpuDriven) {
-                    auto shadowIndirect = readShader(shaderDir / "shadow_indirect.vert.spv");
-                    if (!shadowIndirect) {
-                        return 1;
-                    }
-                    shadowIndirectWords = std::move(*shadowIndirect);
-                }
-                shadowConfig.emplace(
-                    ar::rhi::ShadowMapConfig{
-                        std::move(*shadowDirect),
-                        std::move(shadowIndirectWords),
-                        options->shadowResolution.value_or(2048u)});
-            }
-            config.query.deferredLighting.emplace(
-                ar::rhi::DeferredLighting{
-                    std::move(*fullscreen),
-                    std::move(*direct),
-                    std::move(*display),
-                    options->exposureEV.value_or(0.F),
-                    options->ibl.has_value(),
-                    std::move(shadowConfig)});
-        }
-        if (options->staticGpuDriven) {
-            auto indirectVertex = readShader(shaderDir / "static_indirect.vert.spv");
-            auto indirectFragment = readShader(shaderDir / "static_indirect.frag.spv");
-            auto compute = readShader(shaderDir / "static_indirect.comp.spv");
-            if (!indirectVertex || !indirectFragment || !compute) {
-                return 1;
-            }
-            config.query.staticIndirect.emplace(
-                ar::rhi::StaticIndirectShaders{
-                    {std::move(*indirectVertex), std::move(*indirectFragment)},
-                    std::move(*compute),
-                    options->indirectCapacity.value_or(UINT32_MAX)});
-        }
-        if (options->gpuDriven) {
-            auto compute = readShader(shaderDir / "gpu_cull.comp.spv");
-            if (!compute) {
-                return 1;
-            }
-            auto scene = ar::render::fixedCullScene();
-            auto objects = std::span<const ar::render::CullObject>{scene.objects};
-            if (options->gpuEmpty) {
-                objects = objects.subspan(1, 1);
-            }
-            const auto planes = std::as_bytes(std::span{scene.frustum});
-            const auto records = std::as_bytes(objects);
-            std::vector<float> positions;
-            positions.reserve(scene.vertices.size() * 3);
-            for (const auto& position : scene.vertices) {
-                positions.insert(positions.end(), position.begin(), position.end());
-            }
-            config.query.gpuDriven = ar::rhi::GpuDrivenInput{
-                {planes.begin(), planes.end()},
-                {records.begin(), records.end()},
-                std::move(*compute),
-                std::move(positions)};
-        }
-        if (!vertex || !fragment) {
-            return 1;
-        }
-        config.query.triangleShaders =
-            ar::rhi::TriangleShaders{std::move(*vertex), std::move(*fragment)};
-    }
+    config.query.enableSetBinding = !options->descriptorHeap;
+    config.query.enableGBuffer = true;
+    config.query.enableScreenshot =
+        options->screenshot.has_value() || options->gbufferProbes.has_value();
+    config.staticAssetRoot = *assetDir;
+
+    config.query.triangleShaders =
+        ar::rhi::TriangleShaders{std::move(*gbufferVert), std::move(*gbufferFrag)};
+    config.query.staticIndirect.emplace(
+        ar::rhi::StaticIndirectShaders{
+            {std::move(*indirectVert), std::move(*indirectFrag)},
+            std::move(*indirectComp),
+            UINT32_MAX});
+    config.query.deferredLighting.emplace(
+        ar::rhi::DeferredLighting{
+            std::move(*fullscreenVert),
+            std::move(*lightingFrag),
+            std::move(*displayFrag),
+            0.F,
+            true,
+            ar::rhi::ShadowMapConfig{
+                std::move(*shadowDirectVert),
+                std::move(*shadowIndirectVert),
+                kDefaultShadowResolution}});
+    config.query.overlayShaders = std::move(overlayShaders);
+
     config.window.emplace();
-    config.window->title = options->showroom ? "AR Engine Showroom" : "AR Engine Triangle";
+    config.window->title = "AR Engine";
     config.window->visible = options->visible;
     config.diagnostics.outputRoot = options->output;
     const auto timestamp = std::chrono::system_clock::now().time_since_epoch().count();
-    config.diagnostics.runId = "triangle-" + std::to_string(timestamp);
+    config.diagnostics.runId = "engine-" + std::to_string(timestamp);
 
     auto session = ar::runtime::RuntimeSession::start(config);
     if (!session) {
-        const auto& error = session.error().endResult.primaryError;
-        if (error) {
-            printError(*error);
-        }
+        reportEndErrors(session.error().endResult);
         return 1;
     }
-    if (sceneFile) {
-        if (auto loaded = (*session)->openStaticScene(*sceneFile); !loaded) {
+    if (auto loaded = (*session)->openStaticScene(*sceneFile); !loaded) {
+        printError(loaded.error());
+        closeAndReport(**session);
+        return 1;
+    }
+    {
+        const auto packed = ar::render::packEnvironmentLighting(
+            ar::render::bakeEnvironmentLighting(ar::render::EnvironmentPreset::Directional));
+        if (auto loaded = (*session)->replaceEnvironment(
+                {packed.diffuse, packed.specular, packed.brdf}, false);
+            !loaded) {
             printError(loaded.error());
             closeAndReport(**session);
             return 1;
         }
     }
 
-    const auto replaceEnvironment = [&](ar::render::EnvironmentPreset preset, bool verifyRollback) {
-        const auto packed =
-            ar::render::packEnvironmentLighting(ar::render::bakeEnvironmentLighting(preset));
-        return (*session)->replaceEnvironment(
-            {packed.diffuse, packed.specular, packed.brdf}, verifyRollback);
-    };
-    if (options->ibl) {
-        if (auto loaded = replaceEnvironment(*options->ibl, false); !loaded) {
-            printError(loaded.error());
-            closeAndReport(**session);
-            return 1;
-        }
-    }
-    if (sceneFile && assetDir) {
-        const std::string sceneUtf8 = pathToUtf8(*sceneFile);
-        const std::string assetUtf8 = pathToUtf8(*assetDir);
-        std::printf(
-            "scene=%s\nasset_root=%s\nbinding=%s\nshadows=%s\nfree_camera=%s\n",
-            sceneUtf8.c_str(),
-            assetUtf8.c_str(),
-            options->descriptorHeap ? "descriptor-heap" : "set",
-            options->shadows ? "on" : "off",
-            options->freeCamera ? "on" : "off");
-        if (options->shadows) {
-            std::printf("shadow_resolution=%u\n", options->shadowResolution.value_or(2048u));
-        }
-        std::fflush(stdout);
-    }
+    const std::string sceneRef = sceneReferenceFor(*sceneFile, paths->content);
+    const std::filesystem::path presetDir = options->output / "presets";
+    std::printf(
+        "scene=%s\nasset_root=%s\nbinding=%s\nshadows=on\nshadow_resolution=%u\nfree_camera=%s\n",
+        pathToUtf8(*sceneFile).c_str(),
+        pathToUtf8(*assetDir).c_str(),
+        options->descriptorHeap ? "descriptor-heap" : "set",
+        kDefaultShadowResolution,
+        interactive ? "on" : "off");
+    std::fflush(stdout);
 
     std::optional<ar::render::FreeCameraController> freeCamera;
+    std::optional<ar::render::StaticCamera> initialSceneCamera;
+    std::unique_ptr<ar::app::DebugPanel> debugPanel;
     ar::platform::CursorMode cursorMode = ar::platform::CursorMode::Normal;
-    auto lastCameraTick = std::chrono::steady_clock::now();
-    if (options->freeCamera) {
-        const auto initialCamera = (*session)->activeCamera();
-        if (!initialCamera) {
+    auto lastFrameTime = std::chrono::steady_clock::now();
+    double lastCpuFrameMs = 0.0;
+
+    if (interactive) {
+        initialSceneCamera = (*session)->activeCamera();
+        if (!initialSceneCamera) {
             std::fputs("free camera requires an active scene camera\n", stderr);
             closeAndReport(**session);
             return 1;
         }
-        auto controller = ar::render::FreeCameraController::create(*initialCamera);
+        auto controller = ar::render::FreeCameraController::create(*initialSceneCamera);
         if (!controller) {
             printError(controller.error());
             closeAndReport(**session);
             return 1;
         }
         freeCamera = std::move(*controller);
+        debugPanel = std::make_unique<ar::app::DebugPanel>();
+        const auto fontAtlas = debugPanel->buildFontAtlas();
+        if (auto uploaded = (*session)->uploadOverlayFont(fontAtlas); !uploaded) {
+            printError(uploaded.error());
+            closeAndReport(**session);
+            return 1;
+        }
     }
 
     unsigned long long presented = 0;
     ar::rhi::FrameScreenshot screenshot;
     while (!options->frames || presented < *options->frames) {
-        if (freeCamera) {
-            const auto now = std::chrono::steady_clock::now();
-            const float deltaSeconds = std::chrono::duration<float>(now - lastCameraTick).count();
-            lastCameraTick = now;
+        const auto frameStart = std::chrono::steady_clock::now();
+        const float deltaSeconds = std::chrono::duration<float>(frameStart - lastFrameTime).count();
+        lastFrameTime = frameStart;
 
-            const auto input = (*session)->sampleWindowInput();
-            if (!input) {
-                printError(input.error());
+        const bool capture = (options->screenshot || options->gbufferProbes) && options->frames &&
+                             presented + 1 == *options->frames;
+        std::optional<ar::rhi::OverlayDrawList> overlayDraw;
+        bool polledThisFrame = false;
+
+        if (interactive && freeCamera && debugPanel) {
+            const auto frameInput = (*session)->pollFrameInput();
+            if (!frameInput) {
+                printError(frameInput.error());
                 closeAndReport(**session);
                 return 1;
             }
-            if (input->escapePressed) {
+            polledThisFrame = true;
+            if (frameInput->closeRequested) {
                 break;
             }
-            const auto desiredCursor = (input->focused && input->lookHeld)
-                                           ? ar::platform::CursorMode::Disabled
-                                           : ar::platform::CursorMode::Normal;
-            if (desiredCursor != cursorMode) {
-                if (auto changed = (*session)->setCursorMode(desiredCursor); !changed) {
-                    printError(changed.error());
+            if (!frameInput->minimized && frameInput->framebufferSize.width > 0 &&
+                frameInput->framebufferSize.height > 0) {
+                ar::app::PanelSnapshot snap{};
+                snap.sceneRef = sceneRef;
+                snap.bindingPath = options->descriptorHeap ? "Vulkan 1.4 Descriptor Heap"
+                                                           : "Vulkan 1.3 Descriptor Set";
+                snap.deviceName = (*session)->report().deviceName;
+                snap.instanceCount = (*session)->activeInstanceCount();
+                snap.cpuFrameMs = lastCpuFrameMs;
+                snap.gpuTimings = (*session)->latestGpuTimings();
+                snap.activeCamera = (*session)->activeCamera().value_or(freeCamera->camera());
+                snap.activeExposureEV = (*session)->activeExposureEV();
+                snap.activeLight = (*session)->activeDirectionalLight().value_or(
+                    ar::render::defaultDirectionalLight());
+                snap.shadowsSupported = true;
+                snap.activeViewMode = (*session)->activeDebugView();
+                snap.cameraLooking = (cursorMode == ar::platform::CursorMode::Disabled);
+                snap.presetDirectory = presetDir;
+
+                auto actions = debugPanel->tick(deltaSeconds, *frameInput, snap);
+                if (auto cap = (*session)->setUiCapture(
+                        actions.wantCaptureKeyboard, actions.wantCaptureMouse);
+                    !cap) {
+                    printError(cap.error());
                     closeAndReport(**session);
                     return 1;
                 }
-                cursorMode = desiredCursor;
-            }
-            const ar::render::FreeCameraInput cameraInput{
-                input->moveForward,
-                input->moveBackward,
-                input->moveLeft,
-                input->moveRight,
-                input->moveUp,
-                input->moveDown,
-                input->sprint,
-                input->focused && input->lookHeld,
-                static_cast<float>(input->cursorDeltaX),
-                static_cast<float>(input->cursorDeltaY),
-                static_cast<float>(input->scrollDeltaY)};
-            const auto nextCamera = freeCamera->update(cameraInput, deltaSeconds);
-            if (auto updated = (*session)->setCamera(nextCamera); !updated) {
-                printError(updated.error());
-                closeAndReport(**session);
-                return 1;
+
+                if (actions.requestedExposureEV) {
+                    if (auto ok = (*session)->setExposureEV(*actions.requestedExposureEV); !ok) {
+                        debugPanel->setStatus(false, ok.error().message);
+                    }
+                }
+                if (actions.requestedLight) {
+                    if (auto ok = (*session)->setDirectionalLight(*actions.requestedLight); !ok) {
+                        debugPanel->setStatus(false, ok.error().message);
+                    }
+                }
+                if (actions.requestedViewMode) {
+                    if (auto ok = (*session)->setDebugView(*actions.requestedViewMode); !ok) {
+                        debugPanel->setStatus(false, ok.error().message);
+                    }
+                }
+                if (actions.requestResetCamera && initialSceneCamera) {
+                    if (auto reset = freeCamera->reset(*initialSceneCamera); !reset) {
+                        debugPanel->setStatus(false, reset.error().message);
+                    } else if (auto ok = (*session)->setCamera(freeCamera->camera()); !ok) {
+                        debugPanel->setStatus(false, ok.error().message);
+                    } else {
+                        debugPanel->setStatus(true, "Camera reset");
+                    }
+                }
+                if (actions.requestSavePreset) {
+                    std::error_code dirErr;
+                    std::filesystem::create_directories(
+                        actions.requestSavePreset->parent_path(), dirErr);
+                    auto captured = (*session)->captureObservationSettings("interactive", sceneRef);
+                    if (!captured) {
+                        debugPanel->setStatus(false, captured.error().message);
+                    } else if (auto saved = ar::runtime::saveObservationSettings(
+                                   *actions.requestSavePreset, *captured);
+                               !saved) {
+                        debugPanel->setStatus(false, saved.error().message);
+                    } else {
+                        debugPanel->setStatus(
+                            true, "Saved: " + pathToUtf8(actions.requestSavePreset->filename()));
+                    }
+                }
+                if (actions.requestLoadPreset) {
+                    auto loaded =
+                        ar::runtime::loadObservationSettings(*actions.requestLoadPreset, sceneRef);
+                    if (!loaded) {
+                        debugPanel->setStatus(false, loaded.error().message);
+                    } else if (auto applied = (*session)->applyObservationSettings(*loaded);
+                               !applied) {
+                        debugPanel->setStatus(false, applied.error().message);
+                    } else {
+                        static_cast<void>(freeCamera->reset(loaded->camera));
+                        debugPanel->setStatus(
+                            true, "Loaded: " + pathToUtf8(actions.requestLoadPreset->filename()));
+                    }
+                }
+
+                const auto input = (*session)->sampleCameraInput();
+                if (!input) {
+                    printError(input.error());
+                    closeAndReport(**session);
+                    return 1;
+                }
+                if (input->escapePressed) {
+                    break;
+                }
+                const auto desiredCursor = (input->focused && input->lookHeld)
+                                               ? ar::platform::CursorMode::Disabled
+                                               : ar::platform::CursorMode::Normal;
+                if (desiredCursor != cursorMode) {
+                    if (auto changed = (*session)->setCursorMode(desiredCursor); !changed) {
+                        printError(changed.error());
+                        closeAndReport(**session);
+                        return 1;
+                    }
+                    cursorMode = desiredCursor;
+                }
+                const ar::render::FreeCameraInput cameraInput{
+                    input->moveForward,
+                    input->moveBackward,
+                    input->moveLeft,
+                    input->moveRight,
+                    input->moveUp,
+                    input->moveDown,
+                    input->sprint,
+                    input->focused && input->lookHeld,
+                    static_cast<float>(input->cursorDeltaX),
+                    static_cast<float>(input->cursorDeltaY),
+                    static_cast<float>(input->scrollDeltaY)};
+                const auto nextCamera = freeCamera->update(cameraInput, deltaSeconds);
+                if (auto updated = (*session)->setCamera(nextCamera); !updated) {
+                    printError(updated.error());
+                    closeAndReport(**session);
+                    return 1;
+                }
+
+                if (!capture && actions.panelVisible && !actions.drawList.commands.empty()) {
+                    overlayDraw.emplace(std::move(actions.drawList));
+                }
             }
         }
-        const bool capture =
-            options->sceneCandidate ||
-            ((options->screenshot || options->gbufferProbes) && presented + 1 == *options->frames);
-        const auto frame = (*session)->presentFrame(capture ? &screenshot : nullptr);
-        if (!frame || *frame == ar::runtime::FrameStatus::Closed) {
+
+        const auto frame = (*session)->presentFrame(
+            capture ? &screenshot : nullptr,
+            overlayDraw ? &*overlayDraw : nullptr,
+            !polledThisFrame);
+        if (!frame) {
+            printError(frame.error());
+            break;
+        }
+        if (*frame == ar::runtime::FrameStatus::Closed) {
             break;
         }
         if (*frame == ar::runtime::FrameStatus::Presented) {
             ++presented;
-            if (options->verifyIblRollback && presented == 1) {
-                const auto replacement = *options->ibl == ar::render::EnvironmentPreset::Constant
-                                             ? ar::render::EnvironmentPreset::Directional
-                                             : ar::render::EnvironmentPreset::Constant;
-                auto rejected = replaceEnvironment(replacement, true);
-                if (rejected || rejected.error().message !=
-                                    "environment diffuse: injected failure after diffuse upload") {
-                    std::fputs(
-                        "expected failure after candidate environment diffuse upload\n", stderr);
-                    closeAndReport(**session);
-                    return 1;
-                }
-            }
-            if (options->sceneCandidate && presented < 4) {
-                constexpr std::array names{"before.png", "rollback.png", "reopened.png"};
-                const auto directory = options->screenshot->parent_path();
-                if (!writeScreenshot(directory / names[presented - 1], screenshot)) {
-                    closeAndReport(**session);
-                    return 1;
-                }
-                std::expected<void, ar::core::Error> change;
-                if (presented == 1) {
-                    auto rejected = (*session)->openStaticScene(*options->sceneCandidate, true);
-                    if (rejected || rejected.error().message !=
-                                        "injected failure after first candidate mesh upload") {
-                        std::fputs("expected failure after first candidate mesh upload\n", stderr);
-                        closeAndReport(**session);
-                        return 1;
-                    }
-                } else if (presented == 2) {
-                    const auto saved = directory / "saved.json";
-                    change = (*session)->saveStaticScene(saved);
-                    if (change) {
-                        change = (*session)->openStaticScene(saved);
-                    }
-                } else {
-                    change = (*session)->openStaticScene(*options->sceneCandidate);
-                }
-                if (!change) {
-                    printError(change.error());
-                    closeAndReport(**session);
-                    return 1;
-                }
-            }
+            const auto frameEnd = std::chrono::steady_clock::now();
+            lastCpuFrameMs =
+                std::chrono::duration<double, std::milli>(frameEnd - frameStart).count();
         }
     }
+
     if (cursorMode != ar::platform::CursorMode::Normal) {
         (void)(*session)->setCursorMode(ar::platform::CursorMode::Normal);
     }

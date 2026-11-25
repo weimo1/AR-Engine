@@ -4,14 +4,18 @@
 #include <cstdint>
 #include <expected>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include <volk.h>
 
+#include "OverlayDraw.h"
 #include "core/Error.h"
+#include "resources/StaticSceneDraw.h"
+#include "rhi/FrameTimings.h"
+#include "rhi/Overlay.h"
 #include "rhi/PresentationGraph.h"
 #include "rhi/PresentationSpec.h"
-#include "resources/StaticSceneDraw.h"
 
 namespace ar::core {
 class DiagnosticSession;
@@ -22,6 +26,7 @@ struct TriangleShaders;
 struct DeferredLighting;
 struct FrameScreenshot;
 enum class PresentStatus;
+enum class PresentMode;
 } // namespace ar::rhi
 
 namespace ar::rhi::detail {
@@ -51,7 +56,10 @@ public:
         const DeferredLighting* lighting = nullptr,
         PlanPresentationGraph planner = nullptr,
         const PresentationSpec* spec = nullptr,
-        DescriptorHeapTable* heapBinding = nullptr);
+        DescriptorHeapTable* heapBinding = nullptr,
+        DeviceResources* resources = nullptr,
+        const OverlayShaders* overlayShaders = nullptr,
+        PresentMode requestedPresentMode = {});
     std::expected<void, core::Error> publishStaticScene(
         std::vector<StaticSceneDraw::Draw> draws,
         std::shared_ptr<StaticSceneIndirect::Scene> indirect);
@@ -61,10 +69,33 @@ public:
     void setDirectionalLighting(const DirectionalLightingState& state) noexcept {
         m_lightingState = state;
     }
+    void setExposureEV(float exposureEV) noexcept {
+        m_spec.displayExposureEV = exposureEV;
+    }
+    void setDebugView(DebugViewMode mode) noexcept {
+        m_debugView = mode;
+    }
+    [[nodiscard]] DebugViewMode debugView() const noexcept {
+        return m_debugView;
+    }
+    std::expected<void, core::Error> uploadOverlayFont(const OverlayFontAtlas& atlas);
     std::expected<void, core::Error>
     publishEnvironment(const EnvironmentUpload& upload, bool verifyRollback);
-    std::expected<PresentStatus, core::Error>
-    presentFrame(VkExtent2D framebuffer, FrameScreenshot* screenshot);
+    std::expected<PresentStatus, core::Error> presentFrame(
+        VkExtent2D framebuffer,
+        FrameScreenshot* screenshot,
+        const OverlayDrawList* overlay = nullptr);
+    [[nodiscard]] PresentMode activePresentMode() const noexcept {
+        return m_activePresentMode;
+    }
+    [[nodiscard]] CpuFrameTimings lastCpuTimings() const noexcept {
+        return m_lastCpuTimings;
+    }
+    [[nodiscard]] GpuFrameTimings latestGpuTimings() const noexcept {
+        return m_latestTimings;
+    }
+    [[nodiscard]] std::vector<GpuFrameTimings> takeCompletedGpuTimings();
+    std::expected<std::vector<GpuFrameTimings>, core::Error> drainCompletedGpuTimings();
     std::optional<core::Error> close();
     void setCullFrames(std::array<DeviceResources*, 2> frames, std::uint32_t objects) noexcept {
         m_cullFrames = frames;
@@ -84,6 +115,32 @@ public:
     }
 
 private:
+    static constexpr std::uint32_t kTimestampCount = 14u;
+    enum class TimestampSlot : std::uint32_t {
+        FrameBegin = 0u,
+        ShadowBegin = 1u,
+        ShadowEnd = 2u,
+        CullBegin = 3u,
+        CullEnd = 4u,
+        GeometryBegin = 5u,
+        GeometryEnd = 6u,
+        LightingBegin = 7u,
+        LightingEnd = 8u,
+        DisplayBegin = 9u,
+        DisplayEnd = 10u,
+        OverlayBegin = 11u,
+        OverlayEnd = 12u,
+        FrameEnd = 13u,
+    };
+    enum TimestampPassBits : std::uint32_t {
+        kPassShadow = 1u << 0,
+        kPassCull = 1u << 1,
+        kPassGeometry = 1u << 2,
+        kPassLighting = 1u << 3,
+        kPassDisplay = 1u << 4,
+        kPassOverlay = 1u << 5,
+    };
+
     struct Image {
         VkImage handle = VK_NULL_HANDLE; // Owned by the swapchain.
         VkImageView view = VK_NULL_HANDLE;
@@ -144,11 +201,15 @@ private:
     struct Frame {
         VkCommandPool pool = VK_NULL_HANDLE;
         VkCommandBuffer commands = VK_NULL_HANDLE;
+        VkQueryPool queryPool = VK_NULL_HANDLE;
         VkSemaphore imageAvailable = VK_NULL_HANDLE;
         VkSemaphore renderingFinished = VK_NULL_HANDLE;
         Fence acquired;
         Fence submitted;
         std::uint64_t submission = 0;
+        bool hasPendingTimestamps = false;
+        std::uint64_t timestampFrame = 0u;
+        std::uint32_t timestampPassMask = 0u;
         Fence presented;
     };
 
@@ -178,19 +239,35 @@ private:
     void resetShadowHeapDescriptors() noexcept;
     void writeEnvironmentDescriptors() const;
     std::expected<void, core::Error> writeLightingFrame(std::size_t frameIndex, bool activeShadows);
+    void writeTimestamp(
+        VkCommandBuffer commands,
+        VkQueryPool pool,
+        TimestampSlot slot,
+        VkPipelineStageFlags2 stage) const noexcept;
+    void harvestTimestamps(Frame& frame) noexcept;
     void recordShadow(
-        VkCommandBuffer commands, const Image& output, const PresentationGraphPlan& plan) const;
+        VkCommandBuffer commands,
+        VkQueryPool queryPool,
+        const Image& output,
+        const PresentationGraphPlan& plan) const;
     void recordLighting(
-        VkCommandBuffer commands, const Image& output, const PresentationGraphPlan& plan) const;
+        VkCommandBuffer commands,
+        VkQueryPool queryPool,
+        const Image& output,
+        const PresentationGraphPlan& plan,
+        DebugViewMode effectiveView) const;
     std::expected<void, core::Error> createReadback(VkPhysicalDevice physical, Readback& readback);
     std::expected<void, core::Error> readScreenshot(Frame& frame, FrameScreenshot& screenshot);
     void copyRawProbes(VkCommandBuffer commands, VkBuffer destination) const;
-    std::expected<DrawStatus, core::Error> draw(Frame& frame, bool capture);
+    std::expected<DrawStatus, core::Error>
+    draw(Frame& frame, bool capture, const OverlayDrawList* overlay);
     std::expected<void, core::Error> record(
-        VkCommandBuffer commands,
+        Frame& frame,
         const Image& image,
         VkBuffer capture,
-        const PresentationGraphPlan* plan);
+        const PresentationGraphPlan* plan,
+        const OverlayDrawList* overlay,
+        bool overlayActive);
     void recordGraphBarriers(
         VkCommandBuffer commands,
         const Image& output,
@@ -231,6 +308,7 @@ private:
     std::array<PresentationImageState, 2> m_shadowStates{};
     FrameView m_frameView{};
     DirectionalLightingState m_lightingState{};
+    DebugViewMode m_debugView = DebugViewMode::Final;
     StaticSceneDraw::Environment m_environment{};
     bool m_environmentReady = false;
     VkExtent2D m_requestedExtent{};
@@ -238,9 +316,18 @@ private:
     VkDescriptorSet m_bindingSet = VK_NULL_HANDLE;
     DescriptorHeapTable* m_heapBinding = nullptr;
     StaticSceneDraw* m_staticScene = nullptr;
+    std::optional<OverlayDraw> m_overlay;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     std::array<Frame, 2> m_frames{};
     std::uint64_t m_submission = 0;
+    float m_timestampPeriodNs = 0.F;
+    std::uint32_t m_timestampValidBits = 0u;
+    std::string m_timestampUnavailableReason;
+    PresentMode m_requestedPresentMode{};
+    PresentMode m_activePresentMode{};
+    CpuFrameTimings m_lastCpuTimings{};
+    GpuFrameTimings m_latestTimings{};
+    std::vector<GpuFrameTimings> m_completedTimings;
     std::array<DeviceResources*, 2> m_cullFrames{};
     std::uint32_t m_cullObjects = 0;
     std::size_t m_frameIndex = 0;

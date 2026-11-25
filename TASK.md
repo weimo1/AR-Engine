@@ -190,6 +190,15 @@ T47 已记录 P5 同场景 Set/Heap 验收。后续先准备默认展示场景�
 - [x] T54 [人工] P4b（展示室 + 方向光阴影 + 自由相机）里程碑验收：用户在本机 RTX 4060 可见窗口实跑展示室方向光阴影与自由漫游并确认“可以的”，配合 T51–T53 双配置 104/104 零警告及 DSH 独立评审全过，P4b 里程碑收口完成；后续按用户确认改为“开发期增量快测，里程碑统一双配置门禁 + DSH”。
   - 用户在本地 RTX 4060 可见窗口下按 F5 进入展示室并分别以 1.3 Set 与 1.4 `--descriptor-heap` 实测实时方向光阴影与自由漫游，核对门禁与 DSH 评审证据后进入 P6–P7（ImGui 调试面板、四配置性能基准与独立运行包）。
 
+### P6：零参 `ar_engine`、6 通道调试视图、ImGui 面板与四配置性能基准
+
+参见 [P6 技术方案](openspec/changes/p6-debug-ui-and-benchmark/design.md)。将主程序收口为零参数启动的 `ar_engine`（历史 P1–P5 模式开关拆至 `ar_sample_harness`），同步落地 6 通道调试视图、纯 ImGui Set/Heap 双路径 `OverlayDraw`、观察预设与 Set/Heap × CPU/GPU 剔除四配置基准体系。
+
+- [x] T55 P6 零参 `ar_engine`、6 通道调试视图、ImGui 面板、观察预设与四配置性能基准：主程序更名 `ar_engine` 零参启动并拆离 `ar_sample_harness`，接入 6 通道调试视图与 Set/Heap 双路径 `OverlayDraw`（Heap 外部槽 271、零传统描述符对象）、单一事件泵 UI 捕获隔离、`ObservationSettings` 原子预设往返、`vkCmdWriteTimestamp2` 非阻塞 GPU 计时、CPU AABB 剔除统一 `vkCmdDrawIndexedIndirectCount`、`PresentMode`（`Fifo/Mailbox/Immediate`）与 `--benchmark` JSON/CSV 导出；Debug 与 RelWithDebInfo 各 110/110（含 36 项 GPU + Sync Validation）零警告通过，RTX 4060 RelWithDebInfo 三档四配置实测 256/4096/16384 跨配置可见数完全一致（16,384 实例 CPU cull 0.421–0.542 ms vs GPU cull 0.202–0.205 ms，Set/Heap 总 GPU 耗时 4.73–4.99 ms 差异 <1%），DSH 独立评审 `2a6e2a2d` 77/77 PASS。
+  - 验收：`app-paths-and-showroom-cli`、`app-benchmark-run`、`platform-input-state`、`runtime-observation-settings`、`render-presentation-spec`、`render-graph-plan`、`render-static-scene-visibility`、`rhi-descriptor-heap-scene-layout` 及真机 `sample-showroom-launch`、`sample-free-camera-shadows`、`sample-debug-views-and-overlay`、`sample-four-config-benchmark-parity`、`sample-four-config-benchmark-export` 全绿，双配置 110/110 零警告、DSH 独立评审通过。
+- [ ] T56 [人工] P6 里程碑验收：用户在本地 RTX 4060 可见窗口下零参 F5 启动 `ar_engine` 核对 6 通道调试视图、`[F1]` ImGui 面板、观察预设与三档四配置基准实测表，确认后进入 P7（独立运行包与复现交付）。
+  - 用户实操零参 F5 画面/面板交互并审阅 RTX 4060 三档四配置基准数据，决定进入 P7。
+
 ## 人工待办（不阻塞队列）
 
 - 云端 “Engine CPU build and test” 使用 `--no-gpu`，已配置自动触发与 vcpkg 二进制缓存。后续通过对应提交的 GitHub Actions 日志核对 Windows runner 与缓存命中。
@@ -197,6 +206,8 @@ T47 已记录 P5 同场景 Set/Heap 验收。后续先准备默认展示场景�
 - 首次使用自动循环前：修正 Codex CLI 的默认模型（见 [自动运行](docs/workflow/自动运行.md) 的注意事项），设置 `CLAUDE_CODE_GIT_BASH_PATH`，然后用 `--max-tasks 1` 试跑 T01。
 
 ## 待办池（建议级，不阻塞）
+
+- T55 评审观察：`ObservationSettings` 保存若遇非法 UTF-8 `name` 未捕获 `json::type_error`；原子写失败分支先删目标再 rename 若 rename 失败可能丢旧文件；`--benchmark` 复用同一 `output_dir` 会重用 `probe`/`bench-run` 诊断目录（可改唯一 runId）；`BenchmarkRun.cpp` 约 1.5 K 行后续可按需独立成工具目标；`gpu_total` 在无 UI 时不含 overlay 段可补充说明；后续可补 ImGui 捕获交互与无时间戳设备的专项覆盖及跨轮温升方差分析。
 
 - T53 评审观察：`sample-free-camera-shadows` 内 `visible==14`/亮度阈值与展示室数值耦合且 `stepMove` 存在未用局部赋值，`setCursorMode` 以启动配置 `visible` 判可见性，GPU 用例 `TIMEOUT` 统一放宽至 90s 可改为按用例单设（注：窗口 X 关闭已由 `RuntimeSession::presentFrame` 查 `window.shouldClose()` 返回 `FrameStatus::Closed` 并退出主循环）。
 

@@ -14,6 +14,17 @@ enum class AttachmentFormat : std::uint32_t {
     D32Sfloat,
 };
 
+enum class DebugViewMode : std::uint32_t {
+    Final = 0u,
+    BaseColor = 1u,
+    ViewNormal = 2u,
+    MetallicRoughness = 3u,
+    MainDepth = 4u,
+    ShadowDepth = 5u,
+};
+
+inline constexpr std::uint32_t kDebugViewModeCount = 6u;
+
 struct AttachmentProbeLayout {
     std::vector<std::array<float, 2>> normalizedCoords;
     std::uint32_t sampleStrideBytes = 0;
@@ -28,12 +39,20 @@ struct RawProbeCapture {
     bool includesHdr = false;
 };
 
+struct DisplayPushParams {
+    float exposureEV = 0.F;
+    bool swapchainIsSrgb = false;
+    DebugViewMode viewMode = DebugViewMode::Final;
+    float cameraNear = 0.1F;
+    float cameraFar = 50.F;
+};
+
 struct DisplayPushData {
-    std::array<std::byte, 16> bytes{};
+    std::array<std::byte, 24> bytes{};
     std::uint32_t size = 0;
 };
 
-using BuildDisplayPush = DisplayPushData (*)(float exposureEV, bool swapchainIsSrgb) noexcept;
+using BuildDisplayPush = DisplayPushData (*)(const DisplayPushParams&) noexcept;
 
 struct PresentationSpec {
     std::array<float, 4> clearColor{0.025F, 0.06F, 0.14F, 1.0F};

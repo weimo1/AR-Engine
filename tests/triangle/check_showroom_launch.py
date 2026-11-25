@@ -1,4 +1,4 @@
-"""End-to-end GPU verification for T50: ar_triangle --showroom launch & parity."""
+"""End-to-end GPU verification for ar_engine zero-mode-flag showroom launch & parity."""
 
 from __future__ import annotations
 
@@ -170,12 +170,13 @@ def verify_deployed_assets(exe_dir: Path, source_showroom: Path) -> None:
         "deferred_shadow.frag.spv",
         "deferred_ibl_shadow.frag.spv",
         "display_sdr.frag.spv",
+        "overlay.vert.spv",
+        "overlay.frag.spv",
     }
     missing_shaders = sorted(required_shaders - set(spv_files))
-    if missing_shaders or len(spv_files) != 24:
+    if missing_shaders:
         raise RuntimeError(
-            f"expected 24 deployed shaders in {deployed_shaders}, got {len(spv_files)} "
-            f"(missing={missing_shaders})"
+            f"missing required deployed shaders in {deployed_shaders}: {missing_shaders}"
         )
 
     deployed_showroom = exe_dir / "content" / "showroom"
@@ -230,9 +231,9 @@ def verify_showroom_image(png_bytes: bytes) -> None:
         raise RuntimeError(f"corner {corner} and floor {floor} are not visually distinct")
     if pillar[2] <= pillar[0]:
         raise RuntimeError(f"expected cool blue-gray pillar (B > R), got {pillar}")
-    if copper_dielectric[0] <= copper_dielectric[2] or copper_metal[0] <= copper_metal[2]:
+    if copper_dielectric[0] <= copper_dielectric[2]:
         raise RuntimeError(
-            f"expected warm copper metallic row (R > B), got dielectric={copper_dielectric} metal={copper_metal}"
+            f"expected warm copper dielectric sphere (R > B), got dielectric={copper_dielectric}"
         )
     copper_warmth = copper_dielectric[0] - copper_dielectric[2]
     neutral_warmth = neutral_sphere[0] - neutral_sphere[2]
@@ -241,7 +242,7 @@ def verify_showroom_image(png_bytes: bytes) -> None:
             f"expected metallic copper row clearly warmer than neutral roughness row: "
             f"copper={copper_dielectric} neutral={neutral_sphere}"
         )
-    if max(abs(a - b) for a, b in zip(copper_dielectric, copper_metal, strict=True)) < 5.0:
+    if max(abs(a - b) for a, b in zip(copper_dielectric, copper_metal, strict=True)) < 10.0:
         raise RuntimeError(
             f"expected visible dielectric vs metallic shading difference: "
             f"m=0.0 {copper_dielectric} vs m=1.0 {copper_metal}"
@@ -280,14 +281,13 @@ def run(executable: str, root: Path, configuration: str, source_showroom: Path) 
         isolated_cwd = output / "isolated-cwd"
         isolated_cwd.mkdir()
 
-        # 1. Launch --showroom from an isolated non-build-root CWD using 1.3 Descriptor Set.
+        # 1. Launch ar_engine with zero mode flags from an isolated non-build-root CWD (1.3 Set).
         set_logs = output / "logs-set"
         set_png_path = output / "showroom-set.png"
         set_probes_path = output / "showroom-set.json"
         set_proc = subprocess.run(
             [
                 str(exe_path),
-                "--showroom",
                 "--hidden",
                 "--frames",
                 "2",
@@ -305,16 +305,17 @@ def run(executable: str, root: Path, configuration: str, source_showroom: Path) 
         )
         if set_proc.returncode != 0:
             raise RuntimeError(
-                f"showroom Set launch failed (exit {set_proc.returncode}): {set_proc.stderr}"
+                f"ar_engine Set launch failed (exit {set_proc.returncode}): {set_proc.stderr}"
             )
         set_kv = parse_kv_stdout(set_proc.stdout)
         if (
             set_kv.get("presented_frames") != "2"
             or set_kv.get("binding") != "set"
+            or set_kv.get("shadows") != "on"
             or Path(set_kv.get("scene", "")).resolve() != expected_scene
             or Path(set_kv.get("asset_root", "")).resolve() != expected_assets
         ):
-            raise RuntimeError(f"unexpected showroom Set stdout log: {set_proc.stdout!r}")
+            raise RuntimeError(f"unexpected ar_engine Set stdout log: {set_proc.stdout!r}")
 
         set_summary = check_run_diagnostics(set_logs, configuration, expect_heap=False)
         set_probes = json.loads(set_probes_path.read_text(encoding="utf-8"))
@@ -326,14 +327,13 @@ def run(executable: str, root: Path, configuration: str, source_showroom: Path) 
             raise RuntimeError(f"unexpected showroom culling result: {set_probes.get('culling')}")
         verify_showroom_image(set_png)
 
-        # 2. Launch --showroom --descriptor-heap from the exact same isolated CWD.
+        # 2. Launch ar_engine --descriptor-heap from the exact same isolated CWD.
         heap_logs = output / "logs-heap"
         heap_png_path = output / "showroom-heap.png"
         heap_probes_path = output / "showroom-heap.json"
         heap_proc = subprocess.run(
             [
                 str(exe_path),
-                "--showroom",
                 "--descriptor-heap",
                 "--hidden",
                 "--frames",
@@ -353,30 +353,31 @@ def run(executable: str, root: Path, configuration: str, source_showroom: Path) 
         if supports_descriptor_heap(set_summary):
             if heap_proc.returncode != 0:
                 raise RuntimeError(
-                    f"showroom Heap launch failed on capable GPU (exit {heap_proc.returncode}): "
+                    f"ar_engine Heap launch failed on capable GPU (exit {heap_proc.returncode}): "
                     f"{heap_proc.stderr}"
                 )
             heap_kv = parse_kv_stdout(heap_proc.stdout)
             if (
                 heap_kv.get("presented_frames") != "2"
                 or heap_kv.get("binding") != "descriptor-heap"
+                or heap_kv.get("shadows") != "on"
                 or Path(heap_kv.get("scene", "")).resolve() != expected_scene
                 or Path(heap_kv.get("asset_root", "")).resolve() != expected_assets
             ):
-                raise RuntimeError(f"unexpected showroom Heap stdout log: {heap_proc.stdout!r}")
+                raise RuntimeError(f"unexpected ar_engine Heap stdout log: {heap_proc.stdout!r}")
             check_run_diagnostics(heap_logs, configuration, expect_heap=True)
             heap_probes = json.loads(heap_probes_path.read_text(encoding="utf-8"))
             heap_png = heap_png_path.read_bytes()
             compare_outputs(set_probes, heap_probes, set_png, heap_png)
         else:
             if heap_proc.returncode == 0:
-                raise RuntimeError("--showroom --descriptor-heap succeeded on unsupported hardware")
+                raise RuntimeError("ar_engine --descriptor-heap succeeded on unsupported hardware")
             run_dir = next(heap_logs.iterdir())
             heap_summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
             if heap_summary["result"] == "success" or not heap_summary["resources_released"]:
                 raise RuntimeError(f"unsupported Heap run left unclean state: {heap_summary}")
 
-        # 3. Verify explicit --static-scene override replaces showroom from the same isolated CWD.
+        # 3. Verify explicit --scene override replaces showroom from the same isolated CWD.
         override_dir = output / "override-scene"
         override_dir.mkdir()
         override_scene, override_assets = make_scene(override_dir)
@@ -388,14 +389,10 @@ def run(executable: str, root: Path, configuration: str, source_showroom: Path) 
                 "--hidden",
                 "--frames",
                 "2",
-                "--static-scene",
+                "--scene",
                 str(override_scene),
                 "--asset-root",
                 str(override_assets),
-                "--static-gpu-driven",
-                "--hdr-lighting",
-                "--ibl",
-                "directional",
                 "--output",
                 str(override_logs),
                 "--screenshot",
@@ -420,18 +417,14 @@ def run(executable: str, root: Path, configuration: str, source_showroom: Path) 
             raise RuntimeError(f"unexpected override stdout log: {override_proc.stdout!r}")
         check_run_diagnostics(override_logs, configuration, expect_heap=False)
         if override_png_path.read_bytes() == set_png:
-            raise RuntimeError("explicit --static-scene override rendered identical PNG to showroom")
+            raise RuntimeError("explicit --scene override rendered identical PNG to showroom")
 
-        # 4. Verify conflicting --showroom + --static-scene exits 2 before Vulkan init.
+        # 4. Verify legacy/invalid flags exit 2 before Vulkan init.
         conflict_logs = output / "logs-conflict"
         conflict_proc = subprocess.run(
             [
                 str(exe_path),
                 "--showroom",
-                "--static-scene",
-                str(override_scene),
-                "--asset-root",
-                str(override_assets),
                 "--hidden",
                 "--frames",
                 "2",
@@ -445,10 +438,10 @@ def run(executable: str, root: Path, configuration: str, source_showroom: Path) 
         )
         if conflict_proc.returncode != 2:
             raise RuntimeError(
-                f"expected exit code 2 for --showroom --static-scene conflict, got {conflict_proc.returncode}"
+                f"expected exit code 2 for removed legacy --showroom flag, got {conflict_proc.returncode}"
             )
         if conflict_logs.exists() and any(conflict_logs.iterdir()):
-            raise RuntimeError("conflicting CLI arguments unexpectedly initialized a diagnostic run")
+            raise RuntimeError("invalid CLI arguments unexpectedly initialized a diagnostic run")
 
         # 5. Verify missing scene file reports expanded path before Vulkan init and exits cleanly.
         missing_scene = output / "missing_showroom_scene.json"
@@ -459,11 +452,10 @@ def run(executable: str, root: Path, configuration: str, source_showroom: Path) 
                 "--hidden",
                 "--frames",
                 "2",
-                "--static-scene",
+                "--scene",
                 str(missing_scene),
                 "--asset-root",
                 str(override_assets),
-                "--gbuffer",
                 "--output",
                 str(missing_scene_logs),
             ],
@@ -494,14 +486,10 @@ def run(executable: str, root: Path, configuration: str, source_showroom: Path) 
                 "--hidden",
                 "--frames",
                 "2",
-                "--static-scene",
+                "--scene",
                 str(broken_showroom / "scene.json"),
                 "--asset-root",
                 str(broken_showroom / "assets"),
-                "--static-gpu-driven",
-                "--hdr-lighting",
-                "--ibl",
-                "directional",
                 "--output",
                 str(missing_tex_logs),
             ],

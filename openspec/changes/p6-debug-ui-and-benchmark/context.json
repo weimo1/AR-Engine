@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "objective": "完成 P6（零参数 ar_engine 主入口、6 通道调试视图、纯 ImGui Set/Heap 自绘面板、观察预设与四配置性能基准）：收口主程序零参启动并将历史 P1-P5 专项开关拆至 ar_sample_harness；在 1.3 Descriptor Set 与 1.4 Descriptor Heap 双路径补齐 6 通道调试视图、运行期曝光、OverlayDraw（Heap 槽 271 零传统描述符对象）、非阻塞 GPU 时间戳、CPU AABB 视锥剔除（统一 vkCmdDrawIndexedIndirectCount 消费）、PresentMode 与四配置基准导出。",
+  "non_goals": [
+    "引入官方 imgui_impl_vulkan 或 imgui_impl_glfw 后端绑定",
+    "引入多级联阴影 CSM、完整场景树或 Gizmo 编辑器",
+    "破坏 core <- rhi <- render 单向依赖或既有 P1-P5 回归覆盖",
+    "在 P6 中实现 P7 独立发布包打包脚本"
+  ],
+  "tags": ["native"],
+  "documents": [],
+  "skills": ["ar-cpp-oop-style", "ar-cpp-hpc-optimization", "ar-e2e-side-effect-safety"],
+  "write_paths": [
+    "CMakeLists.txt",
+    "vcpkg.json",
+    "TASK.md",
+    "workflow/p0-checks.json",
+    "docs/workflow/VisualStudio启动与应用入口.md",
+    "openspec/changes/p6-debug-ui-and-benchmark/**",
+    "engine/platform/**",
+    "engine/scene/**",
+    "engine/render/**",
+    "engine/rhi/**",
+    "engine/runtime/**",
+    "shaders/**",
+    "examples/triangle/**",
+    "tests/**"
+  ]
+}

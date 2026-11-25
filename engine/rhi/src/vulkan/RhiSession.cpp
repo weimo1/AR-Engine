@@ -228,12 +228,22 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
                 "deferred lighting requires a render-supplied display push builder");
         }
         const auto unormPush = config.presentationSpec->buildDisplayPush(
-            config.presentationSpec->displayExposureEV, false);
+            DisplayPushParams{
+                config.presentationSpec->displayExposureEV,
+                false,
+                DebugViewMode::Final,
+                0.1F,
+                50.F});
         const auto srgbPush = config.presentationSpec->buildDisplayPush(
-            config.presentationSpec->displayExposureEV, true);
+            DisplayPushParams{
+                config.presentationSpec->displayExposureEV,
+                true,
+                DebugViewMode::Final,
+                0.1F,
+                50.F});
         if (unormPush.size == 0 || unormPush.size > unormPush.bytes.size() || srgbPush.size == 0 ||
             srgbPush.size > srgbPush.bytes.size() ||
-            (config.enableDescriptorHeap && (unormPush.size > 8u || srgbPush.size > 8u))) {
+            (config.enableDescriptorHeap && (unormPush.size > 20u || srgbPush.size > 20u))) {
             return makeError(
                 core::ErrorCategory::InvalidArguments,
                 core::ErrorStage::Validation,
@@ -338,15 +348,30 @@ std::optional<core::Error> validateRequest(const QueryConfig& config) {
         const auto validShader = [](const auto& words) {
             return words.size() >= 5 && words.front() == 0x07230203u;
         };
+        const bool cpuCull = config.staticIndirect->cullMode == StaticCullMode::CpuFrustum;
         if (!config.enableGBuffer || (!config.enableSetBinding && !config.enableDescriptorHeap) ||
             !config.planPresentation || config.gpuDriven ||
             !validShader(config.staticIndirect->graphics.vertex) ||
             !validShader(config.staticIndirect->graphics.fragment) ||
-            !validShader(config.staticIndirect->compute)) {
+            (!cpuCull && !validShader(config.staticIndirect->compute)) ||
+            (cpuCull && config.staticIndirect->cpuCull == nullptr)) {
             return makeError(
                 core::ErrorCategory::InvalidArguments,
                 core::ErrorStage::Validation,
-                "static indirect requires the bindless GBuffer graph and valid shaders");
+                "static indirect requires the bindless GBuffer graph and valid shaders or CPU "
+                "cull callback");
+        }
+    }
+    if (config.overlayShaders) {
+        const auto validShader = [](const auto& words) {
+            return words.size() >= 5 && words.front() == 0x07230203u;
+        };
+        if (!config.presentation || !validShader(config.overlayShaders->vertex) ||
+            !validShader(config.overlayShaders->fragment)) {
+            return makeError(
+                core::ErrorCategory::InvalidArguments,
+                core::ErrorStage::Validation,
+                "overlay rendering requires presentation and valid vertex/fragment SPIR-V");
         }
     }
     if (config.enableStaticScene &&
@@ -1614,6 +1639,14 @@ struct RhiSession::Impl {
                     return ready;
                 }
             }
+            detail::DeviceResources* overlayResources = nullptr;
+            if (config.overlayShaders) {
+                auto owner = resourcesForCreation();
+                if (!owner) {
+                    return std::unexpected(owner.error());
+                }
+                overlayResources = *owner;
+            }
             if (auto opened = presenter->open(
                     physical,
                     surface,
@@ -1633,7 +1666,10 @@ struct RhiSession::Impl {
                     config.deferredLighting ? &*config.deferredLighting : nullptr,
                     config.planPresentation,
                     config.presentationSpec ? &*config.presentationSpec : nullptr,
-                    descriptorHeap ? &*descriptorHeap : nullptr);
+                    descriptorHeap ? &*descriptorHeap : nullptr,
+                    overlayResources,
+                    config.overlayShaders ? &*config.overlayShaders : nullptr,
+                    config.presentation->presentMode);
                 !opened) {
                 return opened;
             }
@@ -2130,8 +2166,11 @@ std::optional<GraphicsDeviceInfo> RhiSession::graphicsDeviceInfo() const noexcep
     return m_impl->graphicsInfo;
 }
 
-std::expected<PresentStatus, core::Error>
-RhiSession::presentFrame(std::uint32_t width, std::uint32_t height, FrameScreenshot* screenshot) {
+std::expected<PresentStatus, core::Error> RhiSession::presentFrame(
+    std::uint32_t width,
+    std::uint32_t height,
+    FrameScreenshot* screenshot,
+    const OverlayDrawList* overlay) {
     if (!m_impl->presenter) {
         return std::unexpected(makeError(
             core::ErrorCategory::InvalidState,
@@ -2239,7 +2278,7 @@ RhiSession::presentFrame(std::uint32_t width, std::uint32_t height, FrameScreens
             ++m_impl->bindingPublications;
         }
     }
-    auto result = m_impl->presenter->presentFrame({width, height}, screenshot);
+    auto result = m_impl->presenter->presentFrame({width, height}, screenshot, overlay);
     if (!m_impl->config.verifyBindingRetirement || !result || *result != PresentStatus::Presented) {
         return result;
     }
@@ -2476,6 +2515,96 @@ RhiSession::setDirectionalLighting(const DirectionalLightingState& state) {
             " shadow_pipeline=" + (m_impl->config.deferredLighting->shadow ? "on" : "off") +
             " shadow_active=" + (normalized.shadowEnabled ? "on" : "off"));
     return {};
+}
+
+std::expected<void, core::Error> RhiSession::setExposureEV(float exposureEV) {
+    if (m_impl->closed || !m_impl->presenter || !m_impl->config.deferredLighting) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "deferred lighting is not active"));
+    }
+    if (!std::isfinite(exposureEV) || std::abs(exposureEV) > 16.F) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "exposure EV must be finite and within [-16, 16]"));
+    }
+    m_impl->presenter->setExposureEV(exposureEV);
+    return {};
+}
+
+std::expected<void, core::Error> RhiSession::setDebugView(DebugViewMode mode) {
+    if (m_impl->closed || !m_impl->presenter || !m_impl->config.deferredLighting) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "deferred lighting is not active"));
+    }
+    if (static_cast<std::uint32_t>(mode) >= kDebugViewModeCount) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidArguments,
+            core::ErrorStage::Validation,
+            "debug view mode is out of range"));
+    }
+    if (mode == DebugViewMode::ShadowDepth && !m_impl->config.deferredLighting->shadow) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "shadow depth debug view requires directional shadows to be enabled"));
+    }
+    m_impl->presenter->setDebugView(mode);
+    return {};
+}
+
+std::expected<void, core::Error> RhiSession::uploadOverlayFont(const OverlayFontAtlas& atlas) {
+    if (m_impl->closed || !m_impl->presenter || !m_impl->config.overlayShaders) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "overlay rendering is not enabled on this session"));
+    }
+    return m_impl->presenter->uploadOverlayFont(atlas);
+}
+
+PresentMode RhiSession::activePresentMode() const noexcept {
+    if (m_impl->closed || !m_impl->presenter) {
+        return PresentMode::Fifo;
+    }
+    return m_impl->presenter->activePresentMode();
+}
+
+CpuFrameTimings RhiSession::lastCpuTimings() const noexcept {
+    if (m_impl->closed || !m_impl->presenter) {
+        return CpuFrameTimings{};
+    }
+    return m_impl->presenter->lastCpuTimings();
+}
+
+GpuFrameTimings RhiSession::latestGpuTimings() const noexcept {
+    if (m_impl->closed || !m_impl->presenter) {
+        GpuFrameTimings unavailable{};
+        unavailable.unavailableReason = "no active presenter";
+        return unavailable;
+    }
+    return m_impl->presenter->latestGpuTimings();
+}
+
+std::vector<GpuFrameTimings> RhiSession::takeCompletedGpuTimings() {
+    if (m_impl->closed || !m_impl->presenter) {
+        return {};
+    }
+    return m_impl->presenter->takeCompletedGpuTimings();
+}
+
+std::expected<std::vector<GpuFrameTimings>, core::Error> RhiSession::drainCompletedGpuTimings() {
+    if (m_impl->closed || !m_impl->presenter) {
+        return std::unexpected(makeError(
+            core::ErrorCategory::InvalidState,
+            core::ErrorStage::Capability,
+            "no active presenter"));
+    }
+    return m_impl->presenter->drainCompletedGpuTimings();
 }
 
 bool RhiSession::shadowMappingEnabled() const noexcept {

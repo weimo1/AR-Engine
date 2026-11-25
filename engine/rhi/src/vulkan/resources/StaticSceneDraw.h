@@ -42,6 +42,22 @@ public:
     bool indirectEnabled() const noexcept {
         return m_indirect.has_value();
     }
+    bool gpuCullEnabled() const noexcept {
+        return m_indirect.has_value() && m_indirect->cullMode() == StaticCullMode::GpuCompute;
+    }
+    bool cpuCullEnabled() const noexcept {
+        return m_indirect.has_value() && m_indirect->cullMode() == StaticCullMode::CpuFrustum;
+    }
+    bool readIndirectCountsEnabled() const noexcept {
+        return m_indirect.has_value() && m_indirect->readIndirectCountsEnabled();
+    }
+    IndirectProducer indirectProducer() const noexcept {
+        if (!m_indirect) {
+            return IndirectProducer::None;
+        }
+        return m_indirect->cullMode() == StaticCullMode::CpuFrustum ? IndirectProducer::Cpu
+                                                                    : IndirectProducer::GpuCompute;
+    }
     std::expected<Attachment, core::Error> createAttachment(
         VkExtent2D extent,
         VkFormat format,
@@ -60,7 +76,8 @@ public:
     prepareEnvironment(const EnvironmentUpload& upload, bool verifyRollback);
     void destroyEnvironment(Environment& environment) noexcept;
     std::expected<std::vector<Draw>, core::Error> prepare(
-        std::span<const StaticMeshUpload> meshes, std::span<const StaticInstanceDraw> draws,
+        std::span<const StaticMeshUpload> meshes,
+        std::span<const StaticInstanceDraw> draws,
         bool verifyRollback);
     std::expected<std::shared_ptr<StaticSceneIndirect::Scene>, core::Error>
     prepareIndirect(std::span<const Draw> draws, const StaticIndirectGeometry* geometry);
@@ -81,9 +98,13 @@ public:
         std::size_t frame) const;
     void
     cull(VkCommandBuffer commands, std::size_t frame, const PresentationGraphPlan& graph) const;
+    std::expected<StaticSceneIndirect::CpuCullTiming, core::Error>
+    cullCpu(std::size_t frame, const FrameView& view, float inverseAspect);
     void indirectReadback(
         VkCommandBuffer commands, std::size_t frame, const PresentationGraphPlan& graph) const;
     std::expected<void, core::Error> readVisibility(std::size_t frame, FrameScreenshot& data);
+    std::expected<StaticSceneIndirect::IndirectCountSample, core::Error>
+    readIndirectCounts(std::size_t frame);
     void abandon() noexcept;
 
 private:

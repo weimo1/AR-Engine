@@ -91,6 +91,7 @@ public:
 
 private:
     friend class DescriptorHeapTable;
+    friend class OverlayDraw;
     friend class StaticSceneDraw;
     friend class StaticSceneIndirect;
     struct BufferSlot {

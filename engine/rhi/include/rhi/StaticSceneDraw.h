@@ -36,6 +36,9 @@ struct FrameView {
     // Column-major view -> world matrix (inverse(view) = translate(camPos) *
     // mat4_cast(orientation)).
     std::array<float, 16> viewToWorld{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    // Active camera clip planes for Reverse-Z depth debug visualization.
+    float nearPlane = 0.1F;
+    float farPlane = 50.F;
 };
 
 struct DirectionalLightingState {
@@ -76,5 +79,38 @@ struct StaticIndirectGeometry {
     std::span<const StaticIndexedRange> ranges;
     std::span<const std::uint64_t> objectIds;
 };
+
+enum class StaticCullMode { GpuCompute, CpuFrustum };
+
+struct CpuCullInstance {
+    std::array<float, 16> modelMatrix;
+    std::array<float, 3> boundsMin;
+    std::array<float, 3> boundsMax;
+    std::uint32_t firstIndex;
+    std::uint32_t indexCount;
+    std::int32_t vertexOffset;
+    std::uint32_t instanceIndex;
+};
+
+// Binary-identical to VkDrawIndexedIndirectCommand (20 bytes) so CPU culling writes directly into
+// the per-frame indirect command buffer consumed by vkCmdDrawIndexedIndirectCount.
+struct IndexedIndirectDrawCommand {
+    std::uint32_t indexCount;
+    std::uint32_t instanceCount;
+    std::uint32_t firstIndex;
+    std::int32_t vertexOffset;
+    std::uint32_t firstInstance;
+};
+
+struct CpuCullResult {
+    std::uint32_t visibleCount = 0;
+    std::uint32_t drawCount = 0;
+};
+
+using CpuFrustumCullFn = CpuCullResult (*)(
+    std::span<const CpuCullInstance> instances,
+    const std::array<float, 16>& clipFromWorld,
+    float inverseAspect,
+    std::span<IndexedIndirectDrawCommand> outCommands) noexcept;
 
 } // namespace ar::rhi

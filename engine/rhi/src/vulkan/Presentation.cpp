@@ -1,6 +1,7 @@
 #include "Presentation.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <limits>
 #include <string>
@@ -48,7 +49,10 @@ std::expected<void, core::Error> Presentation::open(
     const DeferredLighting* lighting,
     PlanPresentationGraph planner,
     const PresentationSpec* spec,
-    DescriptorHeapTable* heapBinding) {
+    DescriptorHeapTable* heapBinding,
+    DeviceResources* resources,
+    const OverlayShaders* overlayShaders,
+    PresentMode requestedPresentMode) {
     if (!vkGetPhysicalDeviceSurfaceCapabilitiesKHR || !vkGetPhysicalDeviceSurfaceFormatsKHR ||
         !vkCreateSwapchainKHR || !vkDestroySwapchainKHR || !vkGetSwapchainImagesKHR ||
         !vkAcquireNextImageKHR || !vkQueuePresentKHR) {
@@ -72,6 +76,8 @@ std::expected<void, core::Error> Presentation::open(
     m_spec = spec ? *spec : PresentationSpec{};
     m_planPresentation = planner;
     m_lighting = lighting;
+    m_requestedPresentMode = requestedPresentMode;
+    m_activePresentMode = PresentMode::Fifo;
     if (m_heapBinding) {
         const auto& plan = m_heapBinding->plan();
         if (plan.imageStride == 0 || plan.samplerStride == 0 || plan.bufferStride == 0 ||
@@ -94,9 +100,43 @@ std::expected<void, core::Error> Presentation::open(
                     std::nullopt});
         }
     }
+    VkPhysicalDeviceProperties deviceProps{};
+    vkGetPhysicalDeviceProperties(m_physical, &deviceProps);
+    m_timestampPeriodNs = deviceProps.limits.timestampPeriod;
+    std::uint32_t queueFamilyCount = 0u;
+    vkGetPhysicalDeviceQueueFamilyProperties(m_physical, &queueFamilyCount, nullptr);
+    if (graphicsFamily < queueFamilyCount) {
+        std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(
+            m_physical, &queueFamilyCount, queueFamilies.data());
+        m_timestampValidBits = queueFamilies[graphicsFamily].timestampValidBits;
+    } else {
+        m_timestampValidBits = 0u;
+    }
+    if (m_timestampPeriodNs <= 0.F || m_timestampValidBits == 0u || vkCreateQueryPool == nullptr ||
+        vkDestroyQueryPool == nullptr || vkCmdResetQueryPool == nullptr ||
+        vkCmdWriteTimestamp2 == nullptr || vkGetQueryPoolResults == nullptr) {
+        m_timestampValidBits = 0u;
+        m_timestampUnavailableReason =
+            m_timestampPeriodNs <= 0.F ? "physical device reports non-positive timestampPeriod"
+                                       : "graphics queue does not support GPU timestamp queries";
+        m_latestTimings = {};
+        m_latestTimings.unavailableReason = m_timestampUnavailableReason;
+    } else {
+        m_timestampUnavailableReason.clear();
+        m_latestTimings = {};
+        m_latestTimings.unavailableReason = "awaiting first completed GPU frame";
+    }
+
     for (Frame& frame : m_frames) {
         if (auto created = createFrame(frame, graphicsFamily); !created) {
             return created;
+        }
+    }
+    if (overlayShaders && resources) {
+        m_overlay.emplace(m_device, *resources, m_heapBinding, *overlayShaders);
+        if (auto opened = m_overlay->open(); !opened) {
+            return opened;
         }
     }
     if (m_shaders && !m_heapBinding) {
@@ -239,9 +279,44 @@ std::expected<bool, core::Error> Presentation::createSwapchain(VkExtent2D frameb
         swapchain.queueFamilyIndexCount = static_cast<std::uint32_t>(families.size());
         swapchain.pQueueFamilyIndices = families.data();
     }
+    VkPresentModeKHR chosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+    m_activePresentMode = PresentMode::Fifo;
+    if (m_requestedPresentMode != PresentMode::Fifo &&
+        vkGetPhysicalDeviceSurfacePresentModesKHR != nullptr) {
+        std::uint32_t modeCount = 0u;
+        if (vkGetPhysicalDeviceSurfacePresentModesKHR(m_physical, m_surface, &modeCount, nullptr) ==
+                VK_SUCCESS &&
+            modeCount > 0u) {
+            std::vector<VkPresentModeKHR> modes(modeCount);
+            if (vkGetPhysicalDeviceSurfacePresentModesKHR(
+                    m_physical, m_surface, &modeCount, modes.data()) == VK_SUCCESS) {
+                modes.resize(modeCount);
+                const auto supports = [&](VkPresentModeKHR candidate) {
+                    return std::ranges::find(modes, candidate) != modes.end();
+                };
+                if (m_requestedPresentMode == PresentMode::Immediate) {
+                    if (supports(VK_PRESENT_MODE_IMMEDIATE_KHR)) {
+                        chosenPresentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+                        m_activePresentMode = PresentMode::Immediate;
+                    } else if (supports(VK_PRESENT_MODE_MAILBOX_KHR)) {
+                        chosenPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+                        m_activePresentMode = PresentMode::Mailbox;
+                    }
+                } else if (m_requestedPresentMode == PresentMode::Mailbox) {
+                    if (supports(VK_PRESENT_MODE_MAILBOX_KHR)) {
+                        chosenPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+                        m_activePresentMode = PresentMode::Mailbox;
+                    } else if (supports(VK_PRESENT_MODE_IMMEDIATE_KHR)) {
+                        chosenPresentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+                        m_activePresentMode = PresentMode::Immediate;
+                    }
+                }
+            }
+        }
+    }
     swapchain.preTransform = caps.currentTransform;
     swapchain.compositeAlpha = *alpha;
-    swapchain.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    swapchain.presentMode = chosenPresentMode;
     swapchain.clipped = VK_TRUE;
     if (auto created = create(
             m_device, m_swapchain.handle, swapchain, vkCreateSwapchainKHR, "vkCreateSwapchainKHR");
@@ -361,6 +436,11 @@ std::expected<bool, core::Error> Presentation::createSwapchain(VkExtent2D frameb
             return std::unexpected(created.error());
         }
     }
+    if (m_overlay) {
+        if (auto created = m_overlay->createPipeline(*format); !created) {
+            return std::unexpected(std::move(created.error()));
+        }
+    }
     m_requestedExtent = framebuffer;
     return true;
 }
@@ -401,17 +481,163 @@ Presentation::createFrame(Frame& frame, std::uint32_t graphicsFamily) {
             return created;
         }
     }
+    if (m_timestampValidBits > 0u && m_timestampPeriodNs > 0.F) {
+        VkQueryPoolCreateInfo queryPool{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+        queryPool.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        queryPool.queryCount = kTimestampCount;
+        if (auto created = create(
+                m_device, frame.queryPool, queryPool, vkCreateQueryPool, "vkCreateQueryPool");
+            !created) {
+            return created;
+        }
+    }
     return {};
 }
 
-std::expected<void, core::Error> Presentation::record(
+void Presentation::writeTimestamp(
     VkCommandBuffer commands,
+    VkQueryPool pool,
+    TimestampSlot slot,
+    VkPipelineStageFlags2 stage) const noexcept {
+    if (pool != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp2(commands, stage, pool, static_cast<std::uint32_t>(slot));
+    }
+}
+
+void Presentation::harvestTimestamps(Frame& frame) noexcept {
+    if (!frame.hasPendingTimestamps) {
+        return;
+    }
+    frame.hasPendingTimestamps = false;
+    GpuFrameTimings sample{};
+    sample.frameNumber = frame.timestampFrame;
+    if (frame.queryPool == VK_NULL_HANDLE || m_timestampValidBits == 0u ||
+        m_timestampPeriodNs <= 0.F) {
+        sample.available = false;
+        sample.unavailableReason = m_timestampUnavailableReason.empty()
+                                       ? "GPU timestamps unavailable"
+                                       : m_timestampUnavailableReason;
+    } else {
+        std::array<std::uint64_t, kTimestampCount * 2u> raw{};
+        const VkResult status = vkGetQueryPoolResults(
+            m_device,
+            frame.queryPool,
+            0u,
+            kTimestampCount,
+            sizeof(raw),
+            raw.data(),
+            2u * sizeof(std::uint64_t),
+            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+        if (status != VK_SUCCESS && status != VK_NOT_READY) {
+            sample.available = false;
+            sample.unavailableReason = "vkGetQueryPoolResults failed";
+        } else {
+            const std::uint64_t mask = m_timestampValidBits >= 64u
+                                           ? ~std::uint64_t{0u}
+                                           : ((std::uint64_t{1u} << m_timestampValidBits) - 1u);
+            const double ticksToMs = static_cast<double>(m_timestampPeriodNs) * 1e-6;
+            const auto spanMs = [&](TimestampSlot begin,
+                                    TimestampSlot end) -> std::optional<double> {
+                const auto b = static_cast<std::size_t>(begin) * 2u;
+                const auto e = static_cast<std::size_t>(end) * 2u;
+                if (raw[b + 1u] == 0u || raw[e + 1u] == 0u) {
+                    return std::nullopt;
+                }
+                const std::uint64_t delta = (raw[e] - raw[b]) & mask;
+                return static_cast<double>(delta) * ticksToMs;
+            };
+            sample.totalGpuMs = spanMs(TimestampSlot::FrameBegin, TimestampSlot::FrameEnd);
+            if (sample.totalGpuMs) {
+                sample.available = true;
+                if ((frame.timestampPassMask & kPassShadow) != 0u) {
+                    sample.shadowMs = spanMs(TimestampSlot::ShadowBegin, TimestampSlot::ShadowEnd);
+                }
+                if ((frame.timestampPassMask & kPassCull) != 0u) {
+                    sample.cullMs = spanMs(TimestampSlot::CullBegin, TimestampSlot::CullEnd);
+                }
+                if ((frame.timestampPassMask & kPassGeometry) != 0u) {
+                    sample.geometryMs =
+                        spanMs(TimestampSlot::GeometryBegin, TimestampSlot::GeometryEnd);
+                }
+                if ((frame.timestampPassMask & kPassLighting) != 0u) {
+                    sample.lightingMs =
+                        spanMs(TimestampSlot::LightingBegin, TimestampSlot::LightingEnd);
+                }
+                if ((frame.timestampPassMask & kPassDisplay) != 0u) {
+                    sample.displayMs =
+                        spanMs(TimestampSlot::DisplayBegin, TimestampSlot::DisplayEnd);
+                }
+                if ((frame.timestampPassMask & kPassOverlay) != 0u) {
+                    sample.overlayMs =
+                        spanMs(TimestampSlot::OverlayBegin, TimestampSlot::OverlayEnd);
+                }
+            } else {
+                sample.available = false;
+                sample.unavailableReason = "GPU timestamp queries were not available";
+            }
+        }
+    }
+    if (m_staticScene && m_staticScene->gpuCullEnabled() &&
+        m_staticScene->readIndirectCountsEnabled()) {
+        const auto slot = static_cast<std::size_t>(&frame - m_frames.data());
+        if (auto counts = m_staticScene->readIndirectCounts(slot); counts) {
+            sample.visibleCount = counts->visibleCount;
+            sample.drawCount = counts->drawCount;
+            sample.overflowed = counts->visibleCount > counts->capacity;
+        }
+    }
+    m_latestTimings = sample;
+    if (m_completedTimings.size() >= 65536u) {
+        m_completedTimings.erase(m_completedTimings.begin());
+    }
+    m_completedTimings.push_back(std::move(sample));
+}
+
+std::vector<GpuFrameTimings> Presentation::takeCompletedGpuTimings() {
+    std::vector<GpuFrameTimings> out;
+    out.swap(m_completedTimings);
+    std::ranges::sort(out, {}, &GpuFrameTimings::frameNumber);
+    return out;
+}
+
+std::expected<void, core::Error> Presentation::uploadOverlayFont(const OverlayFontAtlas& atlas) {
+    if (!m_overlay) {
+        return std::unexpected(unavailable("overlay rendering is not enabled"));
+    }
+    if (auto error = drainFrames()) {
+        return std::unexpected(std::move(*error));
+    }
+    return m_overlay->uploadFont(atlas);
+}
+
+std::expected<std::vector<GpuFrameTimings>, core::Error> Presentation::drainCompletedGpuTimings() {
+    if (auto error = drainFrames()) {
+        return std::unexpected(std::move(*error));
+    }
+    for (Frame& frame : m_frames) {
+        harvestTimestamps(frame);
+    }
+    std::vector<GpuFrameTimings> out;
+    out.swap(m_completedTimings);
+    std::ranges::sort(out, {}, &GpuFrameTimings::frameNumber);
+    return out;
+}
+
+std::expected<void, core::Error> Presentation::record(
+    Frame& frame,
     const Image& image,
     VkBuffer capture,
-    const PresentationGraphPlan* plan) {
+    const PresentationGraphPlan* plan,
+    const OverlayDrawList* overlay,
+    bool overlayActive) {
+    VkCommandBuffer commands = frame.commands;
     const float inverseAspect = static_cast<float>(m_swapchain.extent.height) /
                                 static_cast<float>(m_swapchain.extent.width);
     const bool activeShadows = activeShadowPass();
+    const DebugViewMode effectiveView =
+        (m_debugView == DebugViewMode::ShadowDepth && !activeShadows) ? DebugViewMode::Final
+                                                                      : m_debugView;
+    frame.timestampPassMask = kPassGeometry;
     if (m_staticScene) {
         if (auto updated = m_staticScene->updateFrameView(m_frameIndex, m_frameView, inverseAspect);
             !updated) {
@@ -430,6 +656,14 @@ std::expected<void, core::Error> Presentation::record(
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkBeginCommandBuffer", result));
     }
+    if (frame.queryPool != VK_NULL_HANDLE) {
+        vkCmdResetQueryPool(commands, frame.queryPool, 0u, kTimestampCount);
+        writeTimestamp(
+            commands,
+            frame.queryPool,
+            TimestampSlot::FrameBegin,
+            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+    }
     if (m_heapBinding) {
         const VkBindHeapInfoEXT resourceBind = m_heapBinding->resourceBindInfo();
         const VkBindHeapInfoEXT samplerBind = m_heapBinding->samplerBindInfo();
@@ -437,7 +671,8 @@ std::expected<void, core::Error> Presentation::record(
         m_heapBinding->dispatch().cmdBindSamplerHeap(commands, &samplerBind);
     }
     if (plan && activeShadows) {
-        recordShadow(commands, image, *plan);
+        frame.timestampPassMask |= kPassShadow;
+        recordShadow(commands, frame.queryPool, image, *plan);
     }
 
     VkImageMemoryBarrier2 barrier{};
@@ -518,18 +753,40 @@ std::expected<void, core::Error> Presentation::record(
         depthAttachment.imageView = depth.view;
         depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
         depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        depthAttachment.storeOp = m_enableGBuffer ? VK_ATTACHMENT_STORE_OP_STORE
-                                                  : VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.storeOp =
+            m_enableGBuffer ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
         depthAttachment.clearValue.depthStencil = {m_spec.depthClear, 0};
         rendering.pDepthAttachment = &depthAttachment;
     }
     const auto* cull = m_cullFrames[m_frameIndex];
+    const bool gpuCullActive =
+        (cull != nullptr) || (m_staticScene && plan && m_staticScene->gpuCullEnabled());
+    if (gpuCullActive) {
+        frame.timestampPassMask |= kPassCull;
+        writeTimestamp(
+            commands,
+            frame.queryPool,
+            TimestampSlot::CullBegin,
+            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+    }
     if (cull) {
         cull->recordCull(commands, m_cullObjects, true);
     }
-    if (m_staticScene && plan) {
+    if (m_staticScene && plan && m_staticScene->gpuCullEnabled()) {
         m_staticScene->cull(commands, m_frameIndex, *plan);
     }
+    if (gpuCullActive) {
+        writeTimestamp(
+            commands,
+            frame.queryPool,
+            TimestampSlot::CullEnd,
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+    }
+    writeTimestamp(
+        commands,
+        frame.queryPool,
+        TimestampSlot::GeometryBegin,
+        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
     vkCmdBeginRendering(commands, &rendering);
     if (m_swapchain.pipeline) {
         vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, m_swapchain.pipeline);
@@ -554,7 +811,13 @@ std::expected<void, core::Error> Presentation::record(
         }
     }
     vkCmdEndRendering(commands);
-    if (capture && m_staticScene && plan) {
+    writeTimestamp(
+        commands,
+        frame.queryPool,
+        TimestampSlot::GeometryEnd,
+        VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+    if (m_staticScene && plan && m_staticScene->gpuCullEnabled() &&
+        (capture || m_staticScene->readIndirectCountsEnabled())) {
         m_staticScene->indirectReadback(commands, m_frameIndex, *plan);
     }
     if (m_lighting && plan) {
@@ -576,7 +839,27 @@ std::expected<void, core::Error> Presentation::record(
             shadowInitDep.pImageMemoryBarriers = &shadowInit;
             vkCmdPipelineBarrier2(commands, &shadowInitDep);
         }
-        recordLighting(commands, image, *plan);
+        frame.timestampPassMask |= kPassLighting | kPassDisplay;
+        recordLighting(commands, frame.queryPool, image, *plan, effectiveView);
+    }
+    if (overlayActive && m_overlay && overlay) {
+        frame.timestampPassMask |= kPassOverlay;
+        writeTimestamp(
+            commands,
+            frame.queryPool,
+            TimestampSlot::OverlayBegin,
+            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+        if (plan) {
+            recordGraphBarriers(commands, image, *plan, PresentationPass::Overlay);
+        }
+        const bool srgb = m_swapchain.format == VK_FORMAT_B8G8R8A8_SRGB ||
+                          m_swapchain.format == VK_FORMAT_R8G8B8A8_SRGB;
+        m_overlay->record(commands, image.view, m_swapchain.extent, srgb, m_frameIndex, *overlay);
+        writeTimestamp(
+            commands,
+            frame.queryPool,
+            TimestampSlot::OverlayEnd,
+            VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
     }
 
     barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
@@ -626,6 +909,8 @@ std::expected<void, core::Error> Presentation::record(
     if (!plan || capture) {
         vkCmdPipelineBarrier2(commands, &dependency);
     }
+    writeTimestamp(
+        commands, frame.queryPool, TimestampSlot::FrameEnd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
     result = vkEndCommandBuffer(commands);
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkEndCommandBuffer", result));
@@ -656,11 +941,12 @@ VkResult Presentation::drain(Frame& frame, std::uint64_t timeout) {
 }
 
 std::expected<Presentation::DrawStatus, core::Error>
-Presentation::draw(Frame& frame, bool capture) {
+Presentation::draw(Frame& frame, bool capture, const OverlayDrawList* overlay) {
     VkResult result = drain(frame, kFrameTimeout);
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("waiting for the frame fences", result));
     }
+    harvestTimestamps(frame);
     result = vkResetCommandPool(m_device, frame.pool, 0);
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkResetCommandPool", result));
@@ -688,8 +974,34 @@ Presentation::draw(Frame& frame, bool capture) {
     frame.acquired.pending = true;
     auto& image = m_swapchain.images[imageIndex];
     auto& slot = m_swapchain.attachments[m_frameIndex];
+    const auto cpuStart = std::chrono::steady_clock::now();
+    CpuFrameTimings cpuTimings{};
+    const float inverseAspect = static_cast<float>(m_swapchain.extent.height) /
+                                static_cast<float>(m_swapchain.extent.width);
+    if (m_staticScene && m_staticScene->cpuCullEnabled()) {
+        auto culled = m_staticScene->cullCpu(m_frameIndex, m_frameView, inverseAspect);
+        if (!culled) {
+            return std::unexpected(std::move(culled.error()));
+        }
+        cpuTimings.cullMs = culled->cullMs;
+        cpuTimings.visibleCount = culled->visibleCount;
+        cpuTimings.drawCount = culled->drawCount;
+        cpuTimings.overflowed = culled->visibleCount > culled->capacity;
+    }
+    const auto recordStart = std::chrono::steady_clock::now();
     std::optional<PresentationGraphPlan> graph;
     const bool activeShadows = activeShadowPass();
+    const DebugViewMode effectiveView =
+        (m_debugView == DebugViewMode::ShadowDepth && !activeShadows) ? DebugViewMode::Final
+                                                                      : m_debugView;
+    bool overlayActive = false;
+    if (overlay && m_overlay) {
+        auto prepared = m_overlay->prepareFrame(m_frameIndex, *overlay);
+        if (!prepared) {
+            return std::unexpected(std::move(prepared.error()));
+        }
+        overlayActive = *prepared;
+    }
     if (m_planPresentation && m_enableGBuffer) {
         auto states = slot.graphStates;
         states[std::to_underlying(PresentationImage::Output)] = image.state;
@@ -699,8 +1011,11 @@ Presentation::draw(Frame& frame, bool capture) {
              m_lighting != nullptr,
              capture,
              m_environmentReady,
-             m_staticScene && m_staticScene->indirectEnabled(),
-             activeShadows});
+             m_staticScene ? m_staticScene->indirectProducer() : IndirectProducer::None,
+             activeShadows,
+             effectiveView,
+             overlayActive,
+             m_staticScene && m_staticScene->readIndirectCountsEnabled()});
         if (!planned) {
             return std::unexpected(std::move(planned.error()));
         }
@@ -711,10 +1026,12 @@ Presentation::draw(Frame& frame, bool capture) {
         graph.emplace(std::move(*planned));
     }
     if (auto recorded = record(
-            frame.commands,
+            frame,
             image,
             capture ? m_swapchain.readbacks[&frame - m_frames.data()].buffer : VK_NULL_HANDLE,
-            graph ? &*graph : nullptr);
+            graph ? &*graph : nullptr,
+            overlay,
+            overlayActive);
         !recorded) {
         return std::unexpected(std::move(recorded.error()));
     }
@@ -739,9 +1056,20 @@ Presentation::draw(Frame& frame, bool capture) {
     submit.signalSemaphoreInfoCount = 1;
     submit.pSignalSemaphoreInfos = &render;
     result = vkQueueSubmit2(m_graphicsQueue, 1, &submit, frame.submitted.handle);
+    const auto submitEnd = std::chrono::steady_clock::now();
     frame.submitted.pending = result == VK_SUCCESS || result == VK_ERROR_DEVICE_LOST;
     if (frame.submitted.pending) {
         frame.submission = ++m_submission;
+        if (result == VK_SUCCESS) {
+            frame.hasPendingTimestamps = true;
+            frame.timestampFrame = frame.submission;
+            cpuTimings.frameNumber = frame.submission;
+            cpuTimings.recordSubmitMs =
+                std::chrono::duration<double, std::milli>(submitEnd - recordStart).count();
+            cpuTimings.totalCpuMs =
+                std::chrono::duration<double, std::milli>(submitEnd - cpuStart).count();
+            m_lastCpuTimings = cpuTimings;
+        }
     }
     if (result != VK_SUCCESS) {
         return std::unexpected(failed("vkQueueSubmit2", result));
@@ -788,8 +1116,8 @@ Presentation::draw(Frame& frame, bool capture) {
                                                             : DrawStatus::Presented;
 }
 
-std::expected<PresentStatus, core::Error>
-Presentation::presentFrame(VkExtent2D framebuffer, FrameScreenshot* screenshot) {
+std::expected<PresentStatus, core::Error> Presentation::presentFrame(
+    VkExtent2D framebuffer, FrameScreenshot* screenshot, const OverlayDrawList* overlay) {
     if (m_lighting && m_lighting->environmentLighting && !m_environmentReady) {
         return std::unexpected(unavailable("environment lighting is waiting for its first upload"));
     }
@@ -822,7 +1150,7 @@ Presentation::presentFrame(VkExtent2D framebuffer, FrameScreenshot* screenshot) 
         m_rebuild = false;
     }
     auto& frame = m_frames[m_frameIndex];
-    auto result = draw(frame, screenshot != nullptr || m_deferCapture);
+    auto result = draw(frame, screenshot != nullptr || m_deferCapture, overlay);
     if (!result) {
         m_failed = true;
         return std::unexpected(std::move(result.error()));
@@ -945,6 +1273,9 @@ std::optional<core::Error> Presentation::close() {
         return error;
     }
     for (Frame& frame : m_frames) {
+        if (frame.queryPool) {
+            vkDestroyQueryPool(m_device, frame.queryPool, nullptr);
+        }
         if (frame.pool) {
             vkDestroyCommandPool(m_device, frame.pool, nullptr);
         }
@@ -959,6 +1290,10 @@ std::optional<core::Error> Presentation::close() {
             }
         }
         frame = {};
+    }
+    if (m_overlay) {
+        m_overlay->close();
+        m_overlay.reset();
     }
     destroySwapchain();
     if (m_heapBinding) {
@@ -1005,6 +1340,9 @@ std::optional<core::Error> Presentation::close() {
 }
 
 void Presentation::destroySwapchain() noexcept {
+    if (m_overlay) {
+        m_overlay->destroyPipeline();
+    }
     if (m_heapBinding) {
         resetAttachmentHeapDescriptors();
     }

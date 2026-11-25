@@ -11,7 +11,7 @@ namespace ar::render {
 
 [[nodiscard]] rhi::AttachmentProbeLayout defaultGBufferProbeLayout();
 [[nodiscard]] rhi::DisplayPushData
-packDisplayPushConstants(float exposureEV, bool swapchainIsSrgb) noexcept;
+packDisplayPushConstants(const rhi::DisplayPushParams& params) noexcept;
 [[nodiscard]] rhi::PresentationSpec buildDeferredPresentationSpec(float exposureEV = 0.F);
 [[nodiscard]] float halfToFloat(std::uint16_t bits) noexcept;
 [[nodiscard]] std::vector<rhi::GBufferProbe> decodeGBufferProbes(

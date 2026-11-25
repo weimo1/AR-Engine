@@ -26,6 +26,7 @@ struct RuntimeConfig {
     rhi::QueryConfig query;
     std::optional<platform::WindowConfig> window;
     std::optional<std::filesystem::path> staticAssetRoot;
+    rhi::PresentMode presentMode = rhi::PresentMode::Fifo;
 };
 
 } // namespace ar::runtime

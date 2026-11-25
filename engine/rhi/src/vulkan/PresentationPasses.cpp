@@ -116,15 +116,18 @@ std::expected<void, core::Error> Presentation::createLightingLayout() {
         return created;
     }
 
-    const VkDescriptorSetLayoutBinding displayBinding{
-        0u,
-        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        1,
-        VK_SHADER_STAGE_FRAGMENT_BIT,
-        &m_lightingSampler};
+    std::array<VkDescriptorSetLayoutBinding, 6> displayBindings{};
+    for (std::uint32_t i = 0; i < displayBindings.size(); ++i) {
+        displayBindings[i] = {
+            i,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            1,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+            &m_lightingSampler};
+    }
     VkDescriptorSetLayoutCreateInfo displaySet{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    displaySet.bindingCount = 1;
-    displaySet.pBindings = &displayBinding;
+    displaySet.bindingCount = static_cast<std::uint32_t>(displayBindings.size());
+    displaySet.pBindings = displayBindings.data();
     if (auto created = create(
             m_device,
             m_displaySetLayout,
@@ -459,7 +462,12 @@ Presentation::writeLightingFrame(std::size_t frameIndex, bool activeShadows) {
 }
 
 void Presentation::recordShadow(
-    VkCommandBuffer commands, const Image& output, const PresentationGraphPlan& plan) const {
+    VkCommandBuffer commands,
+    VkQueryPool queryPool,
+    const Image& output,
+    const PresentationGraphPlan& plan) const {
+    writeTimestamp(
+        commands, queryPool, TimestampSlot::ShadowBegin, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
     recordGraphBarriers(commands, output, plan, PresentationPass::Shadow);
 
     const std::uint32_t resolution = m_lighting->shadow->resolution;
@@ -486,6 +494,8 @@ void Presentation::recordShadow(
         m_staticScene->recordShadow(commands, layout, m_lightingState.lightViewProj, m_frameIndex);
     }
     vkCmdEndRendering(commands);
+    writeTimestamp(
+        commands, queryPool, TimestampSlot::ShadowEnd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
 }
 
 std::expected<void, core::Error> Presentation::writeAttachmentHeapDescriptors() {
@@ -624,9 +634,11 @@ std::expected<void, core::Error> Presentation::createLightingResources(VkImageUs
     const std::uint32_t combinedPerDirect = gbufferBindings +
                                             (m_lighting->environmentLighting ? 3u : 0u) +
                                             (m_lighting->shadow ? 1u : 0u);
+    constexpr std::uint32_t displayBindings = 6u;
     const auto slotCount = static_cast<std::uint32_t>(m_swapchain.attachments.size());
     const std::array<VkDescriptorPoolSize, 2> poolSizes{{
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, slotCount * (combinedPerDirect + 1u)},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+         slotCount * (combinedPerDirect + displayBindings)},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, slotCount},
     }};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -663,27 +675,43 @@ std::expected<void, core::Error> Presentation::createLightingResources(VkImageUs
         }
         slot.directSet = sets[0];
         slot.displaySet = sets[1];
-        const std::array views{
+        const std::array directViews{
+            slot.gbuffer[0].view, slot.gbuffer[1].view, slot.gbuffer[2].view, slot.depth.view};
+        const std::array displayViews{
+            slot.hdr.view,
             slot.gbuffer[0].view,
             slot.gbuffer[1].view,
             slot.gbuffer[2].view,
             slot.depth.view,
-            slot.hdr.view};
-        std::array<VkDescriptorImageInfo, 6> images{};
-        std::array<VkWriteDescriptorSet, 7> writes{};
+            m_lighting->shadow ? m_shadowDepth[frame].view : slot.depth.view};
+        std::array<VkDescriptorImageInfo, 11> images{};
+        std::array<VkWriteDescriptorSet, 12> writes{};
+        std::uint32_t imageCount = 0;
         std::uint32_t writeCount = 0;
-        for (std::uint32_t i = 0; i < views.size(); ++i) {
-            images[i] = {VK_NULL_HANDLE, views[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        for (std::uint32_t i = 0; i < directViews.size(); ++i) {
+            images[imageCount] = {
+                VK_NULL_HANDLE, directViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             auto& write = writes[writeCount++];
             write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = i < gbufferBindings ? slot.directSet : slot.displaySet;
-            write.dstBinding = i < gbufferBindings ? i : 0u;
+            write.dstSet = slot.directSet;
+            write.dstBinding = i;
             write.descriptorCount = 1;
             write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.pImageInfo = &images[i];
+            write.pImageInfo = &images[imageCount++];
+        }
+        for (std::uint32_t i = 0; i < displayViews.size(); ++i) {
+            images[imageCount] = {
+                VK_NULL_HANDLE, displayViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            auto& write = writes[writeCount++];
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = slot.displaySet;
+            write.dstBinding = i;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.pImageInfo = &images[imageCount++];
         }
         if (m_lighting->shadow) {
-            images[5] = {
+            images[imageCount] = {
                 VK_NULL_HANDLE,
                 m_shadowDepth[frame].view,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -693,7 +721,7 @@ std::expected<void, core::Error> Presentation::createLightingResources(VkImageUs
             write.dstBinding = 7u;
             write.descriptorCount = 1;
             write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.pImageInfo = &images[5];
+            write.pImageInfo = &images[imageCount++];
         }
         const VkDescriptorBufferInfo uboInfo{
             m_lightingFrames[frame].buffer, 0, VkDeviceSize{sizeof(LightingFrameGpu)}};
@@ -737,8 +765,14 @@ void Presentation::writeEnvironmentDescriptors() const {
 }
 
 void Presentation::recordLighting(
-    VkCommandBuffer commands, const Image& output, const PresentationGraphPlan& plan) const {
+    VkCommandBuffer commands,
+    VkQueryPool queryPool,
+    const Image& output,
+    const PresentationGraphPlan& plan,
+    DebugViewMode effectiveView) const {
     const auto& slot = m_swapchain.attachments[m_frameIndex];
+    writeTimestamp(
+        commands, queryPool, TimestampSlot::LightingBegin, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
     recordGraphBarriers(commands, output, plan, PresentationPass::Lighting);
 
     const auto draw = [&](VkImageView target,
@@ -793,18 +827,28 @@ void Presentation::recordLighting(
             0u,
             nullptr);
     }
+    writeTimestamp(
+        commands, queryPool, TimestampSlot::LightingEnd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
 
+    writeTimestamp(
+        commands, queryPool, TimestampSlot::DisplayBegin, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
     recordGraphBarriers(commands, output, plan, PresentationPass::Display);
 
     const bool srgb = m_swapchain.format == VK_FORMAT_B8G8R8A8_SRGB ||
                       m_swapchain.format == VK_FORMAT_R8G8B8A8_SRGB;
-    const DisplayPushData display = m_spec.buildDisplayPush(m_spec.displayExposureEV, srgb);
+    const DisplayPushData display = m_spec.buildDisplayPush(
+        DisplayPushParams{
+            m_spec.displayExposureEV,
+            srgb,
+            effectiveView,
+            m_frameView.nearPlane,
+            m_frameView.farPlane});
     if (m_heapBinding) {
         struct DisplayHeapPush {
-            std::array<std::byte, 8> payload{};
+            std::array<std::byte, 20> payload{};
             std::uint32_t frameSlot = 0;
         };
-        static_assert(sizeof(DisplayHeapPush) == 12);
+        static_assert(sizeof(DisplayHeapPush) == 24u);
         DisplayHeapPush displayPush{};
         std::memcpy(displayPush.payload.data(), display.bytes.data(), display.size);
         displayPush.frameSlot = static_cast<std::uint32_t>(m_frameIndex);
@@ -824,6 +868,8 @@ void Presentation::recordLighting(
             display.size,
             display.bytes.data());
     }
+    writeTimestamp(
+        commands, queryPool, TimestampSlot::DisplayEnd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
 }
 
 std::expected<void, core::Error> Presentation::createGraphicsPipeline(
@@ -1106,15 +1152,49 @@ std::expected<void, core::Error> Presentation::createGraphicsPipeline(
                 bufferStride);
             break;
         case PipelineKind::Display:
+            // Binding 0=HDR, 1=BaseColor, 2=Normal, 3=Material, 4=MainDepth, 5=ShadowDepth (or
+            // MainDepth fallback when shadow pipeline is off), all using non-compare sampler 1.
             addPushIndex(
                 fragmentMappings[fragmentMappingCount++],
                 0u,
                 0u,
                 VK_SPIRV_RESOURCE_TYPE_COMBINED_SAMPLED_IMAGE_BIT_EXT,
                 (kHeapExternalImageBase + 4u) * imageStride,
-                8u,
+                20u,
                 frameAttachmentStride,
                 1u * samplerStride);
+            for (std::uint32_t b = 0u; b < 4u; ++b) {
+                addPushIndex(
+                    fragmentMappings[fragmentMappingCount++],
+                    0u,
+                    1u + b,
+                    VK_SPIRV_RESOURCE_TYPE_COMBINED_SAMPLED_IMAGE_BIT_EXT,
+                    (kHeapExternalImageBase + b) * imageStride,
+                    20u,
+                    frameAttachmentStride,
+                    1u * samplerStride);
+            }
+            if (m_lighting && m_lighting->shadow) {
+                addPushIndex(
+                    fragmentMappings[fragmentMappingCount++],
+                    0u,
+                    5u,
+                    VK_SPIRV_RESOURCE_TYPE_COMBINED_SAMPLED_IMAGE_BIT_EXT,
+                    kHeapShadowImageBase * imageStride,
+                    20u,
+                    imageStride,
+                    1u * samplerStride);
+            } else {
+                addPushIndex(
+                    fragmentMappings[fragmentMappingCount++],
+                    0u,
+                    5u,
+                    VK_SPIRV_RESOURCE_TYPE_COMBINED_SAMPLED_IMAGE_BIT_EXT,
+                    (kHeapExternalImageBase + 3u) * imageStride,
+                    20u,
+                    frameAttachmentStride,
+                    1u * samplerStride);
+            }
             break;
         }
 
