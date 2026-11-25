@@ -391,7 +391,8 @@ RuntimeSession::openStaticScene(const std::filesystem::path& source, bool verify
     std::optional<render::SceneWorldBounds> pendingBounds;
     std::optional<render::EffectiveDirectionalLight> pendingLight;
     auto opened = m_impl->staticScene->open(
-        source, [&](const render::StaticRenderInput& input) -> std::expected<void, StaticSceneError> {
+        source,
+        [&](const render::StaticRenderInput& input) -> std::expected<void, StaticSceneError> {
             auto bounds = render::computeSceneWorldBounds(input);
             if (!bounds) {
                 gpuError = std::move(bounds.error());

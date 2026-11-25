@@ -1218,8 +1218,7 @@ TEST_CASE(
         planShadowIndirectBatches(5u, 2u) ==
         std::vector<ShadowIndirectBatch>{{0u, 2u}, {2u, 2u}, {4u, 1u}});
     CHECK(
-        planShadowIndirectBatches(4u, 2u) ==
-        std::vector<ShadowIndirectBatch>{{0u, 2u}, {2u, 2u}});
+        planShadowIndirectBatches(4u, 2u) == std::vector<ShadowIndirectBatch>{{0u, 2u}, {2u, 2u}});
     CHECK(planShadowIndirectBatches(3u, 10u) == std::vector<ShadowIndirectBatch>{{0u, 3u}});
     CHECK(planShadowIndirectBatches(1u, 1u) == std::vector<ShadowIndirectBatch>{{0u, 1u}});
 
@@ -2408,10 +2407,10 @@ TEST_CASE(
     const std::array<std::uint16_t, 6> indices{0, 3, 2, 0, 2, 1};
     const std::array<float, 12> normals{0.F, 1.F, 0.F, 0.F, 1.F, 0.F, 0.F, 1.F, 0.F, 0.F, 1.F, 0.F};
     constexpr std::array<unsigned char, 68> whitePng{
-        137, 80,  78,  71,  13,  10,  26,  10,  0,   0,   0,   13,  73,  72,  68,  82,  0,
-        0,   0,   1,   0,   0,   0,   1,   8,   6,   0,   0,   0,   31,  21,  196, 137, 0,
-        0,   0,   11,  73,  68,  65,  84,  120, 156, 99,  248, 15,  4,   0,   9,   251, 3,
-        253, 251, 94,  107, 43,  0,   0,   0,   0,   73,  69,  78,  68,  174, 66,  96,  130};
+        137, 80,  78, 71,  13, 10, 26, 10,  0,   0,  0,   13, 73, 72,  68,  82,  0,
+        0,   0,   1,  0,   0,  0,  1,  8,   6,   0,  0,   0,  31, 21,  196, 137, 0,
+        0,   0,   11, 73,  68, 65, 84, 120, 156, 99, 248, 15, 4,  0,   9,   251, 3,
+        253, 251, 94, 107, 43, 0,  0,  0,   0,   73, 69,  78, 68, 174, 66,  96,  130};
 
     {
         std::ofstream bin(modelsDir / "quad_xz.bin", std::ios::binary);
@@ -2730,48 +2729,48 @@ TEST_CASE(
         return out;
     };
 
-    const auto checkExactParity =
-        [](const rhi::FrameScreenshot& expected, const rhi::FrameScreenshot& actual) {
-            CHECK(actual.width == expected.width);
-            CHECK(actual.height == expected.height);
-            CHECK(actual.rgba == expected.rgba);
-            REQUIRE(actual.gbuffer.size() == expected.gbuffer.size());
-            for (std::size_t i = 0; i < expected.gbuffer.size(); ++i) {
-                REQUIRE(expected.gbuffer[i].hdrColor.has_value());
-                REQUIRE(actual.gbuffer[i].hdrColor.has_value());
-                for (std::size_t c = 0; c < 3; ++c) {
-                    CHECK(
-                        (*actual.gbuffer[i].hdrColor)[c] ==
-                        Catch::Approx((*expected.gbuffer[i].hdrColor)[c]).margin(2e-3F));
-                }
+    const auto checkExactParity = [](const rhi::FrameScreenshot& expected,
+                                     const rhi::FrameScreenshot& actual) {
+        CHECK(actual.width == expected.width);
+        CHECK(actual.height == expected.height);
+        CHECK(actual.rgba == expected.rgba);
+        REQUIRE(actual.gbuffer.size() == expected.gbuffer.size());
+        for (std::size_t i = 0; i < expected.gbuffer.size(); ++i) {
+            REQUIRE(expected.gbuffer[i].hdrColor.has_value());
+            REQUIRE(actual.gbuffer[i].hdrColor.has_value());
+            for (std::size_t c = 0; c < 3; ++c) {
+                CHECK(
+                    (*actual.gbuffer[i].hdrColor)[c] ==
+                    Catch::Approx((*expected.gbuffer[i].hdrColor)[c]).margin(2e-3F));
             }
-            if (expected.indirect.has_value() && actual.indirect.has_value()) {
-                CHECK(actual.indirect->visible == expected.indirect->visible);
-                CHECK(actual.indirect->drawnIds == expected.indirect->drawnIds);
-            }
-        };
+        }
+        if (expected.indirect.has_value() && actual.indirect.has_value()) {
+            CHECK(actual.indirect->visible == expected.indirect->visible);
+            CHECK(actual.indirect->drawnIds == expected.indirect->drawnIds);
+        }
+    };
 
-    const auto checkNearParity =
-        [](const rhi::FrameScreenshot& expected, const rhi::FrameScreenshot& actual) {
-            CHECK(actual.width == expected.width);
-            CHECK(actual.height == expected.height);
-            REQUIRE(actual.rgba.size() == expected.rgba.size());
-            int maxDiff = 0;
-            for (std::size_t i = 0; i < expected.rgba.size(); ++i) {
-                const int diff = std::abs(
-                    static_cast<int>(actual.rgba[i]) - static_cast<int>(expected.rgba[i]));
-                maxDiff = (std::max)(maxDiff, diff);
+    const auto checkNearParity = [](const rhi::FrameScreenshot& expected,
+                                    const rhi::FrameScreenshot& actual) {
+        CHECK(actual.width == expected.width);
+        CHECK(actual.height == expected.height);
+        REQUIRE(actual.rgba.size() == expected.rgba.size());
+        int maxDiff = 0;
+        for (std::size_t i = 0; i < expected.rgba.size(); ++i) {
+            const int diff =
+                std::abs(static_cast<int>(actual.rgba[i]) - static_cast<int>(expected.rgba[i]));
+            maxDiff = (std::max)(maxDiff, diff);
+        }
+        CHECK(maxDiff <= 1);
+        REQUIRE(actual.gbuffer.size() == expected.gbuffer.size());
+        for (std::size_t i = 0; i < expected.gbuffer.size(); ++i) {
+            for (std::size_t c = 0; c < 3; ++c) {
+                CHECK(
+                    (*actual.gbuffer[i].hdrColor)[c] ==
+                    Catch::Approx((*expected.gbuffer[i].hdrColor)[c]).margin(2e-3F));
             }
-            CHECK(maxDiff <= 1);
-            REQUIRE(actual.gbuffer.size() == expected.gbuffer.size());
-            for (std::size_t i = 0; i < expected.gbuffer.size(); ++i) {
-                for (std::size_t c = 0; c < 3; ++c) {
-                    CHECK(
-                        (*actual.gbuffer[i].hdrColor)[c] ==
-                        Catch::Approx((*expected.gbuffer[i].hdrColor)[c]).margin(2e-3F));
-                }
-            }
-        };
+        }
+    };
 
     const ShadowRun directSet = runShadowPath(false, false, "set-direct");
     const ShadowRun indirectSet = runShadowPath(false, true, "set-indirect");
@@ -2862,15 +2861,13 @@ TEST_CASE(
         true,
         shadowCfg};
 
-    const auto projectWorldToScreenUv =
-        [](const ar::render::StaticCamera& camera,
-           const std::array<float, 3>& worldPoint,
-           std::uint32_t width,
-           std::uint32_t height) -> std::array<float, 2> {
+    const auto projectWorldToScreenUv = [](const ar::render::StaticCamera& camera,
+                                           const std::array<float, 3>& worldPoint,
+                                           std::uint32_t width,
+                                           std::uint32_t height) -> std::array<float, 2> {
         const auto view = ar::render::buildFrameView(camera, true);
         REQUIRE(view.has_value());
-        const float inverseAspect =
-            static_cast<float>(height) / static_cast<float>(width);
+        const float inverseAspect = static_cast<float>(height) / static_cast<float>(width);
         auto clipFromWorld = view->clipFromWorld;
         for (std::size_t col = 0; col < 4; ++col) {
             clipFromWorld[col * 4] *= inverseAspect;
@@ -2890,9 +2887,8 @@ TEST_CASE(
         return {0.5F + 0.5F * ndcX, 0.5F - 0.5F * ndcY};
     };
 
-    const auto samplePatchLuma = [](const rhi::FrameScreenshot& frame,
-                                    const std::array<float, 2>& uv,
-                                    int radius) -> float {
+    const auto samplePatchLuma =
+        [](const rhi::FrameScreenshot& frame, const std::array<float, 2>& uv, int radius) -> float {
         REQUIRE(uv[0] > 0.02F);
         REQUIRE(uv[0] < 0.98F);
         REQUIRE(uv[1] > 0.02F);
@@ -2911,10 +2907,9 @@ TEST_CASE(
         int count = 0;
         for (int dy = -radius; dy <= radius; ++dy) {
             for (int dx = -radius; dx <= radius; ++dx) {
-                const std::size_t offset =
-                    (static_cast<std::size_t>(cy + dy) * frame.width +
-                     static_cast<std::size_t>(cx + dx)) *
-                    4u;
+                const std::size_t offset = (static_cast<std::size_t>(cy + dy) * frame.width +
+                                            static_cast<std::size_t>(cx + dx)) *
+                                           4u;
                 total += (static_cast<double>(frame.rgba[offset]) +
                           static_cast<double>(frame.rgba[offset + 1]) +
                           static_cast<double>(frame.rgba[offset + 2])) /
@@ -2998,7 +2993,8 @@ TEST_CASE(
         capture(out.pose0Initial);
         CHECK(out.pose0Initial.indirect->visible == 14u);
 
-        // Pose 1: drive FreeCameraController beside left pillar (ID 3) looking down at floor shadow.
+        // Pose 1: drive FreeCameraController beside left pillar (ID 3) looking down at floor
+        // shadow.
         const auto stepMove = [&](const ar::render::FreeCameraInput& input, int steps) {
             ar::render::StaticCamera cam = controller->camera();
             for (int i = 0; i < steps; ++i) {
@@ -3129,17 +3125,17 @@ TEST_CASE(
 
     if (supportsHeap) {
         const RoamingRun heapRun = runShowroomRoaming(true, "roam-heap");
-        const auto checkFrameParity =
-            [](const rhi::FrameScreenshot& expected, const rhi::FrameScreenshot& actual) {
-                CHECK(actual.width == expected.width);
-                CHECK(actual.height == expected.height);
-                const bool rgbaEqual = (actual.rgba == expected.rgba);
-                CHECK(rgbaEqual);
-                REQUIRE(expected.indirect.has_value());
-                REQUIRE(actual.indirect.has_value());
-                CHECK(actual.indirect->visible == expected.indirect->visible);
-                CHECK(actual.indirect->drawnIds == expected.indirect->drawnIds);
-            };
+        const auto checkFrameParity = [](const rhi::FrameScreenshot& expected,
+                                         const rhi::FrameScreenshot& actual) {
+            CHECK(actual.width == expected.width);
+            CHECK(actual.height == expected.height);
+            const bool rgbaEqual = (actual.rgba == expected.rgba);
+            CHECK(rgbaEqual);
+            REQUIRE(expected.indirect.has_value());
+            REQUIRE(actual.indirect.has_value());
+            CHECK(actual.indirect->visible == expected.indirect->visible);
+            CHECK(actual.indirect->drawnIds == expected.indirect->drawnIds);
+        };
         checkFrameParity(setRun.pose0Initial, heapRun.pose0Initial);
         checkFrameParity(setRun.pose1NearPillar, heapRun.pose1NearPillar);
         checkFrameParity(setRun.pose2CulledPillar, heapRun.pose2CulledPillar);
@@ -3210,8 +3206,8 @@ TEST_CASE(
     const std::filesystem::path cliInvalidLogs = runRoot / "cli-invalid-logs";
     CHECK(
         runTriangleCli(
-            L"--showroom --free-camera --hidden --frames 2 --output \"" +
-            cliInvalidLogs.wstring() + L"\"") == 2u);
+            L"--showroom --free-camera --hidden --frames 2 --output \"" + cliInvalidLogs.wstring() +
+            L"\"") == 2u);
     CHECK(
         runTriangleCli(
             L"--showroom --shadow-resolution 1024 --hidden --frames 2 --output \"" +

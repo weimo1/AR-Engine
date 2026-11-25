@@ -99,7 +99,8 @@ TEST_CASE(
         CHECK(worldForward[1] == Catch::Approx(0.F).margin(1e-5F));
         CHECK(worldForward[2] == Catch::Approx(0.F).margin(1e-5F));
 
-        // 4x4 viewToWorld maps view origin to camera position and satisfies view * viewToWorld == I.
+        // 4x4 viewToWorld maps view origin to camera position and satisfies view * viewToWorld ==
+        // I.
         const auto worldOrigin = mulMat4Vec4(built->viewToWorld, {0.F, 0.F, 0.F, 1.F});
         CHECK(worldOrigin[0] == Catch::Approx(2.F).margin(1e-5F));
         CHECK(worldOrigin[1] == Catch::Approx(-3.F).margin(1e-5F));

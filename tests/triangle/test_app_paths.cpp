@@ -223,8 +223,8 @@ TEST_CASE(
         CHECK(explicitShadows->shadows);
         CHECK(explicitShadows->shadowResolution == 512u);
 
-        CHECK_FALSE(parseArgs(
-            {L"--showroom", L"--free-camera", L"--hidden", L"--frames", L"2"}, paths));
+        CHECK_FALSE(
+            parseArgs({L"--showroom", L"--free-camera", L"--hidden", L"--frames", L"2"}, paths));
         CHECK_FALSE(parseArgs({L"--free-camera"}, paths));
         CHECK_FALSE(parseArgs({L"--shadows"}, paths));
         CHECK_FALSE(parseArgs(
@@ -239,8 +239,7 @@ TEST_CASE(
              L"2"},
             paths));
         CHECK_FALSE(parseArgs({L"--showroom", L"--shadow-resolution", L"1024"}, paths));
-        CHECK_FALSE(
-            parseArgs({L"--showroom", L"--shadows", L"--shadow-resolution", L"32"}, paths));
+        CHECK_FALSE(parseArgs({L"--showroom", L"--shadows", L"--shadow-resolution", L"32"}, paths));
         CHECK_FALSE(
             parseArgs({L"--showroom", L"--shadows", L"--shadow-resolution", L"8192"}, paths));
         CHECK_FALSE(

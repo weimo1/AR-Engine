@@ -692,9 +692,7 @@ void StaticSceneIndirect::drawShadow(
     vkCmdBindVertexBuffers(command, 0, 1, &scene.vertices.buffer, &start);
     vkCmdBindIndexBuffer(command, scene.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
     forEachShadowIndirectBatch(
-        scene.shadowInstanceCount,
-        m_limits.maxDrawIndirectCount,
-        [&](ShadowIndirectBatch batch) {
+        scene.shadowInstanceCount, m_limits.maxDrawIndirectCount, [&](ShadowIndirectBatch batch) {
             vkCmdDrawIndexedIndirect(
                 command,
                 scene.shadowCommands.buffer,

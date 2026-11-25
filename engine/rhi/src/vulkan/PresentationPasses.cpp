@@ -53,8 +53,8 @@ std::expected<void, core::Error> Presentation::createLightingLayout() {
     }
     if (m_lighting->shadow) {
         const VkSamplerCreateInfo shadowSampler = makeShadowCompareSamplerInfo(m_physical);
-        if (auto created = create(
-                m_device, m_shadowSampler, shadowSampler, vkCreateSampler, "shadow sampler");
+        if (auto created =
+                create(m_device, m_shadowSampler, shadowSampler, vkCreateSampler, "shadow sampler");
             !created) {
             return created;
         }
@@ -621,9 +621,9 @@ std::expected<void, core::Error> Presentation::createLightingResources(VkImageUs
     }
     constexpr std::uint32_t setsPerSlot = 2;
     constexpr std::uint32_t gbufferBindings = 4;
-    const std::uint32_t combinedPerDirect =
-        gbufferBindings + (m_lighting->environmentLighting ? 3u : 0u) +
-        (m_lighting->shadow ? 1u : 0u);
+    const std::uint32_t combinedPerDirect = gbufferBindings +
+                                            (m_lighting->environmentLighting ? 3u : 0u) +
+                                            (m_lighting->shadow ? 1u : 0u);
     const auto slotCount = static_cast<std::uint32_t>(m_swapchain.attachments.size());
     const std::array<VkDescriptorPoolSize, 2> poolSizes{{
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, slotCount * (combinedPerDirect + 1u)},
@@ -1147,11 +1147,11 @@ std::expected<void, core::Error> Presentation::createGraphicsPipeline(
     if (geometry) {
         pipeline.pDepthStencilState = &depth;
     }
-    pipeline.layout = m_heapBinding ? VK_NULL_HANDLE
-                      : kind == PipelineKind::Display
-                          ? m_displayLayout
-                          : (kind == PipelineKind::DeferredLighting ? m_lightingLayout
-                                                                    : m_pipelineLayout);
+    pipeline.layout =
+        m_heapBinding ? VK_NULL_HANDLE
+        : kind == PipelineKind::Display
+            ? m_displayLayout
+            : (kind == PipelineKind::DeferredLighting ? m_lightingLayout : m_pipelineLayout);
     const VkResult result =
         vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &output);
     if (result != VK_SUCCESS) {

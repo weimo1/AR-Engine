@@ -33,7 +33,8 @@ struct FrameView {
     std::array<float, 16> clipFromWorld{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     // Column-major inverse(projection(aspect=1)); Present scales row 0 by aspect.
     std::array<float, 16> inverseProjection{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-    // Column-major view -> world matrix (inverse(view) = translate(camPos) * mat4_cast(orientation)).
+    // Column-major view -> world matrix (inverse(view) = translate(camPos) *
+    // mat4_cast(orientation)).
     std::array<float, 16> viewToWorld{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 };
 

@@ -753,8 +753,9 @@ Presentation::draw(Frame& frame, bool capture) {
         image.state = graph->finalStates[output];
         if (activeShadows) {
             m_shadowStates[m_frameIndex] = graph->finalStates[shadowDepth];
-        } else if (m_lighting && m_lighting->shadow &&
-                   m_shadowStates[m_frameIndex].layout != GraphLayout::ShaderRead) {
+        } else if (
+            m_lighting && m_lighting->shadow &&
+            m_shadowStates[m_frameIndex].layout != GraphLayout::ShaderRead) {
             m_shadowStates[m_frameIndex] = {
                 GraphLayout::ShaderRead, std::to_underlying(GraphUsage::FragmentSample)};
         }

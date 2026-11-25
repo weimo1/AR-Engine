@@ -35,10 +35,9 @@ planShadowIndirectBatches(std::uint32_t instanceCount, std::uint32_t maxDrawIndi
     }
     const std::uint32_t batchCount = (instanceCount - 1u) / maxDrawIndirectCount + 1u;
     batches.reserve(batchCount);
-    forEachShadowIndirectBatch(
-        instanceCount, maxDrawIndirectCount, [&](ShadowIndirectBatch batch) {
-            batches.push_back(batch);
-        });
+    forEachShadowIndirectBatch(instanceCount, maxDrawIndirectCount, [&](ShadowIndirectBatch batch) {
+        batches.push_back(batch);
+    });
     return batches;
 }
 

@@ -177,8 +177,7 @@ private:
     std::expected<void, core::Error> writeShadowHeapDescriptors();
     void resetShadowHeapDescriptors() noexcept;
     void writeEnvironmentDescriptors() const;
-    std::expected<void, core::Error>
-    writeLightingFrame(std::size_t frameIndex, bool activeShadows);
+    std::expected<void, core::Error> writeLightingFrame(std::size_t frameIndex, bool activeShadows);
     void recordShadow(
         VkCommandBuffer commands, const Image& output, const PresentationGraphPlan& plan) const;
     void recordLighting(

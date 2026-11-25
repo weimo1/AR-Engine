@@ -75,8 +75,7 @@ buildFrameView(const StaticCamera& camera, bool enableGBuffer) {
         glm::value_ptr(inverseProjection),
         result.inverseProjection.size(),
         result.inverseProjection.begin());
-    std::copy_n(
-        glm::value_ptr(viewToWorld), result.viewToWorld.size(), result.viewToWorld.begin());
+    std::copy_n(glm::value_ptr(viewToWorld), result.viewToWorld.size(), result.viewToWorld.begin());
     if (!allFinite(result.view) || !allFinite(result.clipFromWorld) ||
         !allFinite(result.inverseProjection) || !allFinite(result.viewToWorld)) {
         return std::unexpected(invalidCamera("camera parameters produce non-finite view matrices"));

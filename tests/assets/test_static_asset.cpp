@@ -305,12 +305,10 @@ TEST_CASE("Static scene keeps the active input until a candidate fully loads", "
                 manyInstances += ',';
             }
             manyInstances += "{\"id\":" + std::to_string(i + 1) +
-                             ",\"asset\":\"models/quad.gltf\",\"position\":[" +
-                             std::to_string(i) +
+                             ",\"asset\":\"models/quad.gltf\",\"position\":[" + std::to_string(i) +
                              ",0,0],\"rotation\":[0,0,0,1],\"scale\":[1,1,1]},{\"id\":" +
                              std::to_string(i + 100) +
-                             ",\"asset\":\"models2/quad.gltf\",\"position\":[" +
-                             std::to_string(i) +
+                             ",\"asset\":\"models2/quad.gltf\",\"position\":[" + std::to_string(i) +
                              ",2,0],\"rotation\":[0,0,0,1],\"scale\":[1,1,1]}";
         }
         manyInstances += ']';
@@ -333,9 +331,8 @@ TEST_CASE("Static scene keeps the active input until a candidate fully loads", "
 
         std::string failingTail = manyInstances;
         failingTail.pop_back();
-        failingTail +=
-            ",{\"id\":999,\"asset\":\"models/missing.gltf\",\"position\":[0,0,0],"
-            "\"rotation\":[0,0,0,1],\"scale\":[1,1,1]}]";
+        failingTail += ",{\"id\":999,\"asset\":\"models/missing.gltf\",\"position\":[0,0,0],"
+                       "\"rotation\":[0,0,0,1],\"scale\":[1,1,1]}]";
         writeScene(1, failingTail);
         const auto rejected = session.open(source);
         REQUIRE_FALSE(rejected.has_value());

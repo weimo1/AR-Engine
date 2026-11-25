@@ -301,8 +301,8 @@ StaticSceneDraw::createUniformBuffer(std::size_t bytes) {
     return result;
 }
 
-std::expected<void, core::Error> StaticSceneDraw::writeUniformBuffer(
-    const UniformBuffer& buffer, std::span<const std::byte> data) {
+std::expected<void, core::Error>
+StaticSceneDraw::writeUniformBuffer(const UniformBuffer& buffer, std::span<const std::byte> data) {
     if (!buffer.allocation) {
         return invalid("uniform buffer allocation is null");
     }

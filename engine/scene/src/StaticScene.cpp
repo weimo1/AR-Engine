@@ -76,10 +76,9 @@ DirectionalLight readDirectionalLight(const Json& value) {
     }
     DirectionalLight light{};
     light.direction = vector<3>(value.at("direction"));
-    const double lengthSquared =
-        static_cast<double>(light.direction[0]) * light.direction[0] +
-        static_cast<double>(light.direction[1]) * light.direction[1] +
-        static_cast<double>(light.direction[2]) * light.direction[2];
+    const double lengthSquared = static_cast<double>(light.direction[0]) * light.direction[0] +
+                                 static_cast<double>(light.direction[1]) * light.direction[1] +
+                                 static_cast<double>(light.direction[2]) * light.direction[2];
     if (!std::isfinite(lengthSquared) || lengthSquared <= 1e-12) {
         throw std::invalid_argument("directional_light direction must be finite and non-zero");
     }
@@ -87,7 +86,8 @@ DirectionalLight readDirectionalLight(const Json& value) {
         light.color = vector<3>(*it);
         for (const float channel : light.color) {
             if (channel < 0.F) {
-                throw std::invalid_argument("directional_light color components must be non-negative");
+                throw std::invalid_argument(
+                    "directional_light color components must be non-negative");
             }
         }
     }
@@ -252,9 +252,14 @@ std::expected<void, FileError> StaticScene::save(const fs::path& destination) co
             {"scale", instance.transform.scale}});
     }
     Json document{
-        {"version", 1}, {"objects", std::move(objects)},
-        {"camera", {{"position", view.position}, {"orientation", view.orientation},
-                    {"fov_y", view.verticalFovRadians}, {"near", view.nearPlane}, {"far", view.farPlane}}}};
+        {"version", 1},
+        {"objects", std::move(objects)},
+        {"camera",
+         {{"position", view.position},
+          {"orientation", view.orientation},
+          {"fov_y", view.verticalFovRadians},
+          {"near", view.nearPlane},
+          {"far", view.farPlane}}}};
     if (const auto light = directionalLight()) {
         document["directional_light"] = {
             {"direction", light->direction},

@@ -67,7 +67,10 @@ std::expected<void, StaticSceneError> StaticSceneSession::open(
     }
     const auto camera = candidate->camera();
     render::StaticRenderInput input{
-        {camera.position, camera.orientation, camera.verticalFovRadians, camera.nearPlane,
+        {camera.position,
+         camera.orientation,
+         camera.verticalFovRadians,
+         camera.nearPlane,
          camera.farPlane},
         {},
         std::nullopt};

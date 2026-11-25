@@ -238,11 +238,10 @@ int wmain(int argc, wchar_t** argv) {
                                                : "triangle.frag.spv"));
         if (options->hdrLighting) {
             auto fullscreen = readShader(shaderDir / "fullscreen.vert.spv");
-            const char* directShaderName = options->ibl
-                                               ? (options->shadows ? "deferred_ibl_shadow.frag.spv"
-                                                                   : "deferred_ibl.frag.spv")
-                                               : (options->shadows ? "deferred_shadow.frag.spv"
-                                                                   : "deferred_direct.frag.spv");
+            const char* directShaderName =
+                options->ibl
+                    ? (options->shadows ? "deferred_ibl_shadow.frag.spv" : "deferred_ibl.frag.spv")
+                    : (options->shadows ? "deferred_shadow.frag.spv" : "deferred_direct.frag.spv");
             auto direct = readShader(shaderDir / directShaderName);
             auto display = readShader(shaderDir / "display_sdr.frag.spv");
             if (!fullscreen || !direct || !display) {
@@ -407,9 +406,9 @@ int wmain(int argc, wchar_t** argv) {
             if (input->escapePressed) {
                 break;
             }
-            const auto desiredCursor =
-                (input->focused && input->lookHeld) ? ar::platform::CursorMode::Disabled
-                                                    : ar::platform::CursorMode::Normal;
+            const auto desiredCursor = (input->focused && input->lookHeld)
+                                           ? ar::platform::CursorMode::Disabled
+                                           : ar::platform::CursorMode::Normal;
             if (desiredCursor != cursorMode) {
                 if (auto changed = (*session)->setCursorMode(desiredCursor); !changed) {
                     printError(changed.error());
@@ -437,7 +436,8 @@ int wmain(int argc, wchar_t** argv) {
                 return 1;
             }
         }
-        const bool capture = options->sceneCandidate ||
+        const bool capture =
+            options->sceneCandidate ||
             ((options->screenshot || options->gbufferProbes) && presented + 1 == *options->frames);
         const auto frame = (*session)->presentFrame(capture ? &screenshot : nullptr);
         if (!frame || *frame == ar::runtime::FrameStatus::Closed) {

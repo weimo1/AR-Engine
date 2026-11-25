@@ -90,8 +90,7 @@ planPresentationGraph(const rhi::PresentationGraphInput& input) {
     const std::array present{access(Image::Output, GraphUsage::Present)};
     const std::array passes{
         GraphPass{
-            input.shadows ? std::span<const GraphAccess>(shadow)
-                          : std::span<const GraphAccess>{}},
+            input.shadows ? std::span<const GraphAccess>(shadow) : std::span<const GraphAccess>{}},
         GraphPass{std::span(geometry).first(input.lighting ? 4 : 5)},
         GraphPass{
             input.lighting ? std::span(lighting).first(input.shadows ? 6 : 5)
