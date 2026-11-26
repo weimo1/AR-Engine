@@ -6,7 +6,7 @@
 
 ## 当前阶段
 
-T47 已记录 P5 同场景 Set/Heap 验收。后续先准备默认展示场景，再用它验收 P4b 阴影与自由相机。P6 接调试面板和四配置基准，P7 交付独立运行包。各批方案与验收入口见[毕业交付的五项技术方案](docs/实施路线与阶段计划.md#毕业交付的五项技术方案)。
+P0–P7 毕业交付基线已全部收口：零参数 `ar_engine` 展示室（Vulkan 1.3 Set / 1.4 Descriptor Heap 双路径等价、方向光阴影、自由相机、6 通道调试视图、ImGui 面板、四配置性能基准与独立便携运行包）完成双配置 111/111 验收并经 DSH 独立评审通过。各批方案与验收入口见[毕业交付的五项技术方案](docs/实施路线与阶段计划.md#毕业交付的五项技术方案)。
 
 ## 任务队列
 
@@ -196,8 +196,15 @@ T47 已记录 P5 同场景 Set/Heap 验收。后续先准备默认展示场景�
 
 - [x] T55 P6 零参 `ar_engine`、6 通道调试视图、ImGui 面板、观察预设与四配置性能基准：主程序更名 `ar_engine` 零参启动并拆离 `ar_sample_harness`，接入 6 通道调试视图与 Set/Heap 双路径 `OverlayDraw`（Heap 外部槽 271、零传统描述符对象）、单一事件泵 UI 捕获隔离、`ObservationSettings` 原子预设往返、`vkCmdWriteTimestamp2` 非阻塞 GPU 计时、CPU AABB 剔除统一 `vkCmdDrawIndexedIndirectCount`、`PresentMode`（`Fifo/Mailbox/Immediate`）与 `--benchmark` JSON/CSV 导出；Debug 与 RelWithDebInfo 各 110/110（含 36 项 GPU + Sync Validation）零警告通过，RTX 4060 RelWithDebInfo 三档四配置实测 256/4096/16384 跨配置可见数完全一致（16,384 实例 CPU cull 0.421–0.542 ms vs GPU cull 0.202–0.205 ms，Set/Heap 总 GPU 耗时 4.73–4.99 ms 差异 <1%），DSH 独立评审 `2a6e2a2d` 77/77 PASS。
   - 验收：`app-paths-and-showroom-cli`、`app-benchmark-run`、`platform-input-state`、`runtime-observation-settings`、`render-presentation-spec`、`render-graph-plan`、`render-static-scene-visibility`、`rhi-descriptor-heap-scene-layout` 及真机 `sample-showroom-launch`、`sample-free-camera-shadows`、`sample-debug-views-and-overlay`、`sample-four-config-benchmark-parity`、`sample-four-config-benchmark-export` 全绿，双配置 110/110 零警告、DSH 独立评审通过。
-- [ ] T56 [人工] P6 里程碑验收：用户在本地 RTX 4060 可见窗口下零参 F5 启动 `ar_engine` 核对 6 通道调试视图、`[F1]` ImGui 面板、观察预设与三档四配置基准实测表，确认后进入 P7（独立运行包与复现交付）。
+- [x] T56 [人工] P6 里程碑验收：用户确认 P6 零参展示室、ImGui 调试面板与三档四配置基准实测表，批准推送 `7607dc9` 至远端（三项 GitHub Actions CI 全绿），确认进入 P7 独立运行包收口。
   - 用户实操零参 F5 画面/面板交互并审阅 RTX 4060 三档四配置基准数据，决定进入 P7。
+
+### P7：独立运行包与毕业交付复现
+
+参见 [P7 技术方案](openspec/changes/p7-standalone-package/design.md)。移除构建树输出路径硬编码，补齐 CMake `install(...)` 零第三方 DLL 绿色便携目录包与中文/空格/只读安装目录端到端验收。
+
+- [x] T57 P7 独立便携运行包与毕业交付复现：移除 `AR_ENGINE_OUTPUT_ROOT` 编译宏，`AppPaths` 落地 `--output` > `AR_ENGINE_OUTPUT_DIR` > 便携优先回退链（`<exeDir>/output` > `%LOCALAPPDATA%\AR Engine` > `%USERPROFILE%\AppData\Local\AR Engine` > `%TEMP%\AR Engine`）与写探针校验、Windows 控制台 UTF-8、预置预设只读回退及 `BenchmarkRun` `$USER_OUTPUT/` 展开与时间戳唯一 `runId`；新增 CMake `install(...)` 组装 38 文件/6.48 MB 零第三方 DLL 便携包（`ar_engine.exe` + 13 个产品 SPIR-V + 展示室/预设/基准/README）及真机 `sample-installed-package` 端到端验收；Debug 与 RelWithDebInfo 双配置各 111/111（含 37 项 `gpu`）零警告通过，DSH 独立评审 `e997caab` 24/24 PASS（含独立复跑 `check_installed_app.py` exit 0）。
+  - 验收：`app-paths-and-showroom-cli`、`app-benchmark-run` 与 `sample-installed-package`（`gpu`，中文+空格只读安装前缀、PE 导入表零第三方 DLL、Set/Heap PNG 一致、可重复基准导出与三类错误诊断）全绿，双配置 111/111 零警告、DSH 独立评审通过。
 
 ## 人工待办（不阻塞队列）
 
@@ -207,7 +214,9 @@ T47 已记录 P5 同场景 Set/Heap 验收。后续先准备默认展示场景�
 
 ## 待办池（建议级，不阻塞）
 
-- T55 评审观察：`ObservationSettings` 保存若遇非法 UTF-8 `name` 未捕获 `json::type_error`；原子写失败分支先删目标再 rename 若 rename 失败可能丢旧文件；`--benchmark` 复用同一 `output_dir` 会重用 `probe`/`bench-run` 诊断目录（可改唯一 runId）；`BenchmarkRun.cpp` 约 1.5 K 行后续可按需独立成工具目标；`gpu_total` 在无 UI 时不含 overlay 段可补充说明；后续可补 ImGui 捕获交互与无时间戳设备的专项覆盖及跨轮温升方差分析。
+- T57 评审观察：`main.cpp` 在解析 `--output` 前即调用 `defaultOutputDirectoryFor`（若全部默认候选目录不可写且显式传有效 `--output` 可能误拒，可改为先解析参数再按需回退）；`check_installed_app.py` 的 `verify_installed_layout` 可补充“安装树初始无预存 `output/`”断言；`selectDefaultOutputDirectory` 的 `%USERPROFILE%` 中间级回退可补直接单测断言（当前已由 `resolveDefaultUserOutputDirectory` 覆盖）。
+
+- T55 评审观察：`ObservationSettings` 保存若遇非法 UTF-8 `name` 未捕获 `json::type_error`；原子写失败分支先删目标再 rename 若 rename 失败可能丢旧文件；`--benchmark` 复用同一 `output_dir` 会重用 `probe`/`bench-run` 诊断目录（已于 T57 改为时间戳唯一 runId）；`BenchmarkRun.cpp` 约 1.5 K 行后续可按需独立成工具目标；`gpu_total` 在无 UI 时不含 overlay 段可补充说明；后续可补 ImGui 捕获交互与无时间戳设备的专项覆盖及跨轮温升方差分析。
 
 - T53 评审观察：`sample-free-camera-shadows` 内 `visible==14`/亮度阈值与展示室数值耦合且 `stepMove` 存在未用局部赋值，`setCursorMode` 以启动配置 `visible` 判可见性，GPU 用例 `TIMEOUT` 统一放宽至 90s 可改为按用例单设（注：窗口 X 关闭已由 `RuntimeSession::presentFrame` 查 `window.shouldClose()` 返回 `FrameStatus::Closed` 并退出主循环）。
 

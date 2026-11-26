@@ -13,6 +13,7 @@ namespace ar::app {
 struct AppPaths {
     std::filesystem::path shaders;
     std::filesystem::path content;
+    std::filesystem::path presets;
     std::filesystem::path output;
 
     bool operator==(const AppPaths&) const = default;
@@ -42,6 +43,26 @@ requireReadableFile(const std::filesystem::path& path, std::string_view role);
 
 [[nodiscard]] std::expected<std::filesystem::path, std::string>
 requireReadableDirectory(const std::filesystem::path& path, std::string_view role);
+
+[[nodiscard]] std::expected<std::filesystem::path, std::string>
+verifyWritableDirectory(const std::filesystem::path& path, std::string_view role);
+
+[[nodiscard]] std::expected<std::filesystem::path, std::string> resolveDefaultUserOutputDirectory(
+    const std::optional<std::filesystem::path>& envOverride,
+    const std::optional<std::filesystem::path>& localAppData,
+    const std::optional<std::filesystem::path>& userProfile);
+
+[[nodiscard]] std::expected<std::filesystem::path, std::string> selectDefaultOutputDirectory(
+    const std::filesystem::path& executableDirectory,
+    const std::optional<std::filesystem::path>& envOverride,
+    const std::optional<std::filesystem::path>& localAppData,
+    const std::optional<std::filesystem::path>& userProfile,
+    const std::optional<std::filesystem::path>& tempDir);
+
+[[nodiscard]] std::expected<std::filesystem::path, std::string>
+defaultOutputDirectoryFor(const std::filesystem::path& executableDirectory);
+
+[[nodiscard]] std::expected<std::filesystem::path, std::string> defaultUserOutputDirectory();
 
 [[nodiscard]] std::expected<std::filesystem::path, std::string> currentExecutableDirectory();
 

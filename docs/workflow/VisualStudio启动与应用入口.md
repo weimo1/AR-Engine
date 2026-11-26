@@ -24,6 +24,16 @@
 
 历史 P1–P5 回归脚本（清屏、旧三角形、单功能测试开关）已独立拆到 `TestSupport / ar_sample_harness`（[sample_harness.cpp](../../tests/triangle/sample_harness.cpp)），不进入产品主程序。
 
+## 独立便携运行包（P7）
+
+优化版构建完成后，可通过 CMake 安装规则导出脱离源码树与构建树的绿色便携目录：
+
+```powershell
+cmake --install build/RelWithDebInfo --config RelWithDebInfo --prefix build/package/AR-Engine
+```
+
+安装目录包含 `ar_engine.exe`、`shaders/`、`content/showroom/`、`presets/`、`benchmark/` 与 `README.txt`，可整体复制到任意路径（含中文/空格或只读程序目录）直接双击运行；默认输出优先写入包内 `output/`，若安装目录只读或受系统策略限制则自动回退 `%LOCALAPPDATA%\AR Engine` / `%TEMP%\AR Engine`（可通过环境变量 `AR_ENGINE_OUTPUT_DIR` 或 `--output` 显式指定）。
+
 ## 单独调试测试 EXE
 
 在 `Tests` 下选择 `ar_core_tests` / `ar_rhi_tests` / `ar_runtime_tests` / `ar_platform_tests` / `ar_render_tests` / `ar_assets_tests` / `ar_app_tests`，设为启动项目即可运行。只跑某个 Catch2 用例时，命令参数填标签如 `"[app-paths-and-showroom-cli]"`。各测试目标的 `AR_TEST_OUTPUT_ROOT` 已由 CMake 自动写入 `VS_DEBUGGER_ENVIRONMENT`。

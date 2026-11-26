@@ -166,9 +166,11 @@ def verify_and_recompute_run(
         raise RuntimeError(f"unexpected overflow samples in formal run: {summary.get('overflow_sample_count')}")
 
     # Verify zero Vulkan validation errors in the benchmark diagnostic log.
-    events_path = run_dir / "diagnostics" / "bench-run" / "events.jsonl"
-    if not events_path.is_file():
-        raise RuntimeError(f"missing benchmark events log: {events_path}")
+    diag_dir = run_dir / "diagnostics"
+    bench_logs = sorted(diag_dir.glob("bench-*/events.jsonl"))
+    if not bench_logs:
+        raise RuntimeError(f"missing benchmark events log under: {diag_dir}")
+    events_path = bench_logs[-1]
     for line in events_path.read_text(encoding="utf-8").splitlines():
         entry = json.loads(line)
         if entry.get("event_id") == "rhi.validation.error":

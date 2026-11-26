@@ -1,6 +1,7 @@
 #include "AppPaths.h"
 #include "BenchmarkRun.h"
 #include "DebugPanel.h"
+#include "core/BuildInfo.h"
 #include "render/DirectionalShadow.h"
 #include "render/EnvironmentLighting.h"
 #include "render/FreeCameraController.h"
@@ -20,6 +21,16 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #define STBI_WRITE_NO_STDIO
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -175,13 +186,20 @@ sceneReferenceFor(const std::filesystem::path& sceneFile, const std::filesystem:
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
+#ifdef _WIN32
+    ::SetConsoleOutputCP(CP_UTF8);
+#endif
     const auto exeDir = ar::app::currentExecutableDirectory();
     if (!exeDir) {
         std::fprintf(stderr, "%s\n", exeDir.error().c_str());
         return 1;
     }
-    const auto paths = ar::app::resolveAppPaths(
-        *exeDir, std::nullopt, std::filesystem::path(AR_ENGINE_OUTPUT_ROOT));
+    const auto defaultOutput = ar::app::defaultOutputDirectoryFor(*exeDir);
+    if (!defaultOutput) {
+        std::fprintf(stderr, "%s\n", defaultOutput.error().c_str());
+        return 1;
+    }
+    const auto paths = ar::app::resolveAppPaths(*exeDir, std::nullopt, *defaultOutput);
     if (!paths) {
         std::fprintf(stderr, "%s\n", paths.error().c_str());
         return 1;
@@ -223,6 +241,12 @@ int wmain(int argc, wchar_t** argv) {
     const auto shaderDir = ar::app::requireReadableDirectory(paths->shaders, "shader directory");
     if (!shaderDir) {
         std::fprintf(stderr, "%s\n", shaderDir.error().c_str());
+        return 1;
+    }
+    const auto writableOutput =
+        ar::app::verifyWritableDirectory(options->output, "output directory");
+    if (!writableOutput) {
+        std::fprintf(stderr, "%s\n", writableOutput.error().c_str());
         return 1;
     }
 
@@ -317,11 +341,16 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     const std::string sceneRef = sceneReferenceFor(*sceneFile, paths->content);
-    const std::filesystem::path presetDir = options->output / "presets";
+    const std::filesystem::path presetDir = *writableOutput / "presets";
+    const ar::core::BuildInfo& build = ar::core::buildInfo();
     std::printf(
-        "scene=%s\nasset_root=%s\nbinding=%s\nshadows=on\nshadow_resolution=%u\nfree_camera=%s\n",
+        "build_id=%s\nbuild_config=%s\nscene=%s\nasset_root=%s\noutput_dir=%s\nbinding=%s\n"
+        "shadows=on\nshadow_resolution=%u\nfree_camera=%s\n",
+        build.buildId.c_str(),
+        build.configuration.c_str(),
         pathToUtf8(*sceneFile).c_str(),
         pathToUtf8(*assetDir).c_str(),
+        pathToUtf8(*writableOutput).c_str(),
         options->descriptorHeap ? "descriptor-heap" : "set",
         kDefaultShadowResolution,
         interactive ? "on" : "off");
@@ -449,8 +478,17 @@ int wmain(int argc, wchar_t** argv) {
                     }
                 }
                 if (actions.requestLoadPreset) {
-                    auto loaded =
-                        ar::runtime::loadObservationSettings(*actions.requestLoadPreset, sceneRef);
+                    std::filesystem::path loadTarget = *actions.requestLoadPreset;
+                    std::error_code probeErr;
+                    if (!std::filesystem::is_regular_file(loadTarget, probeErr)) {
+                        const std::filesystem::path bundled =
+                            paths->presets / loadTarget.filename();
+                        probeErr.clear();
+                        if (std::filesystem::is_regular_file(bundled, probeErr)) {
+                            loadTarget = bundled;
+                        }
+                    }
+                    auto loaded = ar::runtime::loadObservationSettings(loadTarget, sceneRef);
                     if (!loaded) {
                         debugPanel->setStatus(false, loaded.error().message);
                     } else if (auto applied = (*session)->applyObservationSettings(*loaded);
@@ -458,8 +496,7 @@ int wmain(int argc, wchar_t** argv) {
                         debugPanel->setStatus(false, applied.error().message);
                     } else {
                         static_cast<void>(freeCamera->reset(loaded->camera));
-                        debugPanel->setStatus(
-                            true, "Loaded: " + pathToUtf8(actions.requestLoadPreset->filename()));
+                        debugPanel->setStatus(true, "Loaded: " + pathToUtf8(loadTarget.filename()));
                     }
                 }
 

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "name": "showroom-heap-gpu",
+  "preset_version": "p7-package-v1",
+  "seed": 20261125,
+  "scene": "../content/showroom/scene.json",
+  "asset_root": "../content/showroom/assets",
+  "binding": "descriptor_heap",
+  "cull": "gpu",
+  "present_mode": "immediate",
+  "width": 1280,
+  "height": 720,
+  "shadows": true,
+  "shadow_resolution": 2048,
+  "exposure_ev": 0.0,
+  "warmup_frames": 10,
+  "sample_frames": 60,
+  "repeats": 1,
+  "hidden": true,
+  "output_dir": "$USER_OUTPUT/benchmark/showroom-heap-gpu"
+}

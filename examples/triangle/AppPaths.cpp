@@ -1,7 +1,10 @@
 #include "AppPaths.h"
 
 #include <cerrno>
+#include <chrono>
+#include <cstdlib>
 #include <cwchar>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <system_error>
@@ -43,6 +46,7 @@ std::expected<AppPaths, std::string> resolveAppPaths(
     return AppPaths{
         executableDirectory / "shaders",
         executableDirectory / "content",
+        executableDirectory / "presets",
         output,
     };
 }
@@ -77,6 +81,145 @@ requireReadableDirectory(const fs::path& path, std::string_view role) {
             std::string("missing ") + std::string(role) + ": " + pathToUtf8(display));
     }
     return display;
+}
+
+std::expected<fs::path, std::string>
+verifyWritableDirectory(const fs::path& path, std::string_view role) {
+    if (path.empty()) {
+        return std::unexpected(std::string("unwritable ") + std::string(role) + ": empty path");
+    }
+    std::error_code error;
+    const fs::path expanded = fs::weakly_canonical(path, error);
+    const fs::path& display = error ? path : expanded;
+    error.clear();
+    if (fs::exists(path, error)) {
+        if (error || !fs::is_directory(path, error)) {
+            return std::unexpected(
+                std::string("unwritable ") + std::string(role) +
+                " (path exists and is not a directory): " + pathToUtf8(display));
+        }
+    } else {
+        error.clear();
+        fs::create_directories(path, error);
+        if (error) {
+            return std::unexpected(
+                std::string("unwritable ") + std::string(role) + ": " + pathToUtf8(display) + " (" +
+                error.message() + ")");
+        }
+    }
+    const fs::path probe =
+        path / (".ar_write_probe_" +
+                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    {
+        std::ofstream out(probe, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            return std::unexpected(
+                std::string("unwritable ") + std::string(role) + ": " + pathToUtf8(display));
+        }
+        out << "ok";
+        out.flush();
+        if (!out.good()) {
+            out.close();
+            std::error_code rmErr;
+            fs::remove(probe, rmErr);
+            return std::unexpected(
+                std::string("unwritable ") + std::string(role) + ": " + pathToUtf8(display));
+        }
+    }
+    std::error_code rmErr;
+    fs::remove(probe, rmErr);
+    return display;
+}
+
+std::expected<fs::path, std::string> resolveDefaultUserOutputDirectory(
+    const std::optional<fs::path>& envOverride,
+    const std::optional<fs::path>& localAppData,
+    const std::optional<fs::path>& userProfile) {
+    if (envOverride && !envOverride->empty()) {
+        return *envOverride;
+    }
+    if (localAppData && !localAppData->empty()) {
+        return *localAppData / "AR Engine";
+    }
+    if (userProfile && !userProfile->empty()) {
+        return *userProfile / "AppData" / "Local" / "AR Engine";
+    }
+    return std::unexpected(
+        "could not resolve a writable user output directory (set AR_ENGINE_OUTPUT_DIR or "
+        "--output)");
+}
+
+std::expected<fs::path, std::string> selectDefaultOutputDirectory(
+    const fs::path& executableDirectory,
+    const std::optional<fs::path>& envOverride,
+    const std::optional<fs::path>& localAppData,
+    const std::optional<fs::path>& userProfile,
+    const std::optional<fs::path>& tempDir) {
+    // An explicit environment override is honored strictly without silent fallback so callers and
+    // tests get deterministic errors when the chosen directory is unwritable.
+    if (envOverride && !envOverride->empty()) {
+        return *envOverride;
+    }
+    std::vector<fs::path> candidates;
+    if (!executableDirectory.empty()) {
+        candidates.push_back(executableDirectory / "output");
+    }
+    if (localAppData && !localAppData->empty()) {
+        candidates.push_back(*localAppData / "AR Engine");
+    }
+    if (userProfile && !userProfile->empty()) {
+        candidates.push_back(*userProfile / "AppData" / "Local" / "AR Engine");
+    }
+    if (tempDir && !tempDir->empty()) {
+        candidates.push_back(*tempDir / "AR Engine");
+    }
+    std::string lastError;
+    for (const auto& candidate : candidates) {
+        if (auto ok = verifyWritableDirectory(candidate, "output directory"); ok) {
+            return *ok;
+        } else {
+            lastError = ok.error();
+        }
+    }
+    if (!lastError.empty()) {
+        return std::unexpected(lastError);
+    }
+    return std::unexpected(
+        "could not resolve a writable output directory (set AR_ENGINE_OUTPUT_DIR or --output)");
+}
+
+std::expected<fs::path, std::string>
+defaultOutputDirectoryFor(const fs::path& executableDirectory) {
+    const auto readEnv = [](const wchar_t* name) -> std::optional<fs::path> {
+#ifdef _WIN32
+        std::size_t required = 0;
+        if (_wgetenv_s(&required, nullptr, 0, name) != 0 || required <= 1) {
+            return std::nullopt;
+        }
+        std::wstring buffer(required, L'\0');
+        if (_wgetenv_s(&required, buffer.data(), buffer.size(), name) != 0 || required <= 1) {
+            return std::nullopt;
+        }
+        buffer.resize(required - 1);
+        if (buffer.empty()) {
+            return std::nullopt;
+        }
+        return fs::path(buffer);
+#else
+        (void)name;
+        return std::nullopt;
+#endif
+    };
+    return selectDefaultOutputDirectory(
+        executableDirectory,
+        readEnv(L"AR_ENGINE_OUTPUT_DIR"),
+        readEnv(L"LOCALAPPDATA"),
+        readEnv(L"USERPROFILE"),
+        readEnv(L"TEMP"));
+}
+
+std::expected<fs::path, std::string> defaultUserOutputDirectory() {
+    return defaultOutputDirectoryFor({});
 }
 
 std::expected<fs::path, std::string> currentExecutableDirectory() {

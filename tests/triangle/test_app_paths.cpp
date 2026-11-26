@@ -2,6 +2,7 @@
 
 #include "assets/StaticAssetCache.h"
 #include "render/StaticSceneDrawData.h"
+#include "runtime/ObservationSettings.h"
 #include "runtime/StaticSceneSession.h"
 
 #include <array>
@@ -76,12 +77,14 @@ TEST_CASE(
         REQUIRE(resolvedDefault.has_value());
         CHECK(resolvedDefault->shaders == exeDir / "shaders");
         CHECK(resolvedDefault->content == exeDir / "content");
+        CHECK(resolvedDefault->presets == exeDir / "presets");
         CHECK(resolvedDefault->output == defaultOut);
 
         const auto resolvedOverride = ar::app::resolveAppPaths(exeDir, customOut, defaultOut);
         REQUIRE(resolvedOverride.has_value());
         CHECK(resolvedOverride->shaders == exeDir / "shaders");
         CHECK(resolvedOverride->content == exeDir / "content");
+        CHECK(resolvedOverride->presets == exeDir / "presets");
         CHECK(resolvedOverride->output == customOut);
 
         CHECK_FALSE(ar::app::resolveAppPaths({}, std::nullopt, defaultOut).has_value());
@@ -129,6 +132,7 @@ TEST_CASE(
         const ar::app::AppPaths paths{
             fs::path(u8"C:/ar-app/shaders"),
             fs::path(u8"C:/ar-app/content"),
+            fs::path(u8"C:/ar-app/presets"),
             fs::path(u8"C:/ar-app/output"),
         };
 
@@ -328,5 +332,85 @@ TEST_CASE(
         REQUIRE(reloaded != nullptr);
         CHECK(reloaded->camera == input->camera);
         CHECK(reloaded->draws.size() == input->draws.size());
+    }
+
+    SECTION("portable user output precedence, writability check, and bundled presets") {
+        const auto envWin = ar::app::resolveDefaultUserOutputDirectory(
+            fs::path(u8"D:/custom-env"),
+            fs::path(u8"C:/Users/demo/AppData/Local"),
+            fs::path(u8"C:/Users/demo"));
+        REQUIRE(envWin.has_value());
+        CHECK(*envWin == fs::path(u8"D:/custom-env"));
+
+        const auto localApp = ar::app::resolveDefaultUserOutputDirectory(
+            std::nullopt, fs::path(u8"C:/Users/demo/AppData/Local"), fs::path(u8"C:/Users/demo"));
+        REQUIRE(localApp.has_value());
+        CHECK(*localApp == fs::path(u8"C:/Users/demo/AppData/Local") / "AR Engine");
+
+        const auto profileFallback = ar::app::resolveDefaultUserOutputDirectory(
+            std::nullopt, std::nullopt, fs::path(u8"C:/Users/demo"));
+        REQUIRE(profileFallback.has_value());
+        CHECK(*profileFallback == fs::path(u8"C:/Users/demo") / "AppData" / "Local" / "AR Engine");
+
+        CHECK_FALSE(
+            ar::app::resolveDefaultUserOutputDirectory(std::nullopt, std::nullopt, std::nullopt)
+                .has_value());
+
+        const TempDir temp(testOutputRoot());
+        const fs::path nested = temp.path / "writable-dir" / "sub";
+        const auto okDir = ar::app::verifyWritableDirectory(nested, "output directory");
+        REQUIRE(okDir.has_value());
+        CHECK(fs::is_directory(nested));
+
+        // Probe file must be cleaned up after verification.
+        CHECK(fs::is_empty(nested));
+
+        // Existing regular file cannot be used as a writable output directory.
+        const fs::path blockingFile = temp.path / "not_a_dir.txt";
+        {
+            std::ofstream out(blockingFile, std::ios::binary);
+            out << "blocker";
+            REQUIRE(out.good());
+        }
+        const auto badDir = ar::app::verifyWritableDirectory(blockingFile, "output directory");
+        REQUIRE_FALSE(badDir.has_value());
+        CHECK(badDir.error().find("not_a_dir.txt") != std::string::npos);
+        CHECK_FALSE(ar::app::verifyWritableDirectory({}, "output directory").has_value());
+
+        // Portable output fallback chain: exeDir/output -> LOCALAPPDATA -> USERPROFILE -> TEMP.
+        const fs::path portableExeDir = temp.path / "portable-app";
+        fs::create_directories(portableExeDir);
+        const auto pickedLocal = ar::app::selectDefaultOutputDirectory(
+            portableExeDir, std::nullopt, temp.path / "la", temp.path / "up", temp.path / "tmp");
+        REQUIRE(pickedLocal.has_value());
+        CHECK(*pickedLocal == fs::weakly_canonical(portableExeDir / "output"));
+
+        // When exeDir/output is blocked by a file and LOCALAPPDATA is blocked, fall back to TEMP.
+        const fs::path blockedExeDir = temp.path / "readonly-app";
+        fs::create_directories(blockedExeDir);
+        {
+            std::ofstream out(blockedExeDir / "output", std::ios::binary);
+            out << "blocker";
+        }
+        const auto pickedFallback = ar::app::selectDefaultOutputDirectory(
+            blockedExeDir, std::nullopt, blockingFile, blockingFile, temp.path / "temp-fallback");
+        REQUIRE(pickedFallback.has_value());
+        CHECK(*pickedFallback == fs::weakly_canonical(temp.path / "temp-fallback" / "AR Engine"));
+
+        // Explicit AR_ENGINE_OUTPUT_DIR is honored without silent fallback.
+        const auto explicitEnv = ar::app::selectDefaultOutputDirectory(
+            portableExeDir, blockingFile, temp.path / "la", temp.path / "up", temp.path / "tmp");
+        REQUIRE(explicitEnv.has_value());
+        CHECK(*explicitEnv == blockingFile);
+
+        // Bundled package presets load cleanly and validate against showroom/scene.json.
+        const fs::path presetsDir(AR_PACKAGE_PRESETS_DIR);
+        for (const char* filename : {"showroom_default.json", "showroom_closeup_metallic.json"}) {
+            const auto loaded =
+                ar::runtime::loadObservationSettings(presetsDir / filename, "showroom/scene.json");
+            REQUIRE(loaded.has_value());
+            CHECK(loaded->sceneRef == "showroom/scene.json");
+            CHECK(loaded->directionalLight.castShadows);
+        }
     }
 }

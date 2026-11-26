@@ -341,7 +341,8 @@
         "app-paths-and-showroom-cli",
         "app-benchmark-run",
         "sample-showroom-launch",
-        "sample-four-config-benchmark-export"
+        "sample-four-config-benchmark-export",
+        "sample-installed-package"
       ],
       "gpu_cases": [
         "rhi-device-create",
@@ -369,6 +370,7 @@
         "sample-descriptor-heap-scene-parity",
         "sample-showroom-launch",
         "sample-four-config-benchmark-export",
+        "sample-installed-package",
         "platform-window-vulkan-extensions",
         "runtime-system-development",
         "sample-resize",
@@ -693,7 +695,8 @@
         "app-paths-and-showroom-cli",
         "app-benchmark-run",
         "sample-showroom-launch",
-        "sample-four-config-benchmark-export"
+        "sample-four-config-benchmark-export",
+        "sample-installed-package"
       ],
       "gpu_cases": [
         "rhi-device-create",
@@ -721,6 +724,7 @@
         "sample-descriptor-heap-scene-parity",
         "sample-showroom-launch",
         "sample-four-config-benchmark-export",
+        "sample-installed-package",
         "platform-window-vulkan-extensions",
         "runtime-system-development",
         "sample-resize",

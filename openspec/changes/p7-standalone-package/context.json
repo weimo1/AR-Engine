@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "objective": "完成 P7（独立运行包与复现交付）：移除 ar_engine 对构建树输出路径的编译期硬编码，改为按显式 --output > AR_ENGINE_OUTPUT_DIR > 便携优先自动回退链（<exeDir>/output > %LOCALAPPDATA%\\AR Engine > %USERPROFILE%\\AppData\\Local\\AR Engine > %TEMP%\\AR Engine）解析输出；补齐 CMake install 便携目录打包规则（EXE、13 个产品 SPIR-V、展示室资产、预置观察预设、便携基准规格与 README 复现说明），并在含中文与空格的独立只读安装目录完成端到端双路径与基准复现验收。",
+  "non_goals": [
+    "引入第三方安装向导（NSIS/WiX/MSI）或修改系统注册表",
+    "向引擎静态库模块传入“安装模式”开关",
+    "修改既有 P0–P6 渲染算法、着色器数学或 110 项基线用例契约",
+    "开始 P7 之后的完整编辑器或新增渲染特性"
+  ],
+  "tags": ["native"],
+  "documents": [],
+  "skills": ["ar-cpp-oop-style", "ar-e2e-side-effect-safety"],
+  "write_paths": [
+    "TASK.md",
+    "workflow/p0-checks.json",
+    "docs/workflow/VisualStudio启动与应用入口.md",
+    "openspec/changes/p7-standalone-package/**",
+    "examples/triangle/**",
+    "tests/**"
+  ]
+}

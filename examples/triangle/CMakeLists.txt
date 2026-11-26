@@ -110,6 +110,22 @@ add_custom_command(OUTPUT ${triangle_showroom_generated_assets}
     DEPENDS "${triangle_showroom_generator}"
     VERBATIM)
 list(APPEND triangle_showroom_outputs ${triangle_showroom_generated_assets})
+set(ar_engine_package_source_dir "${PROJECT_SOURCE_DIR}/examples/triangle/content/package")
+set(ar_engine_package_presets
+    presets/showroom_default.json
+    presets/showroom_closeup_metallic.json
+)
+foreach(relative_file IN LISTS ar_engine_package_presets)
+    set(source_file "${ar_engine_package_source_dir}/${relative_file}")
+    set(deployed_file "${triangle_runtime_dir}/${relative_file}")
+    get_filename_component(deployed_parent "${deployed_file}" DIRECTORY)
+    add_custom_command(OUTPUT "${deployed_file}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${deployed_parent}"
+        COMMAND ${CMAKE_COMMAND} -E copy "${source_file}" "${deployed_file}"
+        DEPENDS "${source_file}"
+        VERBATIM)
+    list(APPEND triangle_showroom_outputs "${deployed_file}")
+endforeach()
 add_custom_target(ar_engine_content DEPENDS ${triangle_showroom_outputs})
 set_target_properties(ar_engine_content PROPERTIES FOLDER "App")
 
@@ -120,10 +136,31 @@ find_package(nlohmann_json CONFIG REQUIRED)
 target_include_directories(ar_engine SYSTEM PRIVATE "${Stb_INCLUDE_DIR}")
 add_dependencies(ar_engine ar_triangle_shaders ar_engine_content)
 target_link_libraries(ar_engine PRIVATE ar_runtime ar_render imgui::imgui nlohmann_json::nlohmann_json)
-target_compile_definitions(ar_engine PRIVATE
-    AR_ENGINE_OUTPUT_ROOT=u8"${CMAKE_BINARY_DIR}/engine-output/$<CONFIG>"
-)
 set_target_properties(ar_engine PROPERTIES
     FOLDER "App"
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    VS_DEBUGGER_ENVIRONMENT "AR_ENGINE_OUTPUT_DIR=${CMAKE_BINARY_DIR}/engine-output/$<CONFIG>"
 )
+
+# P7: Portable standalone package install rules (`cmake --install <build> --config <cfg> --prefix <dir>`).
+set(ar_engine_product_shaders
+    "${shader_dir}/gbuffer.vert.spv"
+    "${shader_dir}/gbuffer_bindless.frag.spv"
+    "${shader_dir}/static_indirect.vert.spv"
+    "${shader_dir}/static_indirect.frag.spv"
+    "${shader_dir}/static_indirect.comp.spv"
+    "${shader_dir}/shadow_direct.vert.spv"
+    "${shader_dir}/shadow_indirect.vert.spv"
+    "${shader_dir}/fullscreen.vert.spv"
+    "${shader_dir}/deferred_ibl.frag.spv"
+    "${shader_dir}/deferred_ibl_shadow.frag.spv"
+    "${shader_dir}/display_sdr.frag.spv"
+    "${shader_dir}/overlay.vert.spv"
+    "${shader_dir}/overlay.frag.spv"
+)
+install(TARGETS ar_engine RUNTIME DESTINATION ".")
+install(FILES ${ar_engine_product_shaders} DESTINATION "shaders")
+install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/content/showroom/" DESTINATION "content/showroom")
+install(DIRECTORY "${ar_engine_package_source_dir}/presets/" DESTINATION "presets")
+install(DIRECTORY "${ar_engine_package_source_dir}/benchmark/" DESTINATION "benchmark")
+install(FILES "${ar_engine_package_source_dir}/README.txt" DESTINATION ".")

@@ -59,7 +59,10 @@ TEST_CASE(
     using namespace ar;
     const TempDir temp(testOutputRoot());
     const app::AppPaths paths{
-        temp.path / "shaders", temp.path / "content", temp.path / "default-out"};
+        temp.path / "shaders",
+        temp.path / "content",
+        temp.path / "presets",
+        temp.path / "default-out"};
 
     SECTION("loadBenchmarkConfig validates required fields and rejects bad configs") {
         const fs::path specPath = temp.path / "valid.json";
@@ -109,6 +112,31 @@ TEST_CASE(
         CHECK_FALSE(
             app::loadBenchmarkConfig(
                 writeBad("no_out.json", {{"version", 1}, {"name", "a"}}), paths)
+                .has_value());
+
+        // Portable $USER_OUTPUT token resolves inside paths.output and rejects traversal.
+        const auto portableSpec = app::loadBenchmarkConfig(
+            writeBad(
+                "portable.json",
+                {{"version", 1},
+                 {"name", "portable"},
+                 {"output_dir", "$USER_OUTPUT/benchmark/demo"}}),
+            paths);
+        REQUIRE(portableSpec.has_value());
+        CHECK(portableSpec->outputDir == paths.output / "benchmark" / "demo");
+        CHECK_FALSE(
+            app::loadBenchmarkConfig(
+                writeBad(
+                    "bad_escape.json",
+                    {{"version", 1}, {"name", "bad"}, {"output_dir", "$USER_OUTPUT/../escape"}}),
+                paths)
+                .has_value());
+        CHECK_FALSE(
+            app::loadBenchmarkConfig(
+                writeBad(
+                    "bad_token.json",
+                    {{"version", 1}, {"name", "bad"}, {"output_dir", "$USER_OUTPUT_X/a"}}),
+                paths)
                 .has_value());
     }
 

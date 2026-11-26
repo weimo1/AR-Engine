@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "name": "Showroom Default",
+  "scene_ref": "showroom/scene.json",
+  "camera": {
+    "position": [0.0, 2.2, 5.0],
+    "orientation": [-0.0985376, 0.0, 0.0, 0.9951333],
+    "fov_y": 0.7853982,
+    "near": 0.1,
+    "far": 50.0
+  },
+  "exposure_ev": 0.0,
+  "directional_light": {
+    "direction": [-0.4, -0.85, -0.35],
+    "color": [1.0, 1.0, 1.0],
+    "intensity": 6.0,
+    "cast_shadows": true
+  },
+  "view_mode": "final"
+}

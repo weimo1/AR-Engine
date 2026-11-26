@@ -434,6 +434,7 @@ add_dependencies(ar_app_tests ar_triangle_shaders ar_engine_content)
 target_compile_definitions(ar_app_tests PRIVATE
     AR_SHOWROOM_SOURCE_DIR=u8"${PROJECT_SOURCE_DIR}/examples/triangle/content/showroom"
     AR_SHOWROOM_DEPLOYED_DIR=u8"$<TARGET_FILE_DIR:ar_engine>/content/showroom"
+    AR_PACKAGE_PRESETS_DIR=u8"$<TARGET_FILE_DIR:ar_engine>/presets"
     AR_TRIANGLE_DEPLOYED_SHADER_DIR=u8"$<TARGET_FILE_DIR:ar_engine>/shaders"
 )
 set_target_properties(ar_app_tests PROPERTIES
@@ -464,6 +465,18 @@ add_test(NAME sample-four-config-benchmark-export
         "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
 )
 set_tests_properties(sample-four-config-benchmark-export PROPERTIES
+    LABELS "gpu" TIMEOUT 120
+    ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1"
+)
+
+add_test(NAME sample-installed-package
+    COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/triangle/check_installed_app.py"
+        "${CMAKE_COMMAND}"
+        "${CMAKE_BINARY_DIR}"
+        "$<CONFIG>"
+        "${AR_TEST_OUTPUT_ROOT}/$<CONFIG>"
+)
+set_tests_properties(sample-installed-package PROPERTIES
     LABELS "gpu" TIMEOUT 120
     ENVIRONMENT "VK_VALIDATION_VALIDATE_SYNC=1"
 )

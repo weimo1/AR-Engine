@@ -304,7 +304,34 @@ loadBenchmarkConfig(const fs::path& specPath, const AppPaths& paths) {
             doc.at("output_dir").get<std::string>().empty()) {
             return std::unexpected("benchmark spec requires a non-empty 'output_dir'");
         }
-        cfg.outputDir = resolveSpecPath(doc.at("output_dir").get<std::string>(), specDir);
+        const std::string rawOutput = doc.at("output_dir").get<std::string>();
+        constexpr std::string_view kUserOutputToken = "$USER_OUTPUT";
+        if (rawOutput == kUserOutputToken) {
+            if (paths.output.empty()) {
+                return std::unexpected("benchmark spec '$USER_OUTPUT' requires a valid output dir");
+            }
+            cfg.outputDir = paths.output;
+        } else if (
+            rawOutput.starts_with("$USER_OUTPUT/") || rawOutput.starts_with("$USER_OUTPUT\\")) {
+            if (paths.output.empty()) {
+                return std::unexpected("benchmark spec '$USER_OUTPUT' requires a valid output dir");
+            }
+            const std::string suffix = rawOutput.substr(kUserOutputToken.size() + 1u);
+            const fs::path rel(std::u8string(suffix.begin(), suffix.end()));
+            if (rel.empty() || rel.is_absolute()) {
+                return std::unexpected("benchmark spec '$USER_OUTPUT' suffix must be relative");
+            }
+            for (const auto& part : rel) {
+                if (part == "..") {
+                    return std::unexpected("benchmark spec '$USER_OUTPUT' must not contain '..'");
+                }
+            }
+            cfg.outputDir = paths.output / rel;
+        } else if (rawOutput.starts_with("$USER_OUTPUT")) {
+            return std::unexpected("invalid '$USER_OUTPUT' token in benchmark spec 'output_dir'");
+        } else {
+            cfg.outputDir = resolveSpecPath(rawOutput, specDir);
+        }
     } catch (const Json::exception& e) {
         return std::unexpected(std::string("benchmark spec field error: ") + e.what());
     }
@@ -594,6 +621,12 @@ int runBenchmark(const BenchmarkConfig& config, const AppPaths& paths) {
         return 1;
     }
 
+    if (auto writable = verifyWritableDirectory(config.outputDir, "benchmark output directory");
+        !writable) {
+        std::fprintf(stderr, "%s\n", writable.error().c_str());
+        return 1;
+    }
+
     const core::BuildInfo& build = core::buildInfo();
     BenchmarkSummaryMetadata meta{};
     meta.buildConfiguration = build.configuration;
@@ -602,12 +635,13 @@ int runBenchmark(const BenchmarkConfig& config, const AppPaths& paths) {
     // Probe device capability first so an unsupported Descriptor Heap run records an explicit
     // skipped_unsupported summary cleanly rather than pretending to have measured it.
     const fs::path diagRoot = config.outputDir / "diagnostics";
+    const auto runStamp = std::chrono::system_clock::now().time_since_epoch().count();
     {
         runtime::RuntimeConfig probe;
         probe.mode = runtime::QueryMode::Inspect;
         probe.query.requestedApi = rhi::makeApiVersion(1, 3);
         probe.diagnostics.outputRoot = diagRoot;
-        probe.diagnostics.runId = "probe";
+        probe.diagnostics.runId = "probe-" + std::to_string(runStamp);
         auto probed = runtime::RuntimeSession::start(probe);
         if (!probed) {
             std::fputs("benchmark capability probe failed\n", stderr);
@@ -699,7 +733,7 @@ int runBenchmark(const BenchmarkConfig& config, const AppPaths& paths) {
     rt.window->height = static_cast<int>(config.height);
     rt.window->visible = !config.hidden;
     rt.diagnostics.outputRoot = diagRoot;
-    rt.diagnostics.runId = "bench-run";
+    rt.diagnostics.runId = "bench-" + std::to_string(runStamp);
 
     auto session = runtime::RuntimeSession::start(rt);
     if (!session) {
